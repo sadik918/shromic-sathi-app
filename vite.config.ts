@@ -47,9 +47,48 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          clientsClaim: true,
+          skipWaiting: true,
+          cleanupOutdatedCaches: true,
+          navigateFallback: '/index.html',
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
           runtimeCaching: [
+            {
+              urlPattern: ({ request }) =>
+                request.mode === 'navigate' ||
+                request.destination === 'document' ||
+                request.destination === 'script' ||
+                request.destination === 'style' ||
+                request.destination === 'worker',
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'shromik-sathi-app-shell-v1',
+                networkTimeoutSeconds: 3,
+                expiration: {
+                  maxEntries: 80,
+                  maxAgeSeconds: 60 * 60 * 24 * 90,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: ({ request }) =>
+                request.destination === 'image' || request.destination === 'font',
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'shromik-sathi-media-cache-v1',
+                expiration: {
+                  maxEntries: 60,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',

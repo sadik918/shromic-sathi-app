@@ -64,14 +64,10 @@ export const AuthWelcomeView: React.FC = () => {
     setAuthError('');
     setIsSubmitting(true);
     try {
-      await loginWithGoogle();
+      await loginWithGoogle(authMode);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setAuthError(
-        lang === 'bn'
-          ? `গুগল লগইন সম্পন্ন হয়নি (${msg})। আপনি ইমেইল/ইউজারনেম ও পাসওয়ার্ড দিয়ে লগইন করতে পারেন।`
-          : `Google sign-in could not complete (${msg}). You can sign in with username/email below.`
-      );
+      setAuthError(msg);
     } finally {
       setIsSubmitting(false);
     }

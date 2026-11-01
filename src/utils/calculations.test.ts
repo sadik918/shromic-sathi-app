@@ -430,7 +430,7 @@ test('Missing attendance and overtime records detection and General shift resolu
   assert.equal(genShift.activeShift, 'general');
   assert.equal(genShift.officeStartTime, '08:00');
 
-  const missing = getMissingRecordsForMonth(
+  const missingOnOct3 = getMissingRecordsForMonth(
     '2026-10',
     [
       { id: 'a1', userId: 'u1', date: '2026-10-01', month: '2026-10', status: 'present', leaveCategory: 'none', checkIn: '08:00', checkOut: '17:00', notes: '' },
@@ -443,10 +443,31 @@ test('Missing attendance and overtime records detection and General shift resolu
   );
 
   // Oct 1 is present & has OT => not missing.
-  // Oct 2 and Oct 3 are missing!
-  assert.equal(missing.some((m) => m.date === '2026-10-01'), false);
-  assert.equal(missing.some((m) => m.date === '2026-10-02'), true);
-  assert.equal(missing.some((m) => m.date === '2026-10-03'), true);
+  // Oct 2 is past & unrecorded => missing!
+  // Oct 3 is running TODAY => excluded from missing records (can still be recorded anytime today)!
+  assert.equal(missingOnOct3.some((m) => m.date === '2026-10-01'), false);
+  assert.equal(missingOnOct3.some((m) => m.date === '2026-10-02'), true);
+  assert.equal(missingOnOct3.some((m) => m.date === '2026-10-03'), false);
+
+  // When tomorrow comes (2026-10-04), Oct 3 has now elapsed and becomes missing:
+  const missingOnOct4 = getMissingRecordsForMonth(
+    '2026-10',
+    [
+      { id: 'a1', userId: 'u1', date: '2026-10-01', month: '2026-10', status: 'present', leaveCategory: 'none', checkIn: '08:00', checkOut: '17:00', notes: '' },
+    ],
+    [
+      { id: 'o1', userId: 'u1', date: '2026-10-01', month: '2026-10', startTime: '08:00', endTime: '19:00', breakMinutes: 0, totalMinutes: 120, approvedHours: 2, basicSalarySnapshot: 6700, divisorSnapshot: 208, multiplierSnapshot: 2, hourlyRateSnapshot: 64.42, estimatedEarnings: 128.84, notes: '' },
+    ],
+    '2026-10-01',
+    '2026-10-04'
+  );
+  assert.equal(missingOnOct4.some((m) => m.date === '2026-10-02'), true);
+  assert.equal(missingOnOct4.some((m) => m.date === '2026-10-03'), true);
+  assert.equal(missingOnOct4.some((m) => m.date === '2026-10-04'), false); // Oct 4 is today -> excluded
+
+  // On the first day of the month (e.g. 2026-10-01), no past days have elapsed -> 0 missing records
+  const day1Missing = getMissingRecordsForMonth('2026-10', [], [], '2026-10-01', '2026-10-01');
+  assert.equal(day1Missing.length, 0);
 
   // Upcoming future month (e.g. November when today is October) returns no missing records
   const futureMissing = getMissingRecordsForMonth('2026-11', [], [], '2026-01-01', '2026-10-27');
@@ -1413,3 +1434,98 @@ test('computeDailyEarnedSalary calculates net payable strictly from attended day
   assert.equal(calc12500BonusMissed.earnedAttendanceBonus, 0);
   assert.equal(calc12500BonusMissed.totalEarnedSalary, 3499.36);
 });
+
+test('offlineSync reconciles offline localStorage additions, edits, and deletions with Cloud Firestore on reconnect', async () => {
+  const {
+    applyMutationToQueue,
+    mergeOfflineQueues,
+    reconcileCollectionWithOfflineState,
+  } = await import('./offlineSync');
+
+  // 1. User creates an overtime record offline, edits an existing record offline, and deletes an old record offline
+  let queue = applyMutationToQueue([], {
+    collection: 'overtime',
+    docId: 'ot_new_offline',
+    action: 'upsert',
+    payload: { id: 'ot_new_offline', approvedHours: 3, estimatedEarnings: 300 },
+    updatedAt: 1000,
+  });
+  queue = applyMutationToQueue(queue, {
+    collection: 'overtime',
+    docId: 'ot_existing_1',
+    action: 'upsert',
+    payload: { id: 'ot_existing_1', approvedHours: 4, estimatedEarnings: 400 },
+    updatedAt: 1005,
+  });
+  queue = applyMutationToQueue(queue, {
+    collection: 'overtime',
+    docId: 'ot_deleted_offline',
+    action: 'delete',
+    updatedAt: 1010,
+  });
+
+  const localItems = [
+    { id: 'ot_new_offline', approvedHours: 3, estimatedEarnings: 300 },
+    { id: 'ot_existing_1', approvedHours: 4, estimatedEarnings: 400 }, // edited offline from 2h -> 4h
+    { id: 'ot_unqueued_local', approvedHours: 1, estimatedEarnings: 100 }, // local-only item from fallback store
+  ];
+
+  const remoteItems = [
+    { id: 'ot_existing_1', approvedHours: 2, estimatedEarnings: 200 }, // stale remote version
+    { id: 'ot_deleted_offline', approvedHours: 2, estimatedEarnings: 200 }, // should be deleted from cloud
+    { id: 'ot_remote_only', approvedHours: 5, estimatedEarnings: 500 }, // existing cloud item
+  ];
+
+  const reconciled = reconcileCollectionWithOfflineState({
+    collection: 'overtime',
+    localItems,
+    remoteItems,
+    queue,
+  });
+
+  // Deleted offline record must NOT reappear in mergedItems and must be scheduled for cloud deletion
+  assert.equal(
+    reconciled.mergedItems.some((x) => x.id === 'ot_deleted_offline'),
+    false
+  );
+  assert.deepEqual(reconciled.idsToDeleteFromCloud, ['ot_deleted_offline']);
+
+  // Edited offline record must keep the 4h local edit (not overwritten by stale 2h remote version)
+  const edited = reconciled.mergedItems.find((x) => x.id === 'ot_existing_1');
+  assert.equal(edited?.approvedHours, 4);
+  assert.equal(edited?.estimatedEarnings, 400);
+
+  // Both new offline record, edited offline record, and local-only record must be queued for upload to Cloud Firestore
+  const uploadIds = reconciled.itemsToUploadToCloud.map((x) => x.id).sort();
+  assert.deepEqual(uploadIds, ['ot_existing_1', 'ot_new_offline', 'ot_unqueued_local']);
+
+  // Merge queues keeps the newest mutation per key
+  const mergedQ = mergeOfflineQueues(queue, [
+    {
+      key: 'overtime:ot_existing_1',
+      collection: 'overtime',
+      docId: 'ot_existing_1',
+      action: 'upsert',
+      payload: { id: 'ot_existing_1', approvedHours: 5, estimatedEarnings: 500 },
+      updatedAt: 2000,
+    },
+  ]);
+  const updatedMut = mergedQ.find((m) => m.docId === 'ot_existing_1');
+  assert.equal(updatedMut?.payload?.approvedHours, 5);
+});
+
+test('House rent allowance defaults strictly to 0 for new profiles without automatic math prefill, and preserves custom user amount', () => {
+  // Rent table calculation with clean default rent rule has 0 rentAmount (no fallback to 3500)
+  const rows = buildMonthlyRentUtilityTableRows({
+    expenses: [],
+    rentRule: DEFAULT_RENT_RULE_CONFIG,
+    selectedMonth: '2026-10',
+    monthsCount: 1,
+  });
+  assert.equal(rows[0]?.rentAmount, 0);
+
+  // When a user sets house rent, whatever they set remains set
+  const userSpecifiedRent = 2500;
+  assert.equal(userSpecifiedRent, 2500);
+});
+

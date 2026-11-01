@@ -5,6 +5,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile as updateFirebaseAuthProfile,
+  updatePassword,
   signOut,
   deleteUser,
   type User,
@@ -75,6 +76,15 @@ import {
   type NewGarmentJobTransitionInput,
 } from '../utils/calculations';
 import {
+  clearOfflineMutation,
+  enqueueOfflineMutation,
+  loadOfflineQueue,
+  mergeOfflineQueues,
+  reconcileCollectionWithOfflineState,
+  saveOfflineQueue,
+  type OfflineSyncCollection,
+} from '../utils/offlineSync';
+import {
   DEFAULT_GLOBAL_SUBSCRIPTION_CONFIG,
   DEFAULT_SUBSCRIPTION_PLANS,
   DEFAULT_COUPON_CODES,
@@ -115,6 +125,8 @@ interface DataContextValue {
   clearInitialAuthMode: () => void;
   resetDemoData: () => void;
   pendingWritesCount: number;
+  offlinePendingCount: number;
+  syncOfflineDataToCloud: () => Promise<void>;
   todayISO: string;
   currentMonthISO: string;
   selectedMonth: string;
@@ -138,9 +150,10 @@ interface DataContextValue {
   editHistory: EditHistoryEntry[];
   feedbackList: SupportFeedback[];
   isAdminUser: boolean;
-  loginWithGoogle: () => Promise<void>;
+  loginWithGoogle: (mode?: 'signin' | 'signup') => Promise<void>;
   loginWithCredentials: (identifier: string, password: string) => Promise<void>;
   signUpWithCredentials: (fullName: string, identifier: string, password: string) => Promise<void>;
+  changeUserPassword: (newPassword: string) => Promise<void>;
   needsOnboarding: boolean;
   isManualSetupMode: boolean;
   isProfileSetupIncomplete: boolean;
@@ -351,11 +364,84 @@ function loadUserMirror(uid: string): UserLocalMirror {
   };
 }
 
-function saveUserMirror(uid: string, patch: Partial<UserLocalMirror>) {
+const SUBCOLLECTION_KEYS: Array<
+  Exclude<OfflineSyncCollection, 'profile'>
+> = [
+  'overtime',
+  'salaryRecords',
+  'payments',
+  'attendance',
+  'expenses',
+  'savings',
+  'documents',
+  'reminders',
+  'loans',
+  'workplaces',
+  'contacts',
+];
+
+function recordMirrorPatchInOfflineQueue(
+  scopeKey: string,
+  prevMirror: Partial<UserLocalMirror>,
+  patch: Partial<UserLocalMirror>
+) {
+  if (!scopeKey) return;
+  if (patch.profile) {
+    enqueueOfflineMutation(scopeKey, {
+      collection: 'profile',
+      docId: 'profile',
+      action: 'upsert',
+      payload: patch.profile as Record<string, any>,
+    });
+  }
+  for (const col of SUBCOLLECTION_KEYS) {
+    if (patch[col] !== undefined) {
+      const prevList = ((prevMirror[col] as Array<{ id: string }>) || []).filter(Boolean);
+      const nextList = ((patch[col] as Array<{ id: string }>) || []).filter(Boolean);
+      const prevMap = new Map(prevList.map((item) => [item.id, item]));
+      const nextIds = new Set(nextList.map((item) => item.id));
+
+      for (const prevItem of prevList) {
+        if (prevItem?.id && !nextIds.has(prevItem.id)) {
+          enqueueOfflineMutation(scopeKey, {
+            collection: col,
+            docId: prevItem.id,
+            action: 'delete',
+          });
+        }
+      }
+
+      for (const nextItem of nextList) {
+        if (!nextItem?.id) continue;
+        const prevItem = prevMap.get(nextItem.id);
+        if (!prevItem || JSON.stringify(prevItem) !== JSON.stringify(nextItem)) {
+          enqueueOfflineMutation(scopeKey, {
+            collection: col,
+            docId: nextItem.id,
+            action: 'upsert',
+            payload: nextItem as Record<string, any>,
+          });
+        }
+      }
+    }
+  }
+}
+
+function saveUserMirror(
+  uid: string,
+  patch: Partial<UserLocalMirror>,
+  options?: { fromRemoteSnapshot?: boolean }
+) {
   try {
     const current = loadUserMirror(uid);
+    if (!options?.fromRemoteSnapshot) {
+      recordMirrorPatchInOfflineQueue(uid, current, patch);
+    }
     const updated = { ...current, ...patch };
     localStorage.setItem(`shromik_sathi_cloud_mirror_${uid}`, JSON.stringify(updated));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('shromik-sathi-offline-queue-updated'));
+    }
   } catch {
     // ignore quota errors
   }
@@ -443,7 +529,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const persistCurrentLocalStore = useCallback(
     (nextState: DemoStoreState) => {
       if (activeLocalEmail && !isDemoAccountEmail(activeLocalEmail)) {
+        const prevStore = loadUserStore(activeLocalEmail);
+        recordMirrorPatchInOfflineQueue(activeLocalEmail, prevStore, nextState);
         saveUserStore(activeLocalEmail, nextState);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('shromik-sathi-offline-queue-updated'));
+        }
       } else {
         saveDemoState(nextState);
       }
@@ -474,6 +565,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return false;
   });
   const [pendingWritesCount, setPendingWritesCount] = useState(0);
+  const [offlinePendingCount, setOfflinePendingCount] = useState(0);
   const [todayISO, setTodayISO] = useState<string>(() => getTodayISO());
   const currentMonthISO = getCurrentMonthISO(todayISO);
   const [selectedMonth, setSelectedMonth] = useState<string>(() => getCurrentMonthISO(getTodayISO()));
@@ -769,6 +861,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
+  const isSyncingOfflineRef = useRef(false);
+
+  const refreshOfflinePendingCount = useCallback(() => {
+    if (isReadOnlyDemo) {
+      setOfflinePendingCount(0);
+      return;
+    }
+    const uidQueue = user?.uid ? loadOfflineQueue(user.uid) : [];
+    const emailKey = (user?.email || activeLocalEmail || '').trim().toLowerCase();
+    const emailQueue =
+      emailKey && !isDemoAccountEmail(emailKey) ? loadOfflineQueue(emailKey) : [];
+    const combined = mergeOfflineQueues(uidQueue, emailQueue);
+    setOfflinePendingCount(combined.length);
+  }, [user?.uid, user?.email, activeLocalEmail, isReadOnlyDemo]);
+
+  useEffect(() => {
+    refreshOfflinePendingCount();
+    if (typeof window === 'undefined') return;
+    const handleQueueUpdated = () => refreshOfflinePendingCount();
+    window.addEventListener('shromik-sathi-offline-queue-updated', handleQueueUpdated);
+    return () => {
+      window.removeEventListener('shromik-sathi-offline-queue-updated', handleQueueUpdated);
+    };
+  }, [refreshOfflinePendingCount]);
+
   // Attach Firestore listeners when authenticated and NOT in demo mode
   useEffect(() => {
     if (!authReady || !user || isDemoMode) {
@@ -781,19 +898,67 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubProfile = onSnapshot(
       userDocRef,
       async (snap) => {
+        const currentQueue = loadOfflineQueue(uid);
+        const pendingProfileMut = currentQueue.find(
+          (m) => m.collection === 'profile' && m.action === 'upsert'
+        );
+        if (pendingProfileMut) {
+          const mirror = loadUserMirror(uid);
+          const localProf =
+            mirror.profile ||
+            (pendingProfileMut.payload as WorkerProfile | undefined) ||
+            defaultWorkerProfile(uid, user.displayName);
+          setFbProfile(localProf);
+          if (typeof navigator === 'undefined' || navigator.onLine) {
+            try {
+              const { createdAt: _c, updatedAt: _u, ...cleanFields } = localProf;
+              await setDoc(
+                userDocRef,
+                {
+                  ...cleanFields,
+                  userId: uid,
+                  updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+              );
+              profileEnsuredRef.current = uid;
+              clearOfflineMutation(uid, 'profile', 'profile');
+              refreshOfflinePendingCount();
+            } catch (err) {
+              logFirestoreWarning(err, OperationType.UPDATE, `users/${uid}`);
+            }
+          }
+          return;
+        }
+
         if (snap.exists()) {
           const remoteProfile = snap.data() as WorkerProfile;
           profileEnsuredRef.current = uid;
           setFbProfile(remoteProfile);
-          saveUserMirror(uid, { profile: remoteProfile });
+          saveUserMirror(uid, { profile: remoteProfile }, { fromRemoteSnapshot: true });
+          if (isWorkerSetupCompleted(remoteProfile)) {
+            localStorage.removeItem('shromik_sathi_needs_onboarding');
+            localStorage.removeItem('shromik_sathi_manual_setup_mode');
+            setNeedsOnboarding(false);
+            setIsManualSetupMode(false);
+          }
         } else {
-          const initialProfile = defaultWorkerProfile(uid, user.displayName);
+          const mirror = loadUserMirror(uid);
+          const emailStore = user.email ? loadUserStore(user.email) : null;
+          const initialProfile =
+            (mirror.profile && isWorkerSetupCompleted(mirror.profile) ? mirror.profile : null) ||
+            (emailStore?.profile && isWorkerSetupCompleted(emailStore.profile)
+              ? { ...emailStore.profile, userId: uid }
+              : null) ||
+            mirror.profile ||
+            defaultWorkerProfile(uid, user.displayName);
           setFbProfile(initialProfile);
-          saveUserMirror(uid, { profile: initialProfile });
+          saveUserMirror(uid, { profile: initialProfile }, { fromRemoteSnapshot: true });
           try {
             const { createdAt: _c, updatedAt: _u, ...cleanFields } = initialProfile;
             await setDoc(userDocRef, {
               ...cleanFields,
+              userId: uid,
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp(),
             });
@@ -807,7 +972,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
 
     const subCollections: Array<{
-      name: keyof Omit<UserLocalMirror, 'profile' | 'feedback' | 'editHistory'>;
+      name: Exclude<OfflineSyncCollection, 'profile'>;
       setter: React.Dispatch<React.SetStateAction<any[]>>;
     }> = [
       { name: 'overtime', setter: setFbOvertime },
@@ -830,10 +995,58 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         q,
         (snap) => {
           const remoteList = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          const currentQueue = loadOfflineQueue(uid);
           setter((prevLocal) => {
-            const merged = remoteList.length > 0 ? mergeById(prevLocal, remoteList) : prevLocal;
-            saveUserMirror(uid, { [name]: merged });
-            return merged;
+            const { mergedItems, itemsToUploadToCloud, idsToDeleteFromCloud } =
+              reconcileCollectionWithOfflineState({
+                collection: name,
+                localItems: prevLocal,
+                remoteItems: remoteList,
+                queue: currentQueue,
+              });
+            saveUserMirror(uid, { [name]: mergedItems }, { fromRemoteSnapshot: true });
+
+            if (
+              (typeof navigator === 'undefined' || navigator.onLine) &&
+              (itemsToUploadToCloud.length > 0 || idsToDeleteFromCloud.length > 0)
+            ) {
+              void (async () => {
+                await ensureParentProfileInFirestore(user);
+                for (const item of itemsToUploadToCloud) {
+                  if (!item?.id) continue;
+                  try {
+                    const { createdAt: _c, updatedAt: _u, ...cleanItem } = item as Record<
+                      string,
+                      any
+                    >;
+                    await setDoc(
+                      doc(db, 'users', uid, name, item.id),
+                      {
+                        ...cleanItem,
+                        id: item.id,
+                        userId: uid,
+                        updatedAt: serverTimestamp(),
+                      },
+                      { merge: true }
+                    );
+                    clearOfflineMutation(uid, name, item.id);
+                  } catch (err) {
+                    logFirestoreWarning(err, OperationType.WRITE, `users/${uid}/${name}/${item.id}`);
+                  }
+                }
+                for (const delId of idsToDeleteFromCloud) {
+                  try {
+                    await deleteDoc(doc(db, 'users', uid, name, delId));
+                    clearOfflineMutation(uid, name, delId);
+                  } catch (err) {
+                    logFirestoreWarning(err, OperationType.DELETE, `users/${uid}/${name}/${delId}`);
+                  }
+                }
+                refreshOfflinePendingCount();
+              })();
+            }
+
+            return mergedItems;
           });
         },
         (err) => logFirestoreWarning(err, OperationType.LIST, `users/${uid}/${name}`)
@@ -854,7 +1067,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }));
         setFbFeedback((prev) => {
           const merged = remoteFb.length > 0 ? mergeById(prev, remoteFb) : prev;
-          saveUserMirror(uid, { feedback: merged });
+          saveUserMirror(uid, { feedback: merged }, { fromRemoteSnapshot: true });
           return merged;
         });
       },
@@ -866,7 +1079,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubs.forEach((u) => u());
       unsubFeedback();
     };
-  }, [authReady, user, isDemoMode]);
+  }, [authReady, user, isDemoMode, ensureParentProfileInFirestore, refreshOfflinePendingCount]);
 
   const activeProfile: WorkerProfile = isDemoMode
     ? demoState.profile
@@ -890,6 +1103,174 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setPendingWritesCount((c) => Math.max(0, c - 1));
     }
   };
+
+  // Automatically flush any offline localStorage records to Cloud Firestore on reconnect
+  const syncOfflineDataToCloud = useCallback(async () => {
+    if (isReadOnlyDemo || isSyncingOfflineRef.current) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+    isSyncingOfflineRef.current = true;
+    try {
+      let currentUser = auth.currentUser || user;
+
+      // 1. If the user logged in or signed up while offline (local credential fallback),
+      //    upgrade their session to Firebase Auth now that internet is available.
+      const emailKey = (currentUser?.email || activeLocalEmail || '').trim().toLowerCase();
+      if (!currentUser && emailKey && !isDemoAccountEmail(emailKey)) {
+        try {
+          const localAccountsRaw = localStorage.getItem('shromik_sathi_local_accounts');
+          const localAccounts: Array<{
+            identifier: string;
+            email: string;
+            password: string;
+            fullName: string;
+          }> = localAccountsRaw ? JSON.parse(localAccountsRaw) : [];
+          const matched = localAccounts.find(
+            (a) => a.email.toLowerCase() === emailKey
+          );
+          if (matched && matched.password) {
+            try {
+              const cred = await signInWithEmailAndPassword(auth, matched.email, matched.password);
+              currentUser = cred.user;
+            } catch {
+              const cred = await createUserWithEmailAndPassword(
+                auth,
+                matched.email,
+                matched.password
+              );
+              if (cred.user && matched.fullName) {
+                await updateFirebaseAuthProfile(cred.user, { displayName: matched.fullName });
+              }
+              currentUser = cred.user;
+            }
+            if (currentUser) {
+              setUser(currentUser);
+              setIsDemoMode(false);
+              localStorage.setItem('shromik_sathi_demo_active', '0');
+            }
+          }
+        } catch {
+          // If Email/Password provider isn't reachable, keep local store intact
+        }
+      }
+
+      if (!currentUser) return;
+      const uid = currentUser.uid;
+
+      // 2. Merge any offline records/mutations saved under emailKey into uid's mirror & queue
+      if (emailKey && !isDemoAccountEmail(emailKey)) {
+        const emailQueue = loadOfflineQueue(emailKey);
+        const uidQueue = loadOfflineQueue(uid);
+        if (emailQueue.length > 0) {
+          saveOfflineQueue(uid, mergeOfflineQueues(uidQueue, emailQueue));
+          saveOfflineQueue(emailKey, []);
+        }
+        const emailStore = loadUserStore(emailKey);
+        const currentMirror = loadUserMirror(uid);
+        const mergedMirrorPatch: Partial<UserLocalMirror> = {};
+        if (
+          emailStore.profile &&
+          (!currentMirror.profile || isWorkerSetupCompleted(emailStore.profile))
+        ) {
+          mergedMirrorPatch.profile = { ...emailStore.profile, userId: uid };
+        }
+        for (const col of SUBCOLLECTION_KEYS) {
+          const emailItems = ((emailStore as Record<string, any>)[col] as Array<{ id: string }>) || [];
+          const mirrorItems = (currentMirror[col] as Array<{ id: string }>) || [];
+          if (emailItems.length > 0) {
+            mergedMirrorPatch[col] = mergeById(
+              mirrorItems,
+              emailItems.map((it) => ({ ...it, userId: uid }))
+            ) as any;
+          }
+        }
+        if (Object.keys(mergedMirrorPatch).length > 0) {
+          saveUserMirror(uid, mergedMirrorPatch, { fromRemoteSnapshot: true });
+        }
+      }
+
+      // 3. Flush all pending offline mutations and local mirror records to Cloud Firestore
+      const queue = loadOfflineQueue(uid);
+      const mirror = loadUserMirror(uid);
+      if (queue.length === 0) {
+        refreshOfflinePendingCount();
+        return;
+      }
+
+      await withPendingTracking(async () => {
+        await ensureParentProfileInFirestore(currentUser!, mirror.profile || undefined);
+        for (const mut of queue) {
+          try {
+            if (mut.collection === 'profile' && mut.action === 'upsert') {
+              const profToUpload = mirror.profile || (mut.payload as WorkerProfile | undefined);
+              if (profToUpload) {
+                const { createdAt: _c, updatedAt: _u, ...cleanFields } = profToUpload;
+                await setDoc(
+                  doc(db, 'users', uid),
+                  {
+                    ...cleanFields,
+                    userId: uid,
+                    updatedAt: serverTimestamp(),
+                  },
+                  { merge: true }
+                );
+              }
+              clearOfflineMutation(uid, 'profile', mut.docId);
+            } else if (mut.action === 'upsert' && mut.collection !== 'profile') {
+              const list = (mirror[mut.collection] as Array<Record<string, any>>) || [];
+              const itemToUpload = list.find((x) => x.id === mut.docId) || mut.payload;
+              if (itemToUpload && mut.docId) {
+                const { createdAt: _c, updatedAt: _u, ...cleanItem } = itemToUpload;
+                await setDoc(
+                  doc(db, 'users', uid, mut.collection, mut.docId),
+                  {
+                    ...cleanItem,
+                    id: mut.docId,
+                    userId: uid,
+                    updatedAt: serverTimestamp(),
+                  },
+                  { merge: true }
+                );
+              }
+              clearOfflineMutation(uid, mut.collection, mut.docId);
+            } else if (mut.action === 'delete' && mut.collection !== 'profile') {
+              await deleteDoc(doc(db, 'users', uid, mut.collection, mut.docId));
+              clearOfflineMutation(uid, mut.collection, mut.docId);
+            }
+          } catch (err) {
+            logFirestoreWarning(
+              err,
+              mut.action === 'delete' ? OperationType.DELETE : OperationType.WRITE,
+              `users/${uid}/${mut.collection}/${mut.docId}`
+            );
+          }
+        }
+      });
+    } finally {
+      isSyncingOfflineRef.current = false;
+      refreshOfflinePendingCount();
+    }
+  }, [
+    activeLocalEmail,
+    ensureParentProfileInFirestore,
+    isReadOnlyDemo,
+    refreshOfflinePendingCount,
+    user,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOnline = () => {
+      void syncOfflineDataToCloud();
+    };
+    window.addEventListener('online', handleOnline);
+    if (navigator.onLine) {
+      void syncOfflineDataToCloud();
+    }
+    return () => {
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [syncOfflineDataToCloud]);
 
   // Subscription Firestore synchronization
   useEffect(() => {
@@ -1623,8 +2004,54 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [isReadOnlyDemo, updateProfile]
   );
 
-  const loginWithGoogle = async () => {
-    await signInWithPopup(auth, googleProvider);
+  const loginWithGoogle = async (mode: 'signin' | 'signup' = 'signin') => {
+    setIsReadOnlyDemo(false);
+    localStorage.removeItem('shromik_sathi_readonly_demo');
+
+    const cred = await signInWithPopup(auth, googleProvider);
+    if (!cred.user) return;
+
+    const uid = cred.user.uid;
+    const userEmail = cred.user.email || '';
+
+    // Check if user document already exists in Firestore
+    const userDocRef = doc(db, 'users', uid);
+    let snap;
+    try {
+      snap = await getDoc(userDocRef);
+    } catch {
+      // ignore offline
+    }
+
+    if (mode === 'signin') {
+      if (!snap || !snap.exists()) {
+        await signOut(auth);
+        throw new Error(
+          lang === 'bn'
+            ? 'এই গুগল অ্যাকাউন্ট দিয়ে কোনো অ্যাকাউন্ট নিবন্ধিত নেই। অনুগ্রহ করে প্রথমে "সাইন আপ করুন" ট্যাব থেকে নিবন্ধন করুন।'
+            : 'No account registered with this Google account. Please switch to "Sign Up" tab first.'
+        );
+      }
+      const prof = snap.data() as WorkerProfile;
+      if (isWorkerSetupCompleted(prof)) {
+        localStorage.removeItem('shromik_sathi_needs_onboarding');
+        localStorage.removeItem('shromik_sathi_manual_setup_mode');
+        setNeedsOnboarding(false);
+        setIsManualSetupMode(false);
+      }
+    } else {
+      if (!snap || !snap.exists()) {
+        localStorage.setItem('shromik_sathi_needs_onboarding', '1');
+        setNeedsOnboarding(true);
+      }
+    }
+
+    if (userEmail) {
+      setActiveLocalEmail(userEmail);
+      localStorage.setItem('shromik_sathi_active_email', userEmail);
+    }
+    setIsDemoMode(false);
+    localStorage.setItem('shromik_sathi_demo_active', '0');
   };
 
   const normalizeIdentifierToEmail = (identifier: string): string => {
@@ -1660,7 +2087,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // Check local registered accounts first or fallback if Firebase Email/Password is not enabled
+    // Check local registered accounts
     const localAccountsRaw = localStorage.getItem('shromik_sathi_local_accounts');
     const localAccounts: Array<{
       identifier: string;
@@ -1676,35 +2103,140 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         a.email.toLowerCase() === email.toLowerCase()
     );
 
-    if (matchedLocal && matchedLocal.password !== password) {
-      throw new Error(
-        lang === 'bn'
-          ? 'পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে আবার চেষ্টা করুন।'
-          : 'Incorrect password. Please try again.'
-      );
-    }
-
     setIsReadOnlyDemo(false);
     localStorage.removeItem('shromik_sathi_readonly_demo');
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const cred = await signInWithEmailAndPassword(auth, email, password);
       setActiveLocalEmail(email);
       localStorage.setItem('shromik_sathi_active_email', email);
       setIsDemoMode(false);
       localStorage.setItem('shromik_sathi_demo_active', '0');
+
+      try {
+        const snap = await getDoc(doc(db, 'users', cred.user.uid));
+        if (snap.exists() && isWorkerSetupCompleted(snap.data() as WorkerProfile)) {
+          localStorage.removeItem('shromik_sathi_needs_onboarding');
+          localStorage.removeItem('shromik_sathi_manual_setup_mode');
+          setNeedsOnboarding(false);
+          setIsManualSetupMode(false);
+        }
+      } catch {
+        // snapshot listener handles
+      }
       return;
+    } catch (fbErr: any) {
+      const errCode = fbErr?.code || '';
+
+      if (errCode === 'auth/wrong-password' || errCode === 'auth/invalid-credential') {
+        if (matchedLocal && matchedLocal.password === password) {
+          const userStore = loadUserStore(email, matchedLocal.fullName);
+          setDemoState(userStore);
+          setActiveLocalEmail(email);
+          localStorage.setItem('shromik_sathi_active_email', email);
+          setIsDemoMode(true);
+          localStorage.setItem('shromik_sathi_demo_active', '1');
+          if (isWorkerSetupCompleted(userStore.profile)) {
+            localStorage.removeItem('shromik_sathi_needs_onboarding');
+            setNeedsOnboarding(false);
+          }
+          return;
+        }
+
+        throw new Error(
+          lang === 'bn'
+            ? 'পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে সাইন আপের সময় দেওয়া সঠিক পাসওয়ার্ড দিন।'
+            : 'Incorrect password. Please enter the password you created during sign up.'
+        );
+      }
+
+      if (errCode === 'auth/user-not-found') {
+        throw new Error(
+          lang === 'bn'
+            ? 'এই ইমেইল বা আইডি দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে প্রথমে "সাইন আপ করুন" ট্যাব থেকে অ্যাকাউন্ট তৈরি করুন।'
+            : 'No account found with this email/ID. Please switch to "Sign Up" tab first.'
+        );
+      }
+
+      if (matchedLocal) {
+        if (matchedLocal.password !== password) {
+          throw new Error(
+            lang === 'bn'
+              ? 'পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে সাইন আপের সময় দেওয়া সঠিক পাসওয়ার্ড দিন।'
+              : 'Incorrect password. Please try again.'
+          );
+        }
+        const userStore = loadUserStore(email, matchedLocal.fullName);
+        setDemoState(userStore);
+        setActiveLocalEmail(email);
+        localStorage.setItem('shromik_sathi_active_email', email);
+        setIsDemoMode(true);
+        localStorage.setItem('shromik_sathi_demo_active', '1');
+        if (isWorkerSetupCompleted(userStore.profile)) {
+          localStorage.removeItem('shromik_sathi_needs_onboarding');
+          setNeedsOnboarding(false);
+        }
+        return;
+      }
+
+      throw new Error(
+        lang === 'bn'
+          ? 'এই ইমেইল বা আইডি দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে প্রথমে "সাইন আপ করুন" ট্যাব থেকে অ্যাকাউন্ট তৈরি করুন।'
+          : 'No account found with this email/ID. Please sign up first.'
+      );
+    }
+  };
+
+  const changeUserPassword = async (newPassword: string) => {
+    if (isReadOnlyDemo) {
+      triggerReadOnlyBlock();
+      return;
+    }
+    const cleanPass = newPassword.trim();
+    if (!cleanPass || cleanPass.length < 4) {
+      throw new Error(
+        lang === 'bn'
+          ? 'নতুন পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে।'
+          : 'New password must be at least 4 characters long.'
+      );
+    }
+
+    if (auth.currentUser) {
+      try {
+        await updatePassword(auth.currentUser, cleanPass);
+      } catch (err: any) {
+        if (err?.code === 'auth/requires-recent-login') {
+          throw new Error(
+            lang === 'bn'
+              ? 'নিরাপত্তার স্বার্থে পাসওয়ার্ড পরিবর্তনের আগে অনুগ্রহ করে একবার লগআউট করে পুনরায় লগইন করুন।'
+              : 'For security reasons, please log out and log in again before changing password.'
+          );
+        }
+        throw new Error(
+          lang === 'bn'
+            ? `পাসওয়ার্ড পরিবর্তন করা যায়নি (${err?.message || 'ত্রুটি'})`
+            : `Could not update password (${err?.message || 'Error'})`
+        );
+      }
+    }
+
+    try {
+      const email = auth.currentUser?.email || activeLocalEmail;
+      if (email) {
+        const localAccountsRaw = localStorage.getItem('shromik_sathi_local_accounts');
+        if (localAccountsRaw) {
+          const accounts: Array<{ identifier: string; email: string; password: string; fullName: string }> = JSON.parse(localAccountsRaw);
+          const updated = accounts.map((a) => {
+            if (a.email.toLowerCase() === email.toLowerCase() || (user?.uid && a.identifier === user.uid)) {
+              return { ...a, password: cleanPass };
+            }
+            return a;
+          });
+          localStorage.setItem('shromik_sathi_local_accounts', JSON.stringify(updated));
+        }
+      }
     } catch {
-      // Fallback to local session so login works seamlessly even if Email/Password provider isn't enabled in Firebase console
-      const displayFullName =
-        matchedLocal?.fullName ||
-        (cleanId.includes('@') ? cleanId.split('@')[0] : cleanId);
-      const userStore = loadUserStore(email, displayFullName);
-      setDemoState(userStore);
-      setActiveLocalEmail(email);
-      localStorage.setItem('shromik_sathi_active_email', email);
-      setIsDemoMode(true);
-      localStorage.setItem('shromik_sathi_demo_active', '1');
+      // ignore storage errors
     }
   };
 
@@ -3742,6 +4274,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clearInitialAuthMode,
     resetDemoData,
     pendingWritesCount,
+    offlinePendingCount,
+    syncOfflineDataToCloud,
     todayISO,
     currentMonthISO,
     selectedMonth,
@@ -3771,6 +4305,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loginWithGoogle,
     loginWithCredentials,
     signUpWithCredentials,
+    changeUserPassword,
     needsOnboarding: !isReadOnlyDemo && needsOnboarding,
     isManualSetupMode,
     isProfileSetupIncomplete,

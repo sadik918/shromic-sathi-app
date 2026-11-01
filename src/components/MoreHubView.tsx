@@ -15,7 +15,10 @@ import {
   HelpCircle,
   BellRing,
   Calculator as CalcIcon,
+  Check,
   History,
+  KeyRound,
+  Lock,
   LogOut,
   Menu,
   PhoneCall,
@@ -109,12 +112,63 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     resolveFeedback,
     importBackupNonDestructive,
     deleteAccountAndData,
+    changeUserPassword,
     logout,
   } = useData();
 
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isDrawerOpen, setIsDrawerOpen] = useState(() => openDrawerTrigger > 0);
+
+  // Password Change state & handler
+  const [showChangePasswordForm, setShowChangePasswordForm] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [isUpdatingPass, setIsUpdatingPass] = useState(false);
+  const [changePassError, setChangePassError] = useState('');
+  const [changePassSuccess, setChangePassSuccess] = useState('');
+
+  const handlePasswordChangeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setChangePassError('');
+    setChangePassSuccess('');
+    if (newPassword.length < 4) {
+      setChangePassError(
+        lang === 'bn'
+          ? 'নতুন পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে।'
+          : 'New password must be at least 4 characters long.'
+      );
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setChangePassError(
+        lang === 'bn'
+          ? 'উভয় ঘরে পাসওয়ার্ড মিলছে না। অনুগ্রহ করে যাচাই করে পুনরায় লিখুন।'
+          : 'Passwords do not match. Please verify and re-enter.'
+      );
+      return;
+    }
+    setIsUpdatingPass(true);
+    try {
+      await changeUserPassword(newPassword);
+      setChangePassSuccess(
+        lang === 'bn'
+          ? 'পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে!'
+          : 'Password changed successfully!'
+      );
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setTimeout(() => {
+        setShowChangePasswordForm(false);
+        setChangePassSuccess('');
+      }, 3000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setChangePassError(msg);
+    } finally {
+      setIsUpdatingPass(false);
+    }
+  };
 
   useEffect(() => {
     if (openDrawerTrigger > 0) {
@@ -169,13 +223,13 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     setEmploymentType(profile.employmentType || 'permanent');
     setJoiningDate(profile.joiningDate || '2025-01-01');
     setSalaryGrade(profile.salaryGrade || '');
-    setBasicSalary(profile.basicSalary || 6700);
-    setGrossSalary(profile.grossSalary || 12500);
-    setHouseRentAllowance(profile.houseRentAllowance || 3350);
-    setMedicalAllowance(profile.medicalAllowance || 750);
-    setTransportAllowance(profile.transportAllowance || 450);
-    setFoodAllowance(profile.foodAllowance || 1250);
-    setAttendanceBonus(profile.attendanceBonus || 600);
+    setBasicSalary(profile.basicSalary || 0);
+    setGrossSalary(profile.grossSalary || 0);
+    setHouseRentAllowance(profile.houseRentAllowance || 0);
+    setMedicalAllowance(profile.medicalAllowance || 0);
+    setTransportAllowance(profile.transportAllowance || 0);
+    setFoodAllowance(profile.foodAllowance || 0);
+    setAttendanceBonus(profile.attendanceBonus || 0);
     setOtCustomHourlyRate(profile.otCustomHourlyRate || 0);
     setShiftPattern(profile.shiftPattern || 'day');
     setDayShiftStartTime(profile.dayShiftStartTime || '08:00');
@@ -1153,6 +1207,124 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                     </p>
                   </div>
                 </div>
+              )}
+            </div>
+
+            {/* ACCOUNT & PASSWORD SECURITY (পাসওয়ার্ড পরিবর্তন) */}
+            <div
+              data-testid="profile-password-security-section"
+              className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-3"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-950/80 flex items-center justify-center shrink-0">
+                    <KeyRound className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                      {lang === 'bn' ? 'অ্যাকাউন্ট ও পাসওয়ার্ড নিরাপত্তা' : 'Account & Password Security'}
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                      {user?.email || profile.userId || (lang === 'bn' ? 'লগইন অ্যাকাউন্ট' : 'Active Account')}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  data-testid="toggle-change-password-btn"
+                  onClick={() => {
+                    setShowChangePasswordForm((v) => !v);
+                    setChangePassError('');
+                    setChangePassSuccess('');
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800/80 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-slate-700 inline-flex items-center gap-1.5 cursor-pointer shrink-0 transition-colors"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>
+                    {showChangePasswordForm
+                      ? lang === 'bn' ? 'বাতিল' : 'Cancel'
+                      : lang === 'bn' ? 'পাসওয়ার্ড পরিবর্তন করুন' : 'Change Password'}
+                  </span>
+                </button>
+              </div>
+
+              {showChangePasswordForm && (
+                <form
+                  onSubmit={handlePasswordChangeSubmit}
+                  className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-3"
+                >
+                  {changePassError && (
+                    <div
+                      role="alert"
+                      className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300"
+                    >
+                      {changePassError}
+                    </div>
+                  )}
+                  {changePassSuccess && (
+                    <div
+                      role="alert"
+                      className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-2"
+                    >
+                      <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>{changePassSuccess}</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {lang === 'bn' ? 'নতুন পাসওয়ার্ড' : 'New Password'}
+                      </label>
+                      <input
+                        data-testid="new-password-input"
+                        type="password"
+                        required
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder={lang === 'bn' ? 'কমপক্ষে ৪ অক্ষর লিখুন' : 'At least 4 chars'}
+                        className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {lang === 'bn' ? 'নতুন পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm New Password'}
+                      </label>
+                      <input
+                        data-testid="confirm-new-password-input"
+                        type="password"
+                        required
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        placeholder={lang === 'bn' ? 'পাসওয়ার্ডটি আবার লিখুন' : 'Re-enter password'}
+                        className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="submit"
+                      disabled={isUpdatingPass}
+                      data-testid="submit-change-password-btn"
+                      className="min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Lock className="w-4 h-4" />
+                      <span>
+                        {isUpdatingPass
+                          ? lang === 'bn' ? 'আপডেট হচ্ছে...' : 'Updating...'
+                          : lang === 'bn' ? 'পাসওয়ার্ড আপডেট করুন' : 'Update Password'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowChangePasswordForm(false)}
+                      className="min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-700 dark:text-slate-400 cursor-pointer"
+                    >
+                      {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                    </button>
+                  </div>
+                </form>
               )}
             </div>
 

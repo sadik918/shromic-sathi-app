@@ -76,6 +76,8 @@ const WorkspaceShell: React.FC = () => {
     exitDemoToSignUp,
     needsOnboarding,
     pendingWritesCount,
+    offlinePendingCount,
+    syncOfflineDataToCloud,
     selectedMonth,
     setSelectedMonth,
     darkMode,

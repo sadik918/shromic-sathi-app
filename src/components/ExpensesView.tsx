@@ -407,10 +407,10 @@ export const ExpensesView: React.FC = () => {
     'house_rent',
   ]);
   const [advanceTotalBill, setAdvanceTotalBill] = useState<number>(
-    activeMonthRule.fixedBaseRent || 3500
+    activeMonthRule.fixedBaseRent || 0
   );
   const [advanceGivenAmount, setAdvanceGivenAmount] = useState<number>(
-    activeMonthRule.fixedBaseRent || 3500
+    activeMonthRule.fixedBaseRent || 0
   );
   const [advanceDeductFromCash, setAdvanceDeductFromCash] = useState<boolean>(true);
   const [advanceEntryNote, setAdvanceEntryNote] = useState<string>('');
@@ -1048,7 +1048,7 @@ export const ExpensesView: React.FC = () => {
     const resolvedRent =
       row.rentAmount > 0
         ? row.rentAmount
-        : Number(rowMonthRule.fixedBaseRent) || Number(baseRentAmount) || 3500;
+        : Number(rowMonthRule.fixedBaseRent) || Number(baseRentAmount) || 0;
     const gasTag = row.gasAttached ? ' · লাইন গ্যাস সংযুক্ত' : ' · লাইন গ্যাস আলাদা';
     const elecTag = row.electricityAttached
       ? ' · কারেন্ট বিল সংযুক্ত'

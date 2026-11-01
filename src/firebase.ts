@@ -1,13 +1,37 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import {
+  doc,
+  getDocFromServer,
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(
-  app,
-  (firebaseConfig as Record<string, any>).firestoreDatabaseId || 'ai-studio-bcf4f937-8686-4b7f-8375-af9589cd1cf0'
-);
+const dbId =
+  (firebaseConfig as Record<string, any>).firestoreDatabaseId ||
+  'ai-studio-bcf4f937-8686-4b7f-8375-af9589cd1cf0';
+
+function initPersistentFirestore() {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
+      },
+      dbId
+    );
+  } catch {
+    return getFirestore(app, dbId);
+  }
+}
+
+export const db = initPersistentFirestore();
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
@@ -64,11 +88,14 @@ export function handleFirestoreError(
 }
 
 async function testConnection() {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return;
+  }
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+      // Offline mode active; Firestore local cache will serve reads and queue writes.
     }
   }
 }

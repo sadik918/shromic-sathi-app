@@ -90,7 +90,7 @@ export const SalaryView: React.FC = () => {
     existingSalaryRec?.basicSalary || profile.basicSalary
   );
   const [houseRentAllowance, setHouseRentAllowance] = useState(
-    existingSalaryRec?.houseRentAllowance || profile.houseRentAllowance
+    existingSalaryRec?.houseRentAllowance ?? profile.houseRentAllowance ?? 0
   );
   const [medicalAllowance, setMedicalAllowance] = useState(
     existingSalaryRec?.medicalAllowance || profile.medicalAllowance
@@ -322,7 +322,7 @@ export const SalaryView: React.FC = () => {
     const rec = salaryRecords.find((s) => s.month === selectedMonth);
     if (rec) {
       setBasicSalary(rec.basicSalary || profile.basicSalary);
-      setHouseRentAllowance(rec.houseRentAllowance || profile.houseRentAllowance);
+      setHouseRentAllowance(rec.houseRentAllowance ?? profile.houseRentAllowance ?? 0);
       setMedicalAllowance(rec.medicalAllowance || profile.medicalAllowance);
       setTransportAllowance(rec.transportAllowance || profile.transportAllowance);
       setFoodAllowance(rec.foodAllowance || profile.foodAllowance);
@@ -343,7 +343,7 @@ export const SalaryView: React.FC = () => {
       setNotes(rec.notes);
     } else {
       setBasicSalary(profile.basicSalary);
-      setHouseRentAllowance(profile.houseRentAllowance);
+      setHouseRentAllowance(profile.houseRentAllowance ?? 0);
       setMedicalAllowance(profile.medicalAllowance);
       setTransportAllowance(profile.transportAllowance);
       setFoodAllowance(profile.foodAllowance);

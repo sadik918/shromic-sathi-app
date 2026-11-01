@@ -48,7 +48,13 @@ import {
   summarizePersonalLoans,
   toBengaliDigits,
 } from '../utils/calculations';
-import { formatDateReadable, formatDateSlashDMY, formatMonthLabel, T } from '../utils/i18n';
+import {
+  formatDateReadable,
+  formatDateSlashDMY,
+  formatMonthLabel,
+  formatShortMonthName,
+  T,
+} from '../utils/i18n';
 import {
   getCalendarCellBadgeMeta,
   getRemindersForCalendarDate,
@@ -883,74 +889,75 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         return (
           <div
             data-testid="today-quick-summary-card"
-            className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-200/90 dark:border-emerald-800/80 shadow-xs flex items-center justify-between gap-3"
+            className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-200/90 dark:border-emerald-800/80 shadow-xs space-y-2"
           >
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                <CalendarCheck2 className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
-                    {lang === 'bn' ? 'আজকের হিসাব' : "Today's Status"} ({formatDateReadable(todayISO, lang)})
-                  </h3>
-                  <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${statusColor} shrink-0`}>
-                    {statusLabel}
-                  </span>
+            <div className="flex items-center justify-between gap-2 flex-nowrap">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <CalendarCheck2 className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <p className="text-xs text-slate-600 dark:text-slate-300 font-medium mt-0.5 truncate">
-                  {todayOtHours > 0 ? (
-                    <span className="text-emerald-700 dark:text-emerald-400 font-bold">
-                      {lang === 'bn'
-                        ? `${todayOutTime ? `আউট টাইম: ${toBengaliDigits(todayOutTime)} · ` : ''}ওভারটাইম: ${formatNumber(todayOtHours, 'bn', 1)} ঘণ্টা (${formatBDT(todayOtEarnings, 'bn')})`
-                        : `${todayOutTime ? `Out: ${todayOutTime} · ` : ''}Overtime: ${todayOtHours} hrs (${formatBDT(todayOtEarnings, 'en')})`}
-                    </span>
-                  ) : (
-                    <span className="text-slate-500 dark:text-slate-400">
-                      {lang === 'bn'
-                        ? `${todayOutTime ? `আউট টাইম: ${toBengaliDigits(todayOutTime)} · ` : ''}ওভারটাইম: ০ ঘণ্টা (ওভারটাইম করা হয়নি)`
-                        : `${todayOutTime ? `Out: ${todayOutTime} · ` : ''}Overtime: 0 hrs`}
-                    </span>
-                  )}
-                </p>
+                <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white whitespace-nowrap">
+                  {lang === 'bn' ? 'আজকের হিসাব' : "Today's Status"} ({formatDateReadable(todayISO, lang)})
+                </h3>
               </div>
+
+              <button
+                type="button"
+                data-testid="edit-today-status-btn"
+                onClick={() => {
+                  setQuickDate(todayISO);
+                  if (showQuickDailyActions && isEditingQuickCalc) {
+                    setIsEditingQuickCalc(false);
+                  } else {
+                    setIsEditingQuickCalc(true);
+                  }
+                }}
+                title={lang === 'bn' ? 'আজকের দ্রুত হিসাব এডিট করুন' : "Edit Today's Quick Record"}
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0 whitespace-nowrap ${
+                  showQuickDailyActions && isEditingQuickCalc
+                    ? 'bg-emerald-700 text-white'
+                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200'
+                }`}
+              >
+                <Edit2
+                  className={`w-3 h-3 sm:w-3.5 sm:h-3.5 ${
+                    showQuickDailyActions && isEditingQuickCalc
+                      ? 'text-white'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                  }`}
+                />
+                <span>
+                  {showQuickDailyActions && isEditingQuickCalc
+                    ? lang === 'bn'
+                      ? 'সম্পন্ন'
+                      : 'Done'
+                    : lang === 'bn'
+                    ? 'এডিট করুন'
+                    : 'Edit'}
+                </span>
+              </button>
             </div>
 
-            <button
-              type="button"
-              data-testid="edit-today-status-btn"
-              onClick={() => {
-                setQuickDate(todayISO);
-                if (showQuickDailyActions && isEditingQuickCalc) {
-                  setIsEditingQuickCalc(false);
-                } else {
-                  setIsEditingQuickCalc(true);
-                }
-              }}
-              title={lang === 'bn' ? 'আজকের দ্রুত হিসাব এডিট করুন' : "Edit Today's Quick Record"}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
-                showQuickDailyActions && isEditingQuickCalc
-                  ? 'bg-emerald-700 text-white'
-                  : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200'
-              }`}
-            >
-              <Edit2
-                className={`w-3.5 h-3.5 ${
-                  showQuickDailyActions && isEditingQuickCalc
-                    ? 'text-white'
-                    : 'text-emerald-600 dark:text-emerald-400'
-                }`}
-              />
-              <span>
-                {showQuickDailyActions && isEditingQuickCalc
-                  ? lang === 'bn'
-                    ? 'সম্পন্ন'
-                    : 'Done'
-                  : lang === 'bn'
-                  ? 'এডিট করুন'
-                  : 'Edit'}
+            <div className="flex flex-wrap items-center gap-2 pt-0.5">
+              <span className={`px-2 py-0.5 rounded-md text-[11px] sm:text-xs font-bold ${statusColor} shrink-0 whitespace-nowrap`}>
+                {statusLabel}
               </span>
-            </button>
+              <p className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 font-medium">
+                {todayOtHours > 0 ? (
+                  <span className="text-emerald-700 dark:text-emerald-400 font-bold">
+                    {lang === 'bn'
+                      ? `${todayOutTime ? `আউট: ${toBengaliDigits(todayOutTime)} · ` : ''}ওভারটাইম: ${formatNumber(todayOtHours, 'bn', 1)} ঘণ্টা (${formatBDT(todayOtEarnings, 'bn')})`
+                      : `${todayOutTime ? `Out: ${todayOutTime} · ` : ''}Overtime: ${todayOtHours} hrs (${formatBDT(todayOtEarnings, 'en')})`}
+                  </span>
+                ) : (
+                  <span className="text-slate-500 dark:text-slate-400">
+                    {lang === 'bn'
+                      ? `${todayOutTime ? `আউট: ${toBengaliDigits(todayOutTime)} · ` : ''}ওভারটাইম: ০ ঘণ্টা (ওভারটাইম করা হয়নি)`
+                      : `${todayOutTime ? `Out: ${todayOutTime} · ` : ''}Overtime: 0 hrs`}
+                  </span>
+                )}
+              </p>
+            </div>
           </div>
         );
       })()}
@@ -983,24 +990,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <section
           id="quick-daily-actions-section"
           data-testid="quick-daily-actions-section"
-          className="bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/80 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs"
+          className="bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/80 rounded-2xl p-3.5 sm:p-5 space-y-3.5 shadow-xs"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white shrink-0">
+          <div className="flex items-center justify-between gap-1.5 pb-2.5 border-b border-slate-100 dark:border-slate-800 flex-nowrap">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <h2 className="text-xs sm:text-base font-bold text-slate-900 dark:text-white whitespace-nowrap shrink-0">
                 {lang === 'bn' ? 'আজকের দ্রুত হিসাব' : 'Quick Daily Actions'}
               </h2>
               {isEditingQuickCalc && (
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-[11px] font-bold">
-                  {lang === 'bn' ? 'এডিট মোড' : 'Edit Mode'}
+                <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold whitespace-nowrap shrink-0">
+                  {lang === 'bn' ? 'এডিট' : 'Edit'}
                 </span>
               )}
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
               <label
                 htmlFor="home-quick-date"
-                className="text-xs font-semibold text-slate-600 dark:text-slate-300 shrink-0"
+                className="text-[11px] sm:text-xs font-semibold text-slate-600 dark:text-slate-300 shrink-0"
               >
                 {lang === 'bn' ? 'তারিখ:' : 'Date:'}
               </label>
@@ -1012,14 +1019,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 disabled={isUpcomingMonth}
                 onChange={(val) => setQuickDate(val)}
                 lang={lang}
-                className="min-w-[138px]"
+                className="min-w-[125px] sm:min-w-[138px]"
               />
               {(isEditingQuickCalc || isQuickEntryCompleted) && (
                 <button
                   type="button"
                   data-testid="close-quick-daily-actions-btn"
                   onClick={() => setIsEditingQuickCalc(false)}
-                  className="min-h-[34px] px-3 py-1 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
+                  className="min-h-[32px] px-2.5 py-1 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shrink-0"
                 >
                   {lang === 'bn' ? 'সম্পন্ন' : 'Done'}
                 </button>
@@ -1070,14 +1077,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
             {/* Quick Attendance Mark */}
-            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                  {lang === 'bn' ? '১. আজকের হাজিরা নির্বাচন করুন' : '1. Select Attendance'} ({formatDateSlashDMY(quickDate, lang)})
+            <div className="p-3 sm:p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-1.5 flex-nowrap">
+                <span className="text-[11px] sm:text-xs font-extrabold text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                  {lang === 'bn' ? '১. আজকের হাজিরা' : '1. Attendance'} ({formatDateSlashDMY(quickDate, lang)})
                 </span>
-                <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                <span className="px-2 py-0.5 rounded-md bg-emerald-100/80 dark:bg-emerald-950/80 text-[11px] sm:text-xs font-bold text-emerald-800 dark:text-emerald-300 whitespace-nowrap shrink-0">
                   {lang === 'bn'
                     ? `নির্বাচন: ${HOME_STATUS_LABELS[quickDraftStatus].bn}`
                     : `Selected: ${HOME_STATUS_LABELS[quickDraftStatus].en}`}
@@ -1102,7 +1109,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       disabled={isQuickActionLocked}
                       data-testid={`quick-attendance-${st}`}
                       onClick={() => handleSelectQuickStatus(st)}
-                      className={`min-h-[38px] px-2 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                      className={`min-h-[38px] px-2 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap ${
                         active
                           ? 'bg-emerald-700 text-white border-emerald-700 shadow-2xs'
                           : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-emerald-50'
@@ -1129,12 +1136,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
 
             {/* Quick Out-Time & Overtime Add / Edit */}
-            <div className="p-3.5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-800/60 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+            <div className="p-3 sm:p-3.5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-800/60 space-y-2.5">
+              <div className="flex items-center justify-between gap-1.5 flex-nowrap">
+                <span className="text-[11px] sm:text-xs font-extrabold text-slate-800 dark:text-slate-200 whitespace-nowrap">
                   {lang === 'bn' ? '২. আউট টাইম ও ওভারটাইম সেট করুন' : '2. Set Out-Time & Overtime'}
                 </span>
-                <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                <span className="px-2 py-0.5 rounded-md bg-emerald-100/80 dark:bg-emerald-950/80 text-[11px] sm:text-xs font-bold text-emerald-800 dark:text-emerald-300 tabular-nums whitespace-nowrap shrink-0">
                   {lang === 'bn'
                     ? `ওভারটাইম: ${formatNumber(quickDraftOtHours, 'bn', 1)} ঘণ্টা`
                     : `Overtime: ${quickDraftOtHours} hrs`}
@@ -1159,70 +1166,65 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-5 gap-1.5">
-                    <button
-                      type="button"
-                      data-testid="quick-ot-0"
-                      disabled={isQuickActionLocked}
-                      onClick={() => handleSelectQuickOt(0)}
-                      className={`min-h-[38px] px-1.5 py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
-                        quickDraftOtHours === 0
-                          ? 'bg-emerald-700 text-white border-emerald-700 shadow-2xs'
-                          : 'bg-white hover:bg-emerald-700 hover:text-white dark:bg-slate-900 border-emerald-300 dark:border-emerald-800 text-slate-700 dark:text-slate-200'
-                      }`}
-                    >
-                      {lang === 'bn' ? '৫টা (০ ঘঃ)' : '5PM (0h)'}
-                    </button>
-                    {[
-                      { h: 1, outBn: '৬টা', outEn: '6PM' },
-                      { h: 2, outBn: '৭টা', outEn: '7PM' },
-                      { h: 3, outBn: '৮টা', outEn: '8PM' },
-                      { h: 4, outBn: '৯টা', outEn: '9PM' },
-                    ].map(({ h, outBn, outEn }) => {
-                      const isActiveOt = quickDraftOtHours === h;
-                      return (
-                        <button
-                          key={h}
-                          type="button"
-                          data-testid={`quick-ot-${h}`}
-                          disabled={isQuickActionLocked}
-                          onClick={() => handleSelectQuickOt(h)}
-                          className={`min-h-[38px] px-1.5 py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold transition-all tabular-nums cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
-                            isActiveOt
-                              ? 'bg-emerald-700 text-white border-emerald-700 shadow-2xs'
-                              : 'bg-white hover:bg-emerald-700 hover:text-white dark:bg-slate-900 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
-                          }`}
-                        >
-                          {lang === 'bn' ? `+${formatNumber(h, 'bn')} ঘঃ (${outBn})` : `+${h}h (${outEn})`}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 pt-1">
-                    <div className="inline-flex items-center gap-1.5 rounded-xl bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-800 p-1">
+                <div className="grid grid-cols-6 gap-1">
+                  <button
+                    type="button"
+                    data-testid="quick-ot-0"
+                    disabled={isQuickActionLocked}
+                    onClick={() => handleSelectQuickOt(0)}
+                    className={`min-h-[40px] px-1 py-1 rounded-xl border text-[10px] sm:text-xs font-bold transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed flex flex-col items-center justify-center leading-tight ${
+                      quickDraftOtHours === 0
+                        ? 'bg-emerald-700 text-white border-emerald-700 shadow-2xs'
+                        : 'bg-white hover:bg-emerald-700 hover:text-white dark:bg-slate-900 border-emerald-300 dark:border-emerald-800 text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    <span>{lang === 'bn' ? '০ ঘঃ' : '0h'}</span>
+                    <span className="text-[9px] opacity-80">{lang === 'bn' ? '৫টা' : '5PM'}</span>
+                  </button>
+                  {[
+                    { h: 1, outBn: '৬টা', outEn: '6PM' },
+                    { h: 2, outBn: '৭টা', outEn: '7PM' },
+                    { h: 3, outBn: '৮টা', outEn: '8PM' },
+                  ].map(({ h, outBn, outEn }) => {
+                    const isActiveOt = quickDraftOtHours === h;
+                    return (
                       <button
+                        key={h}
                         type="button"
-                        onClick={() => handleSelectQuickOt(quickDraftOtHours - 1)}
-                        disabled={isQuickActionLocked || quickDraftOtHours <= 0}
-                        className="min-h-[30px] px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 disabled:opacity-40 cursor-pointer"
+                        data-testid={`quick-ot-${h}`}
+                        disabled={isQuickActionLocked}
+                        onClick={() => handleSelectQuickOt(h)}
+                        className={`min-h-[40px] px-1 py-1 rounded-xl border text-[10px] sm:text-xs font-bold transition-all tabular-nums cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed flex flex-col items-center justify-center leading-tight ${
+                          isActiveOt
+                            ? 'bg-emerald-700 text-white border-emerald-700 shadow-2xs'
+                            : 'bg-white hover:bg-emerald-700 hover:text-white dark:bg-slate-900 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                        }`}
                       >
-                        − ১ {lang === 'bn' ? 'ঘঃ' : 'h'}
+                        <span>{lang === 'bn' ? `+${formatNumber(h, 'bn')} ঘঃ` : `+${h}h`}</span>
+                        <span className="text-[9px] opacity-80">{lang === 'bn' ? outBn : outEn}</span>
                       </button>
-                      <span className="px-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 tabular-nums">
-                        {formatNumber(quickDraftOtHours, lang, 1)} {lang === 'bn' ? 'ঘণ্টা' : 'hrs'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectQuickOt(quickDraftOtHours + 1)}
-                        disabled={isQuickActionLocked || quickDraftOtHours >= 24}
-                        className="min-h-[30px] px-2.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-950 text-xs font-bold text-emerald-800 dark:text-emerald-300 disabled:opacity-40 cursor-pointer"
-                      >
-                        + ১ {lang === 'bn' ? 'ঘঃ' : 'h'}
-                      </button>
-                    </div>
-                  </div>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    data-testid="quick-ot-minus"
+                    onClick={() => handleSelectQuickOt(quickDraftOtHours - 1)}
+                    disabled={isQuickActionLocked || quickDraftOtHours <= 0}
+                    className="min-h-[40px] px-1 py-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-[10px] sm:text-xs font-bold text-slate-700 dark:text-slate-200 disabled:opacity-40 cursor-pointer flex flex-col items-center justify-center leading-tight"
+                  >
+                    <span>− ১ {lang === 'bn' ? 'ঘঃ' : 'h'}</span>
+                    <span className="text-[9px] opacity-75">{lang === 'bn' ? 'কমান' : 'Less'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="quick-ot-plus"
+                    onClick={() => handleSelectQuickOt(quickDraftOtHours + 1)}
+                    disabled={isQuickActionLocked || quickDraftOtHours >= 24}
+                    className="min-h-[40px] px-1 py-1 rounded-xl border border-emerald-400 dark:border-emerald-700 bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-950 text-[10px] sm:text-xs font-bold text-emerald-900 dark:text-emerald-200 disabled:opacity-40 cursor-pointer flex flex-col items-center justify-center leading-tight"
+                  >
+                    <span>+ ১ {lang === 'bn' ? 'ঘঃ' : 'h'}</span>
+                    <span className="text-[9px] opacity-80">{lang === 'bn' ? 'যোগ' : 'Add'}</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -1267,36 +1269,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               >
                 {formatBDT(earnedSalaryBreakdown.totalEarnedSalary, lang)}
               </p>
-              <p className="mt-1 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 tabular-nums line-clamp-1">
+              <p className="mt-1 text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis">
                 {lang === 'bn'
-                  ? `${formatNumber(earnedSalaryBreakdown.attendedDaysCount, 'bn')} দিন উপস্থিতি · দৈনিক ${formatBDT(earnedSalaryBreakdown.dailyWageRate, 'bn')}`
-                  : `${earnedSalaryBreakdown.attendedDaysCount} days attended · ${formatBDT(earnedSalaryBreakdown.dailyWageRate, 'en')}/day`}
+                  ? `উপস্থিতি: ${formatNumber(earnedSalaryBreakdown.attendedDaysCount, 'bn')} দিন · দৈনিক ${formatBDT(earnedSalaryBreakdown.dailyWageRate, 'bn')}`
+                  : `Attended: ${earnedSalaryBreakdown.attendedDaysCount}d · ${formatBDT(earnedSalaryBreakdown.dailyWageRate, 'en')}/d`}
               </p>
-              <div className="mt-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800 text-[10px] sm:text-[11px] text-slate-400 flex items-center justify-between">
-                <span>{lang === 'bn' ? 'সম্ভাব্য পূর্ণ বেতন:' : 'Full Expected:'}</span>
-                <div className="flex items-center gap-1.5">
-                  {(profile.attendanceBonus || 0) > 0 && (
-                    !attBonusEval.isEligible ? (
-                      <span
-                        data-testid="bonus-missed-badge"
-                        title={lang === 'bn' ? attBonusEval.reasonBn : attBonusEval.reasonEn}
-                        className="px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 text-[10px] font-bold"
-                      >
-                        {lang === 'bn' ? 'হাজিরা বোনাস মিস' : 'Bonus Missed'}
-                      </span>
-                    ) : (
-                      <span
-                        data-testid="bonus-active-badge"
-                        className="px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold"
-                      >
-                        {lang === 'bn' ? 'বোনাস বহাল' : 'Bonus Active'}
-                      </span>
-                    )
-                  )}
-                  <span className="font-bold text-slate-700 dark:text-slate-300 tabular-nums">
+              <div className="mt-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800 text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between gap-1 flex-nowrap">
+                <span className="whitespace-nowrap truncate">
+                  {lang === 'bn' ? 'পূর্ণ বেতন:' : 'Full:'}{' '}
+                  <strong className="font-bold text-slate-700 dark:text-slate-300 tabular-nums">
                     {formatBDT(earnedSalaryBreakdown.fullExpectedMonthlySalary, lang)}
-                  </span>
-                </div>
+                  </strong>
+                </span>
+                {(profile.attendanceBonus || 0) > 0 && (
+                  !attBonusEval.isEligible ? (
+                    <span
+                      data-testid="bonus-missed-badge"
+                      title={lang === 'bn' ? attBonusEval.reasonBn : attBonusEval.reasonEn}
+                      className="px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 text-[9px] sm:text-[10px] font-bold whitespace-nowrap shrink-0"
+                    >
+                      {lang === 'bn' ? 'বোনাস মিস' : 'Missed'}
+                    </span>
+                  ) : (
+                    <span
+                      data-testid="bonus-active-badge"
+                      className="px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[9px] sm:text-[10px] font-bold whitespace-nowrap shrink-0"
+                    >
+                      {lang === 'bn' ? 'বোনাস বহাল' : 'Active'}
+                    </span>
+                  )
+                )}
               </div>
             </div>
             <button
@@ -1507,36 +1509,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* 7. Priority Feature 1: Smart Salary Comparison & Monthly Financial Insights */}
       <section
         data-testid="smart-salary-comparison"
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4"
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5 space-y-3.5"
       >
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
-          <div>
-            <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
-              <span>
-                {lang === 'bn'
-                  ? 'স্মার্ট বেতন তুলনা ও আর্থিক বিশ্লেষণ'
-                  : 'Smart Salary Comparison & Monthly Insights'}
-              </span>
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 ml-6">
+        <div className="flex items-center justify-between gap-1.5 pb-2.5 border-b border-slate-100 dark:border-slate-800 flex-nowrap">
+          <h2 className="text-xs sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-1.5 min-w-0">
+            <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+            <span className="truncate">
               {lang === 'bn'
-                ? `${formatMonthLabel(selectedMonth, 'bn')} বনাম ${formatMonthLabel(prevMonth, 'bn')}`
-                : `${formatMonthLabel(selectedMonth, 'en')} vs ${formatMonthLabel(prevMonth, 'en')}`}
-            </p>
-          </div>
+                ? 'স্মার্ট তুলনা ও আর্থিক বিশ্লেষণ'
+                : 'Smart Comparison & Insights'}
+            </span>
+          </h2>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedMonth(prevMonth)}
-              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors"
-            >
-              {lang === 'bn'
-                ? `${formatMonthLabel(prevMonth, 'bn')} দেখুন`
-                : `View ${formatMonthLabel(prevMonth, 'en')}`}
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setSelectedMonth(prevMonth)}
+            className="min-h-[28px] sm:min-h-[34px] px-2 sm:px-3 py-1 rounded-lg sm:rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800 text-[10px] sm:text-xs font-bold text-emerald-800 dark:text-emerald-300 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+          >
+            {lang === 'bn'
+              ? `${formatShortMonthName(selectedMonth, 'bn')} বনাম ${formatShortMonthName(prevMonth, 'bn')} দেখুন`
+              : `${formatShortMonthName(selectedMonth, 'en')} vs ${formatShortMonthName(prevMonth, 'en')}`}
+          </button>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -1643,30 +1636,30 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Dedicated Attendance & Public Holidays Overview right inside Home (হোমের ভিতরে হাজিরা ও ছুটি ওভারভিউ) */}
       <section
         data-testid="home-attendance-overview"
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4"
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5 space-y-4"
       >
         <div
           data-testid="home-attendance-header-row"
-          className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800"
+          className="flex items-center justify-between gap-1 sm:gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800 flex-nowrap"
         >
-          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-            <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white inline-flex items-center gap-1.5 shrink-0">
-              <CalendarCheck2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+          <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+            <h2 className="text-xs sm:text-base font-bold text-slate-900 dark:text-white inline-flex items-center gap-1 shrink-0">
+              <CalendarCheck2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
               <span>{lang === 'bn' ? 'তারিখ' : 'Date'}</span>
             </h2>
-            <div className="inline-flex items-center gap-1">
+            <div className="inline-flex items-center gap-0.5 sm:gap-1 shrink-0">
               <button
                 type="button"
                 data-testid="home-cal-prev-month-btn"
                 onClick={() => setSelectedMonth(stepMonthISO(selectedMonth, -1))}
                 title={lang === 'bn' ? 'পূর্বের মাস' : 'Previous Month'}
-                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer transition-colors"
+                className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer transition-colors shrink-0"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <ChevronLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
               <span
                 data-testid="home-attendance-month-label"
-                className="text-xs sm:text-sm font-bold text-emerald-800 dark:text-emerald-300 px-2.5 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800/80 shrink-0"
+                className="text-[11px] sm:text-sm font-bold text-emerald-800 dark:text-emerald-300 px-1.5 sm:px-2.5 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800/80 whitespace-nowrap shrink-0"
               >
                 {formatMonthLabel(selectedMonth, lang)}
               </span>
@@ -1675,9 +1668,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 data-testid="home-cal-next-month-btn"
                 onClick={() => setSelectedMonth(stepMonthISO(selectedMonth, 1))}
                 title={lang === 'bn' ? 'পরের মাস (আগামী রিমাইন্ডার সেট করুন)' : 'Next Month'}
-                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer transition-colors"
+                className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer transition-colors shrink-0"
               >
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
             </div>
           </div>
@@ -1686,10 +1679,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             type="button"
             data-testid="home-go-to-attendance-btn"
             onClick={() => onNavigateTab('attendance')}
-            className="min-h-[34px] sm:min-h-[36px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 text-xs font-semibold text-emerald-800 dark:text-emerald-300 inline-flex items-center gap-1 shrink-0 whitespace-nowrap transition-colors cursor-pointer"
+            className="min-h-[28px] sm:min-h-[36px] px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 text-[11px] sm:text-xs font-bold text-emerald-800 dark:text-emerald-300 inline-flex items-center gap-1 shrink-0 whitespace-nowrap transition-colors cursor-pointer"
           >
-            <span>{lang === 'bn' ? 'হাজিরার পাতায় যান' : 'Go to Attendance'}</span>
-            <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+            <span>{lang === 'bn' ? 'হাজিরা পাতায় দেখুন' : 'Go to Attendance'}</span>
+            <ArrowRight className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
           </button>
         </div>
 

@@ -20,7 +20,12 @@ service cloud.firestore {
       return request.auth != null;
     }
     function isVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'password' ||
+        request.auth.token.firebase.sign_in_provider == 'phone' ||
+        request.auth.token.firebase.sign_in_provider == 'anonymous'
+      );
     }
     function isNotDemoAccount() {
       return isSignedIn() && request.auth.token.email != 'demo@therate.gmail.com';
@@ -417,6 +422,10 @@ service cloud.firestore {
             'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
             'foodAllowance', 'attendanceBonus', 'grossSalary', 'otWageBase',
             'otDivisor', 'otMultiplier', 'otCalculationMode', 'otCustomHourlyRate',
+            'shiftPattern', 'dayShiftStartTime', 'nightShiftStartTime', 'rotationStartDate',
+            'attendanceWindowStartDay', 'attendanceWindowEndDay', 'attendanceWindowStartNight', 'attendanceWindowEndNight',
+            'hasAttendanceBonus', 'attendanceBonusAmount', 'attendanceBonusDays', 'maxConsecutiveAbsences',
+            'dayBonusCutoffTime', 'nightBonusCutoffTime', 'weeklyHolidayDay', 'expectedPayDay', 'monthlyBudgetTarget',
             'effectiveFrom', 'language', 'privacyConsent',
             'updatedAt'
           ])

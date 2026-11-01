@@ -601,9 +601,19 @@ export function getMissingRecordsForMonth(
   const [yNum, mNum] = targetMonth.split('-').map(Number);
   const daysInTargetMonth = yNum && mNum ? new Date(yNum, mNum, 0).getDate() : 28;
 
-  const todayDay = currentDateStr.startsWith(targetMonth)
-    ? Math.min(daysInTargetMonth, Math.max(1, Number(currentDateStr.slice(8, 10)) || 26))
-    : Math.min(daysInTargetMonth, 28);
+  // For the current active month, today is currently running (in progress) and can be updated anytime before midnight.
+  // Therefore, only elapsed/past days (yesterday and earlier = todayDay - 1) are eligible to be missing records.
+  // For past months (< currentMonth), all days of that month have elapsed (up to daysInTargetMonth).
+  let maxCheckDay = daysInTargetMonth;
+  if (targetMonth === currentMonth) {
+    const todayDay = Math.min(daysInTargetMonth, Math.max(1, Number(currentDateStr.slice(8, 10)) || 1));
+    maxCheckDay = todayDay - 1; // Exclude today from missing records!
+  }
+
+  // If no past days have elapsed yet (e.g. today is 1st of current month), maxCheckDay is 0 -> no missing records
+  if (maxCheckDay < 1) {
+    return [];
+  }
 
   if (joiningDate && joiningDate.slice(0, 7) > targetMonth) {
     return [];
@@ -612,17 +622,17 @@ export function getMissingRecordsForMonth(
   let startDay = 1;
   if (joiningDate && joiningDate.startsWith(targetMonth)) {
     const jDay = Number(joiningDate.slice(8, 10));
-    if (jDay > todayDay) {
+    if (jDay > maxCheckDay) {
       return [];
     }
-    if (jDay > 1 && jDay <= todayDay) {
+    if (jDay > 1 && jDay <= maxCheckDay) {
       startDay = jDay;
     }
   }
 
   const missingList: MissingDateEntry[] = [];
 
-  for (let day = startDay; day <= todayDay; day++) {
+  for (let day = startDay; day <= maxCheckDay; day++) {
     const dayStr = String(day).padStart(2, '0');
     const dateStr = `${targetMonth}-${dayStr}`;
 
@@ -3338,7 +3348,7 @@ export function buildMonthlyRentUtilityTableRows(params: {
       baseRentRec
         ? baseRentRec.amount > 0
           ? baseRentRec.amount
-          : monthRule.fixedBaseRent || 3500
+          : monthRule.fixedBaseRent || 0
         : monthRule.fixedBaseRent || 0;
     let electricityAmount = electricityAttached
       ? 0
