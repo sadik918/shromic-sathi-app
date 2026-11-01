@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="bn">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var NativeWebSocket = window.WebSocket;
+        if (!NativeWebSocket) return;
+        function MockViteWebSocket() {
+          this.readyState = 1;
+          this.bufferedAmount = 0;
+          this.extensions = '';
+          this.protocol = 'vite-hmr';
+          this.url = '';
+          this.binaryType = 'blob';
+          this.onopen = null;
+          this.onerror = null;
+          this.onclose = null;
+          this.onmessage = null;
+        }
+        MockViteWebSocket.prototype.addEventListener = function (type, listener) {
+          if (type === 'open' && typeof listener === 'function') {
+            setTimeout(function () {
+              try {
+                listener(new Event('open'));
+              } catch (_e) {}
+            }, 0);
+          }
+        };
+        MockViteWebSocket.prototype.removeEventListener = function () {};
+        MockViteWebSocket.prototype.dispatchEvent = function () {
+          return true;
+        };
+        MockViteWebSocket.prototype.send = function () {};
+        MockViteWebSocket.prototype.close = function () {
+          this.readyState = 3;
+        };
+        var WrappedWebSocket = function (url, protocols) {
+          var protoStr = Array.isArray(protocols) ? protocols.join(',') : String(protocols || '');
+          if (protoStr.indexOf('vite-hmr') !== -1 || protoStr.indexOf('vite-ping') !== -1) {
+            return new MockViteWebSocket();
+          }
+          return protocols !== undefined
+            ? new NativeWebSocket(url, protocols)
+            : new NativeWebSocket(url);
+        };
+        WrappedWebSocket.prototype = NativeWebSocket.prototype;
+        WrappedWebSocket.CONNECTING = NativeWebSocket.CONNECTING;
+        WrappedWebSocket.OPEN = NativeWebSocket.OPEN;
+        WrappedWebSocket.CLOSING = NativeWebSocket.CLOSING;
+        WrappedWebSocket.CLOSED = NativeWebSocket.CLOSED;
+        window.WebSocket = WrappedWebSocket;
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+    <title>শ্রমিক সাথী (Shromik Sathi) — গার্মেন্টস শ্রমিক সহকারী</title>
+    <meta name="description" content="বাংলাদেশের গার্মেন্টস শ্রমিকদের জন্য বেতন, ওভারটাইম, হাজিরা, ছুটি, সঞ্চয় ও ব্যক্তিগত হিসাব ব্যবস্থাপনার নির্ভরযোগ্য ডিজিটাল সহকারী।" />
+    <meta property="og:title" content="শ্রমিক সাথী (Shromik Sathi) — গার্মেন্টস শ্রমিক সহকারী" />
+    <meta property="og:description" content="বাংলাদেশের গার্মেন্টস শ্রমিকদের জন্য বেতন, ওভারটাইম, হাজিরা, ছুটি, সঞ্চয় ও ব্যক্তিগত হিসাব ব্যবস্থাপনার নির্ভরযোগ্য ডিজিটাল সহকারী।" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png" />
+    <meta name="theme-color" content="#047857" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="শ্রমিক সাথী" />
+    <link rel="apple-touch-icon" href="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png" />
+    <link rel="icon" type="image/png" href="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@300;400;500;600;700&family=Noto+Sans+Bengali:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-teal-700 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,740 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    function isNotDemoAccount() {
+      return isSignedIn() && request.auth.token.email != 'demo@therate.gmail.com';
+    }
+    function isOwner(userId) {
+      return isVerified() && isNotDemoAccount() && request.auth.uid == userId;
+    }
+    function isAdmin() {
+      return isVerified() && isNotDemoAccount() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'sadikulislam45974@gmail.com'
+      );
+    }
+    function hasParentProfile(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data.userId == request.auth.uid;
+    }
+
+    // 3. Entity Validation Blueprints (Anti-Update-Gap)
+    function isValidWorkerProfile(data) {
+      return data.keys().hasAll([
+          'userId', 'fullName', 'photoUrl', 'phone', 'address', 'emergencyContact',
+          'factoryName', 'factoryBranch', 'department', 'designation', 'employeeId',
+          'employmentType', 'joiningDate', 'salaryGrade', 'basicSalary',
+          'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
+          'foodAllowance', 'attendanceBonus', 'grossSalary', 'otWageBase',
+          'otDivisor', 'otMultiplier', 'effectiveFrom', 'language', 'privacyConsent',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'fullName', 'photoUrl', 'phone', 'address', 'emergencyContact',
+          'factoryName', 'factoryBranch', 'department', 'designation', 'employeeId',
+          'employmentType', 'joiningDate', 'salaryGrade', 'basicSalary',
+          'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
+          'foodAllowance', 'attendanceBonus', 'grossSalary', 'otWageBase',
+          'otDivisor', 'otMultiplier', 'otCalculationMode', 'otCustomHourlyRate',
+          'shiftPattern', 'dayShiftStartTime', 'nightShiftStartTime', 'rotationStartDate',
+          'effectiveFrom', 'language', 'privacyConsent',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120 &&
+        data.photoUrl is string && data.photoUrl.size() <= 150000 &&
+        data.phone is string && data.phone.size() <= 30 &&
+        data.address is string && data.address.size() <= 300 &&
+        data.emergencyContact is string && data.emergencyContact.size() <= 120 &&
+        data.factoryName is string && data.factoryName.size() <= 150 &&
+        data.factoryBranch is string && data.factoryBranch.size() <= 120 &&
+        data.department is string && data.department.size() <= 100 &&
+        data.designation is string && data.designation.size() <= 100 &&
+        data.employeeId is string && data.employeeId.size() <= 60 &&
+        data.employmentType is string && data.employmentType.size() <= 30 &&
+        data.employmentType in ['permanent', 'probation', 'contractual', 'piece_rate', 'helper'] &&
+        data.joiningDate is string && data.joiningDate.size() <= 20 &&
+        data.salaryGrade is string && data.salaryGrade.size() <= 40 &&
+        data.basicSalary is number && data.basicSalary >= 0 && data.basicSalary <= 1000000 &&
+        data.houseRentAllowance is number && data.houseRentAllowance >= 0 && data.houseRentAllowance <= 1000000 &&
+        data.medicalAllowance is number && data.medicalAllowance >= 0 && data.medicalAllowance <= 500000 &&
+        data.transportAllowance is number && data.transportAllowance >= 0 && data.transportAllowance <= 500000 &&
+        data.foodAllowance is number && data.foodAllowance >= 0 && data.foodAllowance <= 500000 &&
+        data.attendanceBonus is number && data.attendanceBonus >= 0 && data.attendanceBonus <= 500000 &&
+        data.grossSalary is number && data.grossSalary >= 0 && data.grossSalary <= 5000000 &&
+        data.otWageBase is string && data.otWageBase.size() <= 20 && data.otWageBase in ['basic', 'gross'] &&
+        data.otDivisor is number && data.otDivisor > 0 && data.otDivisor <= 1000 &&
+        data.otMultiplier is number && data.otMultiplier > 0 && data.otMultiplier <= 10 &&
+        (!('otCalculationMode' in data) || (data.otCalculationMode is string && data.otCalculationMode.size() <= 20 && data.otCalculationMode in ['formula', 'manual'])) &&
+        (!('otCustomHourlyRate' in data) || (data.otCustomHourlyRate is number && data.otCustomHourlyRate >= 0 && data.otCustomHourlyRate <= 100000)) &&
+        (!('shiftPattern' in data) || (data.shiftPattern is string && data.shiftPattern in ['day', 'night', 'weekly_rotation'])) &&
+        (!('dayShiftStartTime' in data) || (data.dayShiftStartTime is string && data.dayShiftStartTime.size() <= 10)) &&
+        (!('nightShiftStartTime' in data) || (data.nightShiftStartTime is string && data.nightShiftStartTime.size() <= 10)) &&
+        (!('rotationStartDate' in data) || (data.rotationStartDate is string && data.rotationStartDate.size() <= 20)) &&
+        data.effectiveFrom is string && data.effectiveFrom.size() <= 20 &&
+        data.language is string && data.language.size() <= 10 && data.language in ['bn', 'en'] &&
+        data.privacyConsent is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOvertimeRecord(data) {
+      return data.keys().hasAll([
+          'userId', 'date', 'month', 'startTime', 'endTime', 'breakMinutes',
+          'totalMinutes', 'approvedHours', 'basicSalarySnapshot', 'divisorSnapshot',
+          'multiplierSnapshot', 'hourlyRateSnapshot', 'estimatedEarnings', 'notes',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'date', 'month', 'startTime', 'endTime', 'breakMinutes',
+          'totalMinutes', 'approvedHours', 'basicSalarySnapshot', 'divisorSnapshot',
+          'multiplierSnapshot', 'hourlyRateSnapshot', 'estimatedEarnings', 'notes',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.date is string && data.date.size() <= 15 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.month is string && data.month.size() <= 10 && data.month.matches('^\\d{4}-\\d{2}$') &&
+        data.startTime is string && data.startTime.size() <= 10 &&
+        data.endTime is string && data.endTime.size() <= 10 &&
+        data.breakMinutes is number && data.breakMinutes >= 0 && data.breakMinutes <= 720 &&
+        data.totalMinutes is number && data.totalMinutes >= 0 && data.totalMinutes <= 1440 &&
+        data.approvedHours is number && data.approvedHours >= 0 && data.approvedHours <= 24 &&
+        data.basicSalarySnapshot is number && data.basicSalarySnapshot >= 0 &&
+        data.divisorSnapshot is number && data.divisorSnapshot > 0 &&
+        data.multiplierSnapshot is number && data.multiplierSnapshot > 0 &&
+        data.hourlyRateSnapshot is number && data.hourlyRateSnapshot >= 0 &&
+        data.estimatedEarnings is number && data.estimatedEarnings >= 0 &&
+        data.notes is string && data.notes.size() <= 300 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSalaryRecord(data) {
+      return data.keys().hasAll([
+          'userId', 'month', 'effectiveDate', 'basicSalary', 'houseRentAllowance',
+          'medicalAllowance', 'transportAllowance', 'foodAllowance', 'attendanceBonus',
+          'overtimeHours', 'overtimeEarnings', 'festivalBonus', 'otherAllowances',
+          'advanceDeduction', 'absenceDeduction', 'otherDeductions', 'adjustments',
+          'estimatedGross', 'estimatedNetPayable', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'month', 'effectiveDate', 'basicSalary', 'houseRentAllowance',
+          'medicalAllowance', 'transportAllowance', 'foodAllowance', 'attendanceBonus',
+          'overtimeHours', 'overtimeEarnings', 'festivalBonus', 'otherAllowances',
+          'advanceDeduction', 'absenceDeduction', 'otherDeductions', 'adjustments',
+          'estimatedGross', 'estimatedNetPayable', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.month is string && data.month.size() <= 10 && data.month.matches('^\\d{4}-\\d{2}$') &&
+        data.effectiveDate is string && data.effectiveDate.size() <= 20 &&
+        data.basicSalary is number && data.basicSalary >= 0 &&
+        data.houseRentAllowance is number && data.houseRentAllowance >= 0 &&
+        data.medicalAllowance is number && data.medicalAllowance >= 0 &&
+        data.transportAllowance is number && data.transportAllowance >= 0 &&
+        data.foodAllowance is number && data.foodAllowance >= 0 &&
+        data.attendanceBonus is number && data.attendanceBonus >= 0 &&
+        data.overtimeHours is number && data.overtimeHours >= 0 &&
+        data.overtimeEarnings is number && data.overtimeEarnings >= 0 &&
+        data.festivalBonus is number && data.festivalBonus >= 0 &&
+        data.otherAllowances is number && data.otherAllowances >= 0 &&
+        data.advanceDeduction is number && data.advanceDeduction >= 0 &&
+        data.absenceDeduction is number && data.absenceDeduction >= 0 &&
+        data.otherDeductions is number && data.otherDeductions >= 0 &&
+        data.adjustments is number &&
+        data.estimatedGross is number && data.estimatedGross >= 0 &&
+        data.estimatedNetPayable is number &&
+        data.notes is string && data.notes.size() <= 400 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSalaryPayment(data) {
+      return data.keys().hasAll([
+          'userId', 'month', 'paymentDate', 'amountReceived', 'paymentMethod',
+          'isPartial', 'referenceNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'month', 'paymentDate', 'amountReceived', 'paymentMethod',
+          'isPartial', 'referenceNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.month is string && data.month.size() <= 10 && data.month.matches('^\\d{4}-\\d{2}$') &&
+        data.paymentDate is string && data.paymentDate.size() <= 15 &&
+        data.amountReceived is number && data.amountReceived >= 0 && data.amountReceived <= 5000000 &&
+        data.paymentMethod is string && data.paymentMethod.size() <= 20 &&
+        data.paymentMethod in ['cash', 'bkash', 'nagad', 'rocket', 'bank'] &&
+        data.isPartial is bool &&
+        data.referenceNote is string && data.referenceNote.size() <= 300 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAttendanceRecord(data) {
+      return data.keys().hasAll([
+          'userId', 'date', 'month', 'status', 'leaveCategory',
+          'checkIn', 'checkOut', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'date', 'month', 'status', 'leaveCategory',
+          'checkIn', 'checkOut', 'notes', 'hasAttendanceBonus', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.date is string && data.date.size() <= 15 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.month is string && data.month.size() <= 10 && data.month.matches('^\\d{4}-\\d{2}$') &&
+        data.status is string && data.status.size() <= 30 &&
+        data.status in ['present', 'absent', 'weekly_holiday', 'public_holiday', 'approved_leave', 'late'] &&
+        data.leaveCategory is string && data.leaveCategory.size() <= 30 &&
+        data.leaveCategory in ['none', 'casual', 'sick', 'earned', 'maternity', 'festival', 'unpaid'] &&
+        data.checkIn is string && data.checkIn.size() <= 10 &&
+        data.checkOut is string && data.checkOut.size() <= 10 &&
+        data.notes is string && data.notes.size() <= 300 &&
+        (!('hasAttendanceBonus' in data) || data.hasAttendanceBonus is bool) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidExpenseRecord(data) {
+      return data.keys().hasAll([
+          'userId', 'date', 'month', 'category', 'amount', 'description',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'date', 'month', 'category', 'amount', 'description',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.date is string && data.date.size() <= 15 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.month is string && data.month.size() <= 10 && data.month.matches('^\\d{4}-\\d{2}$') &&
+        data.category is string && data.category.size() <= 30 &&
+        data.category in ['food', 'rent', 'transport', 'family', 'medical', 'education', 'other'] &&
+        data.amount is number && data.amount >= 0 && data.amount <= 5000000 &&
+        data.description is string && data.description.size() <= 250 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSavingsGoal(data) {
+      return data.keys().hasAll([
+          'userId', 'title', 'targetAmount', 'savedAmount', 'monthlyBudget',
+          'deadline', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'title', 'targetAmount', 'savedAmount', 'monthlyBudget',
+          'deadline', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        data.targetAmount is number && data.targetAmount >= 0 && data.targetAmount <= 50000000 &&
+        data.savedAmount is number && data.savedAmount >= 0 && data.savedAmount <= 50000000 &&
+        data.monthlyBudget is number && data.monthlyBudget >= 0 && data.monthlyBudget <= 5000000 &&
+        data.deadline is string && data.deadline.size() <= 20 &&
+        data.notes is string && data.notes.size() <= 250 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidVaultDocument(data) {
+      return data.keys().hasAll([
+          'userId', 'title', 'category', 'fileName', 'fileType', 'fileSize',
+          'fileData', 'issueDate', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'title', 'category', 'fileName', 'fileType', 'fileSize',
+          'fileData', 'issueDate', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        data.category is string && data.category.size() <= 40 &&
+        data.category in ['id_card', 'appointment_letter', 'payslip', 'increment_letter', 'leave_approval', 'other'] &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 150 &&
+        data.fileType is string && data.fileType.size() <= 60 &&
+        data.fileSize is number && data.fileSize >= 0 && data.fileSize <= 524288 &&
+        data.fileData is string && data.fileData.size() <= 750000 &&
+        data.issueDate is string && data.issueDate.size() <= 20 &&
+        data.notes is string && data.notes.size() <= 300 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidReminderItem(data) {
+      return data.keys().hasAll([
+          'userId', 'title', 'category', 'dueDate', 'isCompleted',
+          'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'title', 'category', 'dueDate', 'isCompleted',
+          'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
+        data.category is string && data.category.size() <= 30 &&
+        data.category in ['salary_date', 'bill_payment', 'monthly_review', 'other'] &&
+        data.dueDate is string && data.dueDate.size() <= 15 &&
+        data.isCompleted is bool &&
+        data.notes is string && data.notes.size() <= 250 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPersonalLoan(data) {
+      return data.keys().hasAll([
+          'userId', 'title', 'lenderType', 'totalLoanAmount', 'paidAmount',
+          'monthlyInstallment', 'nextDueDate', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
+        data.lenderType is string && data.lenderType.size() <= 30 &&
+        data.totalLoanAmount is number && data.totalLoanAmount >= 0 && data.totalLoanAmount <= 50000000 &&
+        data.paidAmount is number && data.paidAmount >= 0 && data.paidAmount <= 50000000 &&
+        data.monthlyInstallment is number && data.monthlyInstallment >= 0 && data.monthlyInstallment <= 5000000 &&
+        data.nextDueDate is string && data.nextDueDate.size() <= 15 &&
+        data.notes is string && data.notes.size() <= 300 &&
+        (!('personName' in data) || (data.personName is string && data.personName.size() <= 100)) &&
+        (!('contactNumber' in data) || (data.contactNumber is string && data.contactNumber.size() <= 30)) &&
+        (!('direction' in data) || (data.direction is string && data.direction in ['lent', 'borrowed'])) &&
+        (!('originalAmount' in data) || (data.originalAmount is number && data.originalAmount >= 0)) &&
+        (!('transactionDate' in data) || (data.transactionDate is string && data.transactionDate.size() <= 20)) &&
+        (!('expectedRepaymentDate' in data) || (data.expectedRepaymentDate is string && data.expectedRepaymentDate.size() <= 20)) &&
+        (!('reason' in data) || (data.reason is string && data.reason.size() <= 300)) &&
+        (!('repaymentArrangement' in data) || (data.repaymentArrangement is string && data.repaymentArrangement in ['lump_sum', 'weekly', 'monthly', 'custom'])) &&
+        (!('status' in data) || (data.status is string && data.status in ['pending', 'partially_repaid', 'fully_settled', 'overdue', 'due_today'])) &&
+        (!('repayments' in data) || data.repayments is list) &&
+        (!('isArchived' in data) || data.isArchived is bool) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSupportFeedback(data) {
+      return data.keys().hasAll([
+          'userId', 'workerName', 'category', 'message', 'status',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'workerName', 'category', 'message', 'status',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.workerName is string && data.workerName.size() <= 120 &&
+        data.category is string && data.category.size() <= 40 &&
+        data.category in ['calculation_help', 'bug_report', 'feature_request', 'general'] &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 1000 &&
+        data.status is string && data.status.size() <= 20 &&
+        data.status in ['open', 'resolved'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidGarmentWorkplace(data) {
+      return data.keys().hasAll([
+          'userId', 'factoryName', 'isCurrent', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.factoryName is string && data.factoryName.size() >= 1 && data.factoryName.size() <= 150 &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        (!('factoryAddress' in data) || (data.factoryAddress is string && data.factoryAddress.size() <= 250)) &&
+        (!('factoryArea' in data) || (data.factoryArea is string && data.factoryArea.size() <= 100)) &&
+        (!('department' in data) || (data.department is string && data.department.size() <= 100)) &&
+        (!('floorNumber' in data) || (data.floorNumber is string && data.floorNumber.size() <= 50)) &&
+        (!('lineNumber' in data) || (data.lineNumber is string && data.lineNumber.size() <= 50)) &&
+        (!('designation' in data) || (data.designation is string && data.designation.size() <= 100)) &&
+        (!('supervisorName' in data) || (data.supervisorName is string && data.supervisorName.size() <= 100)) &&
+        (!('joiningDate' in data) || (data.joiningDate is string && data.joiningDate.size() <= 20)) &&
+        (!('factoryPhone' in data) || (data.factoryPhone is string && data.factoryPhone.size() <= 30)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+        data.isCurrent is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkerContact(data) {
+      return data.keys().hasAll([
+          'userId', 'fullName', 'phone', 'category', 'isFavorite', 'isEmergency', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
+        data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 30 &&
+        data.category is string && data.category in ['supervisor', 'line_chief', 'production_manager', 'hr_admin', 'security', 'coworker', 'emergency', 'other'] &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        (!('designation' in data) || (data.designation is string && data.designation.size() <= 100)) &&
+        (!('department' in data) || (data.department is string && data.department.size() <= 100)) &&
+        (!('lineNumber' in data) || (data.lineNumber is string && data.lineNumber.size() <= 50)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+        data.isFavorite is bool &&
+        data.isEmergency is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+    match /admins/{adminId} {
+      allow get: if isOwner(adminId) && isValidId(adminId);
+      allow list, create, update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+      allow create: if isOwner(userId) && isValidId(userId) && isValidWorkerProfile(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidWorkerProfile(incoming()) && isOwner(userId) && isValidId(userId) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'fullName', 'photoUrl', 'phone', 'address', 'emergencyContact',
+            'factoryName', 'factoryBranch', 'department', 'designation', 'employeeId',
+            'employmentType', 'joiningDate', 'salaryGrade', 'basicSalary',
+            'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
+            'foodAllowance', 'attendanceBonus', 'grossSalary', 'otWageBase',
+            'otDivisor', 'otMultiplier', 'otCalculationMode', 'otCustomHourlyRate',
+            'effectiveFrom', 'language', 'privacyConsent',
+            'updatedAt'
+          ])
+        );
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // Subcollection: Overtime
+      match /overtime/{overtimeId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(overtimeId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(overtimeId) &&
+          isValidOvertimeRecord(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidOvertimeRecord(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(overtimeId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'date', 'month', 'startTime', 'endTime', 'breakMinutes',
+            'totalMinutes', 'approvedHours', 'basicSalarySnapshot', 'divisorSnapshot',
+            'multiplierSnapshot', 'hourlyRateSnapshot', 'estimatedEarnings', 'notes', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(overtimeId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Salary Records
+      match /salaryRecords/{salaryId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(salaryId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(salaryId) &&
+          isValidSalaryRecord(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidSalaryRecord(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(salaryId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'month', 'effectiveDate', 'basicSalary', 'houseRentAllowance',
+            'medicalAllowance', 'transportAllowance', 'foodAllowance', 'attendanceBonus',
+            'overtimeHours', 'overtimeEarnings', 'festivalBonus', 'otherAllowances',
+            'advanceDeduction', 'absenceDeduction', 'otherDeductions', 'adjustments',
+            'estimatedGross', 'estimatedNetPayable', 'notes', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(salaryId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Salary Payments
+      match /payments/{paymentId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(paymentId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(paymentId) &&
+          isValidSalaryPayment(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidSalaryPayment(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(paymentId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'month', 'paymentDate', 'amountReceived', 'paymentMethod',
+            'isPartial', 'referenceNote', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(paymentId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Attendance
+      match /attendance/{attendanceId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(attendanceId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(attendanceId) &&
+          isValidAttendanceRecord(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidAttendanceRecord(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(attendanceId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'date', 'month', 'status', 'leaveCategory', 'checkIn', 'checkOut', 'notes', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(attendanceId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Expenses
+      match /expenses/{expenseId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(expenseId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(expenseId) &&
+          isValidExpenseRecord(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidExpenseRecord(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(expenseId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'date', 'month', 'category', 'amount', 'description', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(expenseId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Savings Goals
+      match /savings/{savingId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(savingId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(savingId) &&
+          isValidSavingsGoal(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidSavingsGoal(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(savingId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'targetAmount', 'savedAmount', 'monthlyBudget', 'deadline', 'notes', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(savingId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Document Vault
+      match /documents/{docId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(docId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(docId) &&
+          isValidVaultDocument(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidVaultDocument(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(docId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'category', 'fileName', 'fileType', 'fileSize', 'fileData', 'issueDate', 'notes', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(docId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Reminders
+      match /reminders/{reminderId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(reminderId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(reminderId) &&
+          isValidReminderItem(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidReminderItem(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(reminderId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'category', 'dueDate', 'isCompleted', 'notes', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(reminderId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Personal Loans & Installments
+      match /loans/{loanId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(loanId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(loanId) &&
+          isValidPersonalLoan(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidPersonalLoan(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(loanId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'lenderType', 'totalLoanAmount', 'paidAmount', 'monthlyInstallment', 'nextDueDate', 'notes',
+            'personName', 'contactNumber', 'direction', 'originalAmount', 'transactionDate', 'expectedRepaymentDate',
+            'reason', 'repaymentArrangement', 'status', 'repayments', 'isArchived', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(loanId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Workplace History
+      match /workplaces/{workplaceId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(workplaceId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(workplaceId) &&
+          isValidGarmentWorkplace(incoming()) &&
+          incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidGarmentWorkplace(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(workplaceId) &&
+          incoming().userId == existing().userId &&
+          incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(workplaceId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Personal Contact Book
+      match /contacts/{contactId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(contactId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(contactId) &&
+          isValidWorkerContact(incoming()) &&
+          incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidWorkerContact(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(contactId) &&
+          incoming().userId == existing().userId &&
+          incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(contactId) && hasParentProfile(userId);
+      }
+    }
+
+    // Support & Feedback Collection
+    match /feedback/{feedbackId} {
+      allow get: if isValidId(feedbackId) && (isOwner(existing().userId) || isAdmin());
+      allow list: if (isVerified() && existing().userId == request.auth.uid) || isAdmin();
+      allow create: if isValidId(feedbackId) && isOwner(incoming().userId) &&
+        isValidSupportFeedback(incoming()) &&
+        incoming().status == 'open' &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidSupportFeedback(incoming()) && isValidId(feedbackId) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (
+            isOwner(existing().userId) &&
+            existing().status != 'resolved' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['message', 'category', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(feedbackId) && (isOwner(existing().userId) || isAdmin());
+    }
+
+    // Non-Financial User Directory for Admin Account Status Management
+    match /userDirectory/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && (isOwner(userId) || isAdmin()) &&
+        incoming().keys().hasAll(['uid', 'displayName', 'accountStatus', 'updatedAt']) &&
+        incoming().keys().hasOnly(['uid', 'displayName', 'accountStatus', 'suspensionReason', 'updatedAt']) &&
+        incoming().uid is string && incoming().uid.size() <= 128 &&
+        incoming().displayName is string && incoming().displayName.size() >= 1 && incoming().displayName.size() <= 120 &&
+        incoming().accountStatus in ['active', 'suspended'] &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(userId) &&
+        incoming().uid == existing().uid &&
+        incoming().accountStatus in ['active', 'suspended'] &&
+        (!('suspensionReason' in incoming()) || (incoming().suspensionReason is string && incoming().suspensionReason.size() <= 300)) &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['accountStatus', 'suspensionReason', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Platform Announcements
+    match /announcements/{announcementId} {
+      allow get: if isValidId(announcementId) && (isSignedIn() || isAdmin());
+      allow list: if (isSignedIn() && existing().status == 'published') || isAdmin();
+      allow create, update: if isAdmin() && isValidId(announcementId) &&
+        incoming().keys().hasAll(['titleBn', 'messageBn', 'category', 'status', 'updatedAt']) &&
+        incoming().titleBn is string && incoming().titleBn.size() >= 1 && incoming().titleBn.size() <= 200 &&
+        incoming().messageBn is string && incoming().messageBn.size() >= 1 && incoming().messageBn.size() <= 1500 &&
+        incoming().category in ['general', 'maintenance', 'new_feature', 'security', 'important_update'] &&
+        incoming().status in ['draft', 'published', 'archived'] &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Immutable Administrative Audit Logs (Append-Only)
+    match /auditLogs/{logId} {
+      allow get: if isAdmin() && isValidId(logId);
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidId(logId) &&
+        incoming().keys().hasAll(['actorUid', 'actionType', 'targetId', 'reason', 'createdAt']) &&
+        incoming().keys().hasOnly(['actorUid', 'actionType', 'targetId', 'reason', 'createdAt']) &&
+        incoming().actorUid == request.auth.uid &&
+        incoming().actorUid is string && incoming().actorUid.size() <= 128 &&
+        incoming().actionType is string && incoming().actionType.size() >= 1 && incoming().actionType.size() <= 60 &&
+        incoming().targetId is string && incoming().targetId.size() >= 1 && incoming().targetId.size() <= 128 &&
+        incoming().reason is string && incoming().reason.size() >= 1 && incoming().reason.size() <= 400 &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Publicly Readable, Super Admin Writable Demo System Configuration
+    match /demoConfig/{configId} {
+      allow get: if isValidId(configId);
+      allow list: if false;
+      allow create, update: if isAdmin() && isValidId(configId) &&
+        incoming().keys().hasAll(['enabled', 'demoEmail', 'maintenanceMessageBn', 'updatedAt']) &&
+        incoming().keys().hasOnly(['enabled', 'demoEmail', 'maintenanceMessageBn', 'maintenanceMessageEn', 'lastResetAt', 'updatedAt']) &&
+        incoming().enabled is bool &&
+        incoming().demoEmail is string && incoming().demoEmail.size() >= 3 && incoming().demoEmail.size() <= 120 &&
+        incoming().maintenanceMessageBn is string && incoming().maintenanceMessageBn.size() >= 1 && incoming().maintenanceMessageBn.size() <= 400 &&
+        (!('maintenanceMessageEn' in incoming()) || (incoming().maintenanceMessageEn is string && incoming().maintenanceMessageEn.size() <= 400)) &&
+        (!('lastResetAt' in incoming()) || (incoming().lastResetAt is string && incoming().lastResetAt.size() <= 40)) &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Subscription & Plan Configuration (Publicly readable, Admin manageable)
+    match /subscriptionConfig/{configId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin() && isValidId(configId);
+    }
+
+    // User Subscriptions (Owner or Admin access)
+    match /userSubscriptions/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create, update: if (isOwner(userId) || isAdmin()) && isValidId(userId);
+      allow delete: if isAdmin();
+    }
+  }
+}
+

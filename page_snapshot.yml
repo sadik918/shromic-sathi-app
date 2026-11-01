@@ -1,0 +1,39 @@
+- generic [ref=e7]:
+  - banner [ref=e8]:
+    - link "শ্রমিক সাথী" [ref=e9] [cursor=pointer]:
+      - /url: "#top"
+      - img "শ্রমিক সাথী লোগো" [ref=e11]
+      - img "শ্রমিক সাথী" [ref=e12]
+    - generic [ref=e13]:
+      - button "Switch Language" [ref=e14] [cursor=pointer]:
+        - generic [ref=e18]: English
+      - button "Toggle Dark Mode" [ref=e19] [cursor=pointer]
+  - main [ref=e22]:
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - img "শ্রমিক সাথী লোগো" [ref=e26]
+        - img "শ্রমিক সাথী" [ref=e27]
+        - heading "লগইন করুন" [level=1] [ref=e28]
+      - button "Continue with Google" [ref=e29] [cursor=pointer]
+      - generic [ref=e36]: অথবা গুগল ছাড়া লগইন
+      - generic [ref=e40]:
+        - generic [ref=e41]:
+          - generic [ref=e42]: ইমেইল, মোবাইল নম্বর বা ইউজারনেম
+          - textbox "ইমেইল, মোবাইল নম্বর বা ইউজারনেম" [ref=e44]:
+            - /placeholder: "যেমন: rahim01 বা 017XXXXXXXX"
+        - generic [ref=e45]:
+          - generic [ref=e46]: পাসওয়ার্ড
+          - generic [ref=e47]:
+            - textbox "পাসওয়ার্ড" [ref=e48]:
+              - /placeholder: পাসওয়ার্ড লিখুন
+            - button "Show password" [ref=e49] [cursor=pointer]
+        - button "লগইন করুন" [ref=e53] [cursor=pointer]
+      - generic [ref=e58]:
+        - button "ডেমো দেখুন (Try Demo)" [ref=e59] [cursor=pointer]
+        - generic [ref=e64]:
+          - generic [ref=e65]: Sample Data — ডেমো তথ্য
+          - generic [ref=e70]: demo@therate.gmail.com
+      - paragraph [ref=e72]:
+        - text: কোনো অ্যাকাউন্ট নেই?
+        - button "সাইন আপ করুন" [ref=e73] [cursor=pointer]
+  - contentinfo [ref=e74]: শ্রমিক সাথী · আপনার ব্যক্তিগত বেতন ও ওভারটাইম সহকারী

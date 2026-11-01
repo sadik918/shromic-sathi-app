@@ -1,0 +1,489 @@
+- generic [ref=e75]:
+  - banner [ref=e76]:
+    - generic [ref=e77]:
+      - generic [ref=e78]:
+        - link "শ্রমিক সাথী" [ref=e79] [cursor=pointer]:
+          - /url: "#dashboard"
+          - img "শ্রমিক সাথী লোগো" [ref=e81]
+          - img "শ্রমিক সাথী" [ref=e83]
+        - generic "সংরক্ষিত" [ref=e84]
+      - navigation "Primary Navigation" [ref=e88]:
+        - button "হোম" [ref=e89]
+        - button "ওভারটাইম" [ref=e90]
+        - button "বেতন" [ref=e91]
+        - button "হাজিরা" [ref=e92]
+        - button "হিসাব" [ref=e93]
+        - button "আরও" [ref=e94]
+      - generic [ref=e95]:
+        - generic [ref=e96]:
+          - generic [ref=e99]: মাস নির্বাচন করুন
+          - combobox "মাস নির্বাচন করুন" [ref=e100] [cursor=pointer]:
+            - option "ডিসেম্বর"
+            - option "নভেম্বর"
+            - option "অক্টোবর" [selected]
+            - option "সেপ্টেম্বর"
+            - option "আগস্ট"
+            - option "জুলাই"
+            - option "জুন"
+            - option "মে"
+            - option "এপ্রিল"
+            - option "মার্চ"
+            - option "ফেব্রুয়ারি"
+            - option "জানুয়ারি"
+        - button "Switch to English" [ref=e101]
+        - button "ডার্ক মোড চালু করুন" [ref=e105]
+  - region "Read-Only Demo Mode" [ref=e108]:
+    - generic [ref=e109]:
+      - generic [ref=e110]:
+        - generic [ref=e111]: Sample Data — ডেমো তথ্য
+        - generic [ref=e116]: ডেমো মোড চালু আছে — আপনি তথ্য দেখতে পারবেন, কিন্তু পরিবর্তন করতে পারবেন না।
+      - generic [ref=e117]:
+        - button "নিজের অ্যাকাউন্ট খুলুন" [ref=e118] [cursor=pointer]
+        - button "ডেমো বন্ধ করুন" [ref=e123] [cursor=pointer]
+  - main [ref=e128]:
+    - generic [ref=e129]:
+      - generic [ref=e130]:
+        - generic [ref=e131]:
+          - generic [ref=e132]:
+            - button "প্রোফাইল ছবি পরিবর্তন বা প্রোফাইল দেখুন" [ref=e134] [cursor=pointer]:
+              - generic [ref=e135]: ম
+            - generic [ref=e140]:
+              - heading "স্বাগতম, মোসাঃ নাসরিন আক্তার" [level=1] [ref=e141]
+              - paragraph [ref=e142]: "আজকের তারিখ: ২৮/১০/২০২৬ · চলতি মাসের সংক্ষিপ্ত হিসাব"
+          - generic [ref=e143]:
+            - generic [ref=e144]:
+              - paragraph [ref=e145]: রানিং মাস
+              - paragraph [ref=e146]: অক্টোবর ২০২৬
+            - generic [ref=e147]:
+              - paragraph [ref=e148]: মোট ওভারটাইম
+              - paragraph [ref=e149]: ১৫.৪ ঘণ্টা
+            - generic [ref=e150]:
+              - paragraph [ref=e151]: মোট উপস্থিত
+              - paragraph [ref=e152]: ১৮ দিন
+        - generic [ref=e153]:
+          - button "কণ্ঠস্বর এন্ট্রি" [ref=e154]
+          - button "ওভারটাইম যোগ করুন" [ref=e159]
+      - generic [ref=e162]:
+        - generic [ref=e168]:
+          - generic [ref=e169]:
+            - heading "আজকের হিসাব (২৮ অক্টোবর, ২০২৬)" [level=3] [ref=e170]
+            - generic [ref=e171]: হাজিরা দেওয়া হয়নি
+          - paragraph [ref=e172]: "ওভারটাইম: ০ ঘণ্টা (ওভারটাইম করা হয়নি)"
+        - button "এডিট করুন" [ref=e173] [cursor=pointer]
+      - generic [ref=e177]:
+        - generic [ref=e178]:
+          - heading "আজকের দ্রুত হিসাব" [level=2] [ref=e180]
+          - generic [ref=e181]:
+            - generic [ref=e182]: "তারিখ:"
+            - generic [ref=e183] [cursor=pointer]:
+              - generic [ref=e184]: ২৮/১০/২০২৬
+              - textbox "তারিখ:" [ref=e185]: 2026-10-28
+        - generic [ref=e186]:
+          - generic [ref=e187]:
+            - generic [ref=e188]:
+              - generic [ref=e189]: ১. আজকের হাজিরা দিন (২৮/১০/২০২৬)
+              - generic [ref=e190]: এখনো দেওয়া হয়নি
+            - generic [ref=e191]:
+              - button "উপস্থিত" [ref=e192] [cursor=pointer]
+              - button "দেরি" [ref=e193] [cursor=pointer]
+              - button "ছুটি" [ref=e194] [cursor=pointer]
+              - button "শুক্রবার ছুটি" [ref=e195] [cursor=pointer]
+              - button "সরকারি ছুটি" [ref=e196] [cursor=pointer]
+              - button "অনুপস্থিত" [ref=e197] [cursor=pointer]
+          - generic [ref=e198]:
+            - generic [ref=e199]:
+              - generic [ref=e200]: ২. আউট টাইম ও ওভারটাইম যোগ করুন
+              - generic [ref=e201]: "মোট: ০ ঘঃ (৳ ০)"
+            - generic [ref=e202]:
+              - button "৫টা (০ ঘঃ)" [ref=e203] [cursor=pointer]
+              - button "+১ ঘঃ (৬টা)" [ref=e204] [cursor=pointer]
+              - button "+২ ঘঃ (৭টা)" [ref=e205] [cursor=pointer]
+              - button "+৩ ঘঃ (৮টা)" [ref=e206] [cursor=pointer]
+              - button "+৪ ঘঃ (৯টা)" [ref=e207] [cursor=pointer]
+      - region "মাসিক সারসংক্ষেপ" [ref=e208]:
+        - generic [ref=e209]:
+          - generic [ref=e210]:
+            - generic [ref=e211]:
+              - generic [ref=e212]: সম্ভাব্য মোট বেতন (এই মাস)
+              - paragraph [ref=e217]: ৳ ১৩,৫৯৪
+              - paragraph [ref=e218]: মোট বেতন + ওটি + বোনাস
+            - button "পে-স্লিপ দেখুন" [ref=e219]
+          - generic [ref=e223]:
+            - generic [ref=e224]:
+              - generic [ref=e225]: প্রাপ্ত বেতন (আসল জমা)
+              - paragraph [ref=e230]: ৳ ৯,৫০০
+              - paragraph [ref=e231]: ১টি পেমেন্ট এন্ট্রি
+            - button "প্রাপ্ত টাকা লিখুন" [ref=e232]
+          - generic [ref=e236]:
+            - generic [ref=e237]:
+              - generic [ref=e238]: ওভারটাইম ঘণ্টা ও আয়
+              - generic [ref=e243]:
+                - paragraph [ref=e244]: ১৫.৪ ঘঃ
+                - generic [ref=e245]: (৳ ৯৯৪)
+              - paragraph [ref=e246]: "বার্ষিক: ১৫.৪ ঘঃ (৳ ৯৯৪)"
+            - button "ওভারটাইম খাতা" [ref=e247]
+          - generic [ref=e251]:
+            - generic [ref=e252]:
+              - generic [ref=e253]: বকেয়া বেতন স্থিতি
+              - paragraph [ref=e257]: ৳ ৪,০৯৪
+              - paragraph [ref=e258]: প্রাপ্য বেতন হতে বকেয়া
+            - button "বকেয়া হিসাব" [ref=e259]
+          - generic [ref=e263]:
+            - generic [ref=e264]:
+              - generic [ref=e265]: উপস্থিতি ও কর্মদিবস
+              - paragraph [ref=e270]: ১৮ দিন
+              - paragraph [ref=e271]: "ছুটি: ১ · অনু: ২"
+            - button "হাজিরা ক্যালেন্ডার" [ref=e272]
+          - generic [ref=e276]:
+            - generic [ref=e277]:
+              - generic [ref=e278]: ব্যক্তিগত ব্যয় ও সঞ্চয়
+              - generic [ref=e283]:
+                - paragraph [ref=e284]: ৳ ৭,৮০০
+                - generic [ref=e285]: খরচ
+              - paragraph [ref=e286]: "সঞ্চয়: ৳ ১১,৫০০ · ঋণ: ৳ ১৪,৫০০"
+            - button "খরচ ও ঋণ খাতা" [ref=e287]
+      - generic [ref=e291]:
+        - heading "মিসিং রেকর্ড 15" [level=2] [ref=e298]:
+          - generic [ref=e299]: মিসিং রেকর্ড
+          - generic [ref=e300]: "15"
+        - generic [ref=e301]:
+          - generic [ref=e302]:
+            - generic [ref=e303]:
+              - generic [ref=e304]:
+                - generic [ref=e308]: ১ অক্টোবর, ২০২৬
+                - generic [ref=e309]: ওভারটাইম
+              - button "ভিতরে যান" [ref=e311]
+            - generic [ref=e317]:
+              - generic [ref=e318]:
+                - generic [ref=e319]: "হাজিরা:"
+                - combobox "হাজিরা:" [ref=e320]:
+                  - option "উপস্থিত" [selected]
+                  - option "অনুপস্থিত"
+                  - option "অনুমোদিত ছুটি"
+                  - option "সাপ্তাহিক ছুটি"
+                  - option "সরকারি ছুটি"
+              - generic [ref=e321]:
+                - generic [ref=e322]: "ওটি:"
+                - button "০ঘঃ" [ref=e323]
+                - button "1ঘঃ" [ref=e324]
+                - button "2ঘঃ" [ref=e325]
+                - button "3ঘঃ" [ref=e326]
+                - button "4ঘঃ" [ref=e327]
+              - button "সংরক্ষণ" [ref=e329]
+          - generic [ref=e333]:
+            - generic [ref=e334]:
+              - generic [ref=e335]:
+                - generic [ref=e339]: ৩ অক্টোবর, ২০২৬
+                - generic [ref=e340]: ওভারটাইম
+              - button "ভিতরে যান" [ref=e342]
+            - generic [ref=e348]:
+              - generic [ref=e349]:
+                - generic [ref=e350]: "হাজিরা:"
+                - combobox "হাজিরা:" [ref=e351]:
+                  - option "উপস্থিত" [selected]
+                  - option "অনুপস্থিত"
+                  - option "অনুমোদিত ছুটি"
+                  - option "সাপ্তাহিক ছুটি"
+                  - option "সরকারি ছুটি"
+              - generic [ref=e352]:
+                - generic [ref=e353]: "ওটি:"
+                - button "০ঘঃ" [ref=e354]
+                - button "1ঘঃ" [ref=e355]
+                - button "2ঘঃ" [ref=e356]
+                - button "3ঘঃ" [ref=e357]
+                - button "4ঘঃ" [ref=e358]
+              - button "সংরক্ষণ" [ref=e360]
+          - generic [ref=e364]:
+            - generic [ref=e365]:
+              - generic [ref=e366]:
+                - generic [ref=e370]: ৪ অক্টোবর, ২০২৬
+                - generic [ref=e371]: ওভারটাইম
+              - button "ভিতরে যান" [ref=e373]
+            - generic [ref=e379]:
+              - generic [ref=e380]:
+                - generic [ref=e381]: "হাজিরা:"
+                - combobox "হাজিরা:" [ref=e382]:
+                  - option "উপস্থিত" [selected]
+                  - option "অনুপস্থিত"
+                  - option "অনুমোদিত ছুটি"
+                  - option "সাপ্তাহিক ছুটি"
+                  - option "সরকারি ছুটি"
+              - generic [ref=e383]:
+                - generic [ref=e384]: "ওটি:"
+                - button "০ঘঃ" [ref=e385]
+                - button "1ঘঃ" [ref=e386]
+                - button "2ঘঃ" [ref=e387]
+                - button "3ঘঃ" [ref=e388]
+                - button "4ঘঃ" [ref=e389]
+              - button "সংরক্ষণ" [ref=e391]
+        - button "সি মোর (আরও 12টি তারিখ দেখুন)" [ref=e396]
+      - generic [ref=e400]:
+        - heading "আমার গার্মেন্টস ও কন্ট্যাক্ট বুক" [level=3] [ref=e408]
+        - button "কন্ট্যাক্ট বুক খুলুন" [ref=e409]
+      - generic [ref=e415]:
+        - generic [ref=e416]:
+          - generic [ref=e417]:
+            - heading "স্মার্ট বেতন তুলনা ও আর্থিক বিশ্লেষণ" [level=2] [ref=e418]
+            - paragraph [ref=e423]: অক্টোবর ২০২৬ বনাম সেপ্টেম্বর ২০২৬
+          - button "সেপ্টেম্বর ২০২৬ দেখুন" [ref=e425]
+        - generic [ref=e426]:
+          - generic [ref=e427]:
+            - paragraph [ref=e428]: গত মাসের তুলনায় বেতন পার্থক্য
+            - paragraph [ref=e429]: "-৳ ২,২১২ (-১৪%)"
+            - paragraph [ref=e430]: "গত মাস: ৳ ১৫,৮০৬"
+          - generic [ref=e431]:
+            - paragraph [ref=e432]: ওভারটাইম ঘণ্টার তুলনা
+            - paragraph [ref=e433]: "-২৬.৬ ঘণ্টা"
+            - paragraph [ref=e434]: "আয়ের পার্থক্য: -৳ ১,৭১২"
+          - generic [ref=e435]:
+            - paragraph [ref=e436]: হাজিরা বোনাস যোগ্যতা
+            - paragraph [ref=e437]: ঝুঁকিতে (অনুপস্থিতি/দেরি)
+            - paragraph [ref=e438]: "অনুপস্থিত: ২ দিন · দেরি: ১ দিন"
+          - generic [ref=e439]:
+            - paragraph [ref=e440]: মাসিক বাজেট ও কিস্তি স্থিতি
+            - paragraph [ref=e441]: "বাজেট ব্যবহার: ৮২%"
+            - paragraph [ref=e442]: "মাসিক ঋণের কিস্তি: ৳ ১০,০০০"
+      - generic [ref=e443]:
+        - generic [ref=e444]:
+          - generic [ref=e445]:
+            - heading "তারিখ" [level=2] [ref=e446]
+            - generic [ref=e451]: অক্টোবর ২০২৬
+          - button "হাজিরার পাতায় যান" [ref=e452] [cursor=pointer]
+        - generic [ref=e456]:
+          - generic [ref=e457]:
+            - generic [ref=e458]: শনি
+            - generic [ref=e459]: রবি
+            - generic [ref=e460]: সোম
+            - generic [ref=e461]: মঙ্গল
+            - generic [ref=e462]: বুধ
+            - generic [ref=e463]: বৃহস্পতি
+            - generic [ref=e464]: শুক্র
+          - generic [ref=e465]:
+            - button "১ উপ" [ref=e471] [cursor=pointer]:
+              - generic [ref=e472]: ১
+              - generic [ref=e473]: উপ
+            - button "২ শুক্র" [ref=e474] [cursor=pointer]:
+              - generic [ref=e475]: ২
+              - generic [ref=e476]: শুক্র
+            - button "৩ উপ" [ref=e477] [cursor=pointer]:
+              - generic [ref=e478]: ৩
+              - generic [ref=e479]: উপ
+            - button "৪ উপ" [ref=e480] [cursor=pointer]:
+              - generic [ref=e481]: ৪
+              - generic [ref=e482]: উপ
+            - button "৫ উপ" [ref=e483] [cursor=pointer]:
+              - generic [ref=e484]: ৫
+              - generic [ref=e485]: উপ
+            - button "৬ ছুটি" [ref=e486] [cursor=pointer]:
+              - generic [ref=e487]: ৬
+              - generic [ref=e488]: ছুটি
+            - button "৭ উপ" [ref=e489] [cursor=pointer]:
+              - generic [ref=e490]: ৭
+              - generic [ref=e491]: উপ
+            - button "৮ উপ" [ref=e492] [cursor=pointer]:
+              - generic [ref=e493]: ৮
+              - generic [ref=e494]: উপ
+            - button "৯ শুক্র" [ref=e495] [cursor=pointer]:
+              - generic [ref=e496]: ৯
+              - generic [ref=e497]: শুক্র
+            - button "১০ উপ" [ref=e498] [cursor=pointer]:
+              - generic [ref=e499]: ১০
+              - generic [ref=e500]: উপ
+            - button "১১ উপ" [ref=e501] [cursor=pointer]:
+              - generic [ref=e502]: ১১
+              - generic [ref=e503]: উপ
+            - button "১২ অনু" [ref=e504] [cursor=pointer]:
+              - generic [ref=e505]: ১২
+              - generic [ref=e506]: অনু
+            - button "১৩ উপ" [ref=e507] [cursor=pointer]:
+              - generic [ref=e508]: ১৩
+              - generic [ref=e509]: উপ
+            - button "১৪ দেরি" [ref=e510] [cursor=pointer]:
+              - generic [ref=e511]: ১৪
+              - generic [ref=e512]: দেরি
+            - button "১৫ উপ" [ref=e513] [cursor=pointer]:
+              - generic [ref=e514]: ১৫
+              - generic [ref=e515]: উপ
+            - button "১৬ শুক্র" [ref=e516] [cursor=pointer]:
+              - generic [ref=e517]: ১৬
+              - generic [ref=e518]: শুক্র
+            - button "১৭ উপ" [ref=e519] [cursor=pointer]:
+              - generic [ref=e520]: ১৭
+              - generic [ref=e521]: উপ
+            - button "১৮ অনু" [ref=e522] [cursor=pointer]:
+              - generic [ref=e523]: ১৮
+              - generic [ref=e524]: অনু
+            - button "১৯ উপ" [ref=e525] [cursor=pointer]:
+              - generic [ref=e526]: ১৯
+              - generic [ref=e527]: উপ
+            - button "২০ উপ +২ঘঃ" [ref=e528] [cursor=pointer]:
+              - generic [ref=e529]: ২০
+              - generic [ref=e530]: উপ
+              - generic [ref=e531]: +২ঘঃ
+            - button "২১ সরকারি +৩ঘঃ" [ref=e532] [cursor=pointer]:
+              - generic [ref=e533]: ২১
+              - generic [ref=e534]: সরকারি
+              - generic [ref=e535]: +৩ঘঃ
+            - button "২২ উপ +২ঘঃ" [ref=e536] [cursor=pointer]:
+              - generic [ref=e537]: ২২
+              - generic [ref=e538]: উপ
+              - generic [ref=e539]: +২ঘঃ
+            - button "২৩ শুক্র" [ref=e540] [cursor=pointer]:
+              - generic [ref=e541]: ২৩
+              - generic [ref=e542]: শুক্র
+            - button "২৪ উপ +৩ঘঃ" [ref=e543] [cursor=pointer]:
+              - generic [ref=e544]: ২৪
+              - generic [ref=e545]: উপ
+              - generic [ref=e546]: +৩ঘঃ
+            - button "২৫ উপ +২ঘঃ" [ref=e547] [cursor=pointer]:
+              - generic [ref=e548]: ২৫
+              - generic [ref=e549]: উপ
+              - generic [ref=e550]: +২ঘঃ
+            - button "২৬ উপ +৩.৪ঘঃ" [ref=e551] [cursor=pointer]:
+              - generic [ref=e552]: ২৬
+              - generic [ref=e553]: উপ
+              - generic [ref=e554]: +৩.৪ঘঃ
+            - button "২৭" [ref=e555] [cursor=pointer]
+            - button "আজ ২৮" [ref=e557] [cursor=pointer]:
+              - generic [ref=e558]: আজ
+              - generic [ref=e559]: ২৮
+            - button "২৯ আসন্ন" [ref=e560] [cursor=pointer]:
+              - generic [ref=e561]: ২৯
+              - generic [ref=e562]: আসন্ন
+            - button "৩০ সরকারি" [ref=e563] [cursor=pointer]:
+              - generic [ref=e564]: ৩০
+              - generic [ref=e565]: সরকারি
+            - button "৩১ আসন্ন" [ref=e566] [cursor=pointer]:
+              - generic [ref=e567]: ৩১
+              - generic [ref=e568]: আসন্ন
+        - generic [ref=e569]:
+          - generic [ref=e570]:
+            - generic [ref=e571]:
+              - paragraph [ref=e572]: নির্বাচিত তারিখের বিস্তারিত
+              - heading "২৮ অক্টোবর, ২০২৬" [level=4] [ref=e573]
+            - button "হাজিরা পাতায় দেখুন →" [ref=e575]:
+              - generic [ref=e576]: হাজিরা পাতায় দেখুন
+              - generic [ref=e577]: →
+          - generic [ref=e578]:
+            - generic [ref=e580]:
+              - generic [ref=e581]: হাজিরা অবস্থা
+              - generic [ref=e582]: এখনো হাজিরা বসানো হয়নি
+            - generic [ref=e584]:
+              - generic [ref=e585]: ওভারটাইম ডিটেইলস
+              - generic [ref=e586]: ০ ঘণ্টা (কোনো ওভারটাইম নেই)
+        - generic [ref=e587]:
+          - generic [ref=e588]: উপস্থিত
+          - generic [ref=e591]: অনুপস্থিত (গাঢ় লাল)
+          - generic [ref=e594]: দেরি
+          - generic [ref=e597]: অনুমোদিত ছুটি
+          - generic [ref=e600]: সাপ্তাহিক ছুটি (শুক্র)
+          - generic [ref=e603]: আসন্ন সরকারি ছুটি
+          - generic [ref=e606]: পার হওয়া ছুটি
+        - generic [ref=e609]:
+          - generic [ref=e610]:
+            - heading "এই মাসের সরকারি ও উৎসব ছুটি" [level=3] [ref=e611]
+            - generic [ref=e615]:
+              - generic [ref=e616]: পার হয়েছে
+              - generic [ref=e618]: আসন্ন ছুটি
+          - generic [ref=e620]:
+            - button "২০/১০/২০২৬ পার হয়েছে শারদীয় দুর্গাপূজা (মহানবমী - সম্ভাব্য ছুটি) ছুটি সম্পন্ন · ১-ট্যাপে হাজিরায় যোগ করুন" [ref=e621] [cursor=pointer]:
+              - generic [ref=e625]:
+                - generic [ref=e626]:
+                  - paragraph [ref=e627]: ২০/১০/২০২৬
+                  - generic [ref=e628]: পার হয়েছে
+                - heading "শারদীয় দুর্গাপূজা (মহানবমী - সম্ভাব্য ছুটি)" [level=4] [ref=e629]
+                - generic [ref=e630]: ছুটি সম্পন্ন · ১-ট্যাপে হাজিরায় যোগ করুন
+            - button "২১/১০/২০২৬ পার হয়েছে শারদীয় দুর্গাপূজা (বিজয়া দশমী - সরকারি ছুটি) ছুটি সম্পন্ন · ১-ট্যাপে হাজিরায় যোগ করুন" [ref=e631] [cursor=pointer]:
+              - generic [ref=e635]:
+                - generic [ref=e636]:
+                  - paragraph [ref=e637]: ২১/১০/২০২৬
+                  - generic [ref=e638]: পার হয়েছে
+                - heading "শারদীয় দুর্গাপূজা (বিজয়া দশমী - সরকারি ছুটি)" [level=4] [ref=e639]
+                - generic [ref=e640]: ছুটি সম্পন্ন · ১-ট্যাপে হাজিরায় যোগ করুন
+            - button "৩০/১০/২০২৬ আসন্ন ছুটি কোজাগরী লক্ষ্মীপূজা ও সমাপনী উৎসব ছুটি (সম্ভাব্য) আসন্ন ছুটি · বিস্তারিত দেখতে ট্যাপ করুন" [ref=e641] [cursor=pointer]:
+              - generic [ref=e645]:
+                - generic [ref=e646]:
+                  - paragraph [ref=e647]: ৩০/১০/২০২৬
+                  - generic [ref=e648]: আসন্ন ছুটি
+                - heading "কোজাগরী লক্ষ্মীপূজা ও সমাপনী উৎসব ছুটি (সম্ভাব্য)" [level=4] [ref=e649]
+                - generic [ref=e650]: আসন্ন ছুটি · বিস্তারিত দেখতে ট্যাপ করুন
+      - generic [ref=e651]:
+        - generic [ref=e652]:
+          - generic [ref=e653]:
+            - heading "সাম্প্রতিক হিসাব ও লেনদেন" [level=2] [ref=e654]
+            - button "সব রিপোর্ট দেখুন" [ref=e655]
+          - generic [ref=e656]:
+            - generic [ref=e657]:
+              - generic [ref=e663]:
+                - paragraph [ref=e664]: "ওভারটাইম: ৩.৪ ঘণ্টা"
+                - paragraph [ref=e665]: ২৬ অক্টোবর, ২০২৬ · জরুরি ওভারটাইম (৩ ঘণ্টা ২৬ মিনিট)
+              - generic [ref=e666]:
+                - generic [ref=e667]: + ৳ ২২১
+                - button "মুছে ফেলুন" [ref=e668]
+            - generic [ref=e672]:
+              - generic [ref=e678]:
+                - paragraph [ref=e679]: "ওভারটাইম: ২ ঘণ্টা"
+                - paragraph [ref=e680]: ২৫ অক্টোবর, ২০২৬ · নিয়মিত ২ ঘণ্টা ওভারটাইম
+              - generic [ref=e681]:
+                - generic [ref=e682]: + ৳ ১২৯
+                - button "মুছে ফেলুন" [ref=e683]
+            - generic [ref=e687]:
+              - generic [ref=e693]:
+                - paragraph [ref=e694]: "ওভারটাইম: ৩ ঘণ্টা"
+                - paragraph [ref=e695]: ২৪ অক্টোবর, ২০২৬ · জরুরি ফিনিশিং সাপোর্ট
+              - generic [ref=e696]:
+                - generic [ref=e697]: + ৳ ১৯৩
+                - button "মুছে ফেলুন" [ref=e698]
+            - generic [ref=e702]:
+              - generic [ref=e708]:
+                - paragraph [ref=e709]: "ওভারটাইম: ২ ঘণ্টা"
+                - paragraph [ref=e710]: ২২ অক্টোবর, ২০২৬ · নিয়মিত ২ ঘণ্টা ওভারটাইম
+              - generic [ref=e711]:
+                - generic [ref=e712]: + ৳ ১২৯
+                - button "মুছে ফেলুন" [ref=e713]
+            - generic [ref=e717]:
+              - generic [ref=e723]:
+                - paragraph [ref=e724]: "ওভারটাইম: ৩ ঘণ্টা"
+                - paragraph [ref=e725]: ২১ অক্টোবর, ২০২৬ · সন্ধ্যার নাস্তা বিরতি ৩০ মিনিট বাদে ৩ ঘণ্টা
+              - generic [ref=e726]:
+                - generic [ref=e727]: + ৳ ১৯৩
+                - button "মুছে ফেলুন" [ref=e728]
+            - generic [ref=e732]:
+              - generic [ref=e738]:
+                - paragraph [ref=e739]: "ওভারটাইম: ২ ঘণ্টা"
+                - paragraph [ref=e740]: ২০ অক্টোবর, ২০২৬ · বায়ার শিপমেন্ট অর্ডার (Line B4)
+              - generic [ref=e741]:
+                - generic [ref=e742]: + ৳ ১২৯
+                - button "মুছে ফেলুন" [ref=e743]
+            - generic [ref=e747]:
+              - generic [ref=e753]:
+                - paragraph [ref=e754]: খরচ (পড়াশোনা)
+                - paragraph [ref=e755]: ২০ অক্টোবর, ২০২৬ · মেয়ের স্কুলের খাতা ও টিউশন ফি
+              - generic [ref=e756]: "- ৳ ৬০০"
+            - generic [ref=e758]:
+              - generic [ref=e764]:
+                - paragraph [ref=e765]: খরচ (পরিবার)
+                - paragraph [ref=e766]: ১৫ অক্টোবর, ২০২৬ · গ্রামে মায়ের ওষুধ ও খরচের জন্য বিকাশ প্রেরণ
+              - generic [ref=e767]: "- ৳ ১,৫০০"
+        - generic [ref=e770]:
+          - generic [ref=e771]:
+            - heading "আসন্ন রিমাইন্ডার ও করণীয়" [level=2] [ref=e772]
+            - button "সব রিমাইন্ডার" [ref=e773]
+          - generic [ref=e774]:
+            - 'textbox "নতুন রিমাইন্ডার লিখুন (যেমন: ১০ তারিখ বেতন)..." [ref=e775]'
+            - button "যোগ" [ref=e776]
+          - generic [ref=e777]:
+            - generic [ref=e778]:
+              - generic [ref=e779] [cursor=pointer]:
+                - checkbox "অক্টোবর মাসের বকেয়া বেতন ও ওটি মিলিয়ে নেওয়া ৭ নভেম্বর, ২০২৬" [ref=e780]
+                - generic [ref=e781]:
+                  - paragraph [ref=e782]: অক্টোবর মাসের বকেয়া বেতন ও ওটি মিলিয়ে নেওয়া
+                  - paragraph [ref=e783]: ৭ নভেম্বর, ২০২৬
+              - button "মুছে ফেলুন" [ref=e784]
+            - generic [ref=e788]:
+              - generic [ref=e789] [cursor=pointer]:
+                - checkbox "বাসা ভাড়া ও বিদ্যুৎ বিল পরিশোধ ১০ নভেম্বর, ২০২৬" [ref=e790]
+                - generic [ref=e791]:
+                  - paragraph [ref=e792]: বাসা ভাড়া ও বিদ্যুৎ বিল পরিশোধ
+                  - paragraph [ref=e793]: ১০ নভেম্বর, ২০২৬
+              - button "মুছে ফেলুন" [ref=e794]

@@ -1,0 +1,81 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Hind Siliguri", "Noto Sans Bengali", "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Hind Siliguri", "Noto Sans Bengali", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Hind Siliguri", "Noto Sans Bengali", monospace;
+}
+
+@layer base {
+  :root {
+    --font-sans: "Hind Siliguri", "Noto Sans Bengali", "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-display: "Hind Siliguri", "Noto Sans Bengali", "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", "Hind Siliguri", "Noto Sans Bengali", monospace;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+    font-kerning: normal;
+    overflow-x: hidden;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    line-height: 1.65;
+    letter-spacing: 0em;
+    font-feature-settings: "kern" 1, "liga" 1, "clig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+    overflow-x: hidden;
+  }
+
+  /* Ensure all interactive controls, headings, tables, and form inputs use Hind Siliguri -> Noto Sans Bengali -> Inter */
+  h1, h2, h3, h4, h5, h6,
+  p, span, a, label, li,
+  button, input, select, option, optgroup, textarea,
+  table, th, td {
+    font-family: var(--font-sans);
+    letter-spacing: 0em;
+  }
+
+  /* Prevent clipping of Bengali matra, इ-কার, ঈ-কার, উ-কার, ঊ-কার, ঋ-কার, রেফ, ফলা, and যুক্তাক্ষর */
+  h1, h2, h3, h4, h5, h6 {
+    line-height: 1.42;
+  }
+
+  button, input, select, textarea {
+    line-height: 1.45;
+  }
+
+  /* Visible accessible focus ring for keyboard and touch navigation */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 2px;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}

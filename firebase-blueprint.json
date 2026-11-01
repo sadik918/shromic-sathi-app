@@ -1,0 +1,527 @@
+{
+  "entities": {
+    "WorkerProfile": {
+      "title": "WorkerProfile",
+      "description": "Garment worker profile, employment details, salary structure, and overtime calculation policy.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "photoUrl": { "type": "string", "maxLength": 2000 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "address": { "type": "string", "maxLength": 300 },
+        "emergencyContact": { "type": "string", "maxLength": 120 },
+        "factoryName": { "type": "string", "maxLength": 150 },
+        "factoryBranch": { "type": "string", "maxLength": 120 },
+        "department": { "type": "string", "maxLength": 100 },
+        "designation": { "type": "string", "maxLength": 100 },
+        "employeeId": { "type": "string", "maxLength": 60 },
+        "employmentType": { "type": "string", "enum": ["permanent", "probation", "contractual", "piece_rate", "helper"], "maxLength": 30 },
+        "joiningDate": { "type": "string", "maxLength": 20 },
+        "salaryGrade": { "type": "string", "maxLength": 40 },
+        "basicSalary": { "type": "number" },
+        "houseRentAllowance": { "type": "number" },
+        "medicalAllowance": { "type": "number" },
+        "transportAllowance": { "type": "number" },
+        "foodAllowance": { "type": "number" },
+        "attendanceBonus": { "type": "number" },
+        "grossSalary": { "type": "number" },
+        "otWageBase": { "type": "string", "enum": ["basic", "gross"], "maxLength": 20 },
+        "otDivisor": { "type": "number" },
+        "otMultiplier": { "type": "number" },
+        "otCalculationMode": { "type": "string", "enum": ["formula", "manual"], "maxLength": 20 },
+        "otCustomHourlyRate": { "type": "number" },
+        "effectiveFrom": { "type": "string", "maxLength": 20 },
+        "language": { "type": "string", "enum": ["bn", "en"], "maxLength": 10 },
+        "privacyConsent": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "fullName",
+        "factoryName",
+        "designation",
+        "basicSalary",
+        "grossSalary",
+        "otWageBase",
+        "otDivisor",
+        "otMultiplier",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "OvertimeRecord": {
+      "title": "OvertimeRecord",
+      "description": "Daily overtime entry with snapshot of hourly rate and multiplier at the time of entry.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "maxLength": 15, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "month": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}$" },
+        "startTime": { "type": "string", "maxLength": 10 },
+        "endTime": { "type": "string", "maxLength": 10 },
+        "breakMinutes": { "type": "number" },
+        "totalMinutes": { "type": "number" },
+        "approvedHours": { "type": "number" },
+        "basicSalarySnapshot": { "type": "number" },
+        "divisorSnapshot": { "type": "number" },
+        "multiplierSnapshot": { "type": "number" },
+        "hourlyRateSnapshot": { "type": "number" },
+        "estimatedEarnings": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "date",
+        "month",
+        "startTime",
+        "endTime",
+        "breakMinutes",
+        "totalMinutes",
+        "approvedHours",
+        "hourlyRateSnapshot",
+        "estimatedEarnings",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SalaryRecord": {
+      "title": "SalaryRecord",
+      "description": "Monthly salary statement and component breakdown.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "month": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}$" },
+        "effectiveDate": { "type": "string", "maxLength": 20 },
+        "basicSalary": { "type": "number" },
+        "houseRentAllowance": { "type": "number" },
+        "medicalAllowance": { "type": "number" },
+        "transportAllowance": { "type": "number" },
+        "foodAllowance": { "type": "number" },
+        "attendanceBonus": { "type": "number" },
+        "overtimeHours": { "type": "number" },
+        "overtimeEarnings": { "type": "number" },
+        "festivalBonus": { "type": "number" },
+        "otherAllowances": { "type": "number" },
+        "advanceDeduction": { "type": "number" },
+        "absenceDeduction": { "type": "number" },
+        "otherDeductions": { "type": "number" },
+        "adjustments": { "type": "number" },
+        "estimatedGross": { "type": "number" },
+        "estimatedNetPayable": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "month",
+        "basicSalary",
+        "estimatedGross",
+        "estimatedNetPayable",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SalaryPayment": {
+      "title": "SalaryPayment",
+      "description": "Actual salary or advance payment received from the factory.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "month": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}$" },
+        "paymentDate": { "type": "string", "maxLength": 15 },
+        "amountReceived": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["cash", "bkash", "nagad", "rocket", "bank"], "maxLength": 20 },
+        "isPartial": { "type": "boolean" },
+        "referenceNote": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "month",
+        "paymentDate",
+        "amountReceived",
+        "paymentMethod",
+        "isPartial",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily attendance status and leave category entry.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "maxLength": 15, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "month": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}$" },
+        "status": {
+          "type": "string",
+          "enum": ["present", "absent", "weekly_holiday", "public_holiday", "approved_leave", "late"],
+          "maxLength": 30
+        },
+        "leaveCategory": {
+          "type": "string",
+          "enum": ["none", "casual", "sick", "earned", "maternity", "festival", "unpaid"],
+          "maxLength": 30
+        },
+        "checkIn": { "type": "string", "maxLength": 10 },
+        "checkOut": { "type": "string", "maxLength": 10 },
+        "notes": { "type": "string", "maxLength": 300 },
+        "hasAttendanceBonus": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "date",
+        "month",
+        "status",
+        "leaveCategory",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ExpenseRecord": {
+      "title": "ExpenseRecord",
+      "description": "Personal daily expense entry kept separate from factory payroll.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "maxLength": 15, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "month": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}$" },
+        "category": {
+          "type": "string",
+          "enum": ["food", "rent", "transport", "family", "medical", "education", "other"],
+          "maxLength": 30
+        },
+        "amount": { "type": "number" },
+        "description": { "type": "string", "maxLength": 250 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "date",
+        "month",
+        "category",
+        "amount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SavingsGoal": {
+      "title": "SavingsGoal",
+      "description": "Personal savings goal and monthly budget plan.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "targetAmount": { "type": "number" },
+        "savedAmount": { "type": "number" },
+        "monthlyBudget": { "type": "number" },
+        "deadline": { "type": "string", "maxLength": 20 },
+        "notes": { "type": "string", "maxLength": 250 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "title",
+        "targetAmount",
+        "savedAmount",
+        "monthlyBudget",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultDocument": {
+      "title": "VaultDocument",
+      "description": "Private employment document or payslip stored in user vault.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "category": {
+          "type": "string",
+          "enum": ["id_card", "appointment_letter", "payslip", "increment_letter", "leave_approval", "other"],
+          "maxLength": 40
+        },
+        "fileName": { "type": "string", "maxLength": 150 },
+        "fileType": { "type": "string", "maxLength": 60 },
+        "fileSize": { "type": "number" },
+        "fileData": { "type": "string", "maxLength": 750000 },
+        "issueDate": { "type": "string", "maxLength": 20 },
+        "notes": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "title",
+        "category",
+        "fileName",
+        "fileType",
+        "fileSize",
+        "fileData",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ReminderItem": {
+      "title": "ReminderItem",
+      "description": "Worker reminder for salary dates, utility bills, or monthly record check.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "category": {
+          "type": "string",
+          "enum": ["salary_date", "bill_payment", "monthly_review", "other"],
+          "maxLength": 30
+        },
+        "dueDate": { "type": "string", "maxLength": 15 },
+        "isCompleted": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 250 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "title",
+        "category",
+        "dueDate",
+        "isCompleted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SupportFeedback": {
+      "title": "SupportFeedback",
+      "description": "Worker feedback or support inquiry.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workerName": { "type": "string", "maxLength": 120 },
+        "category": { "type": "string", "enum": ["calculation_help", "bug_report", "feature_request", "general"], "maxLength": 40 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["open", "resolved"], "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "workerName",
+        "category",
+        "message",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PersonalLoan": {
+      "title": "PersonalLoan",
+      "description": "Personal loan, salary advance, or cooperative installment record owned by the worker.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "lenderType": { "type": "string", "enum": ["factory_advance", "ngo_loan", "cooperative", "family_loan"], "maxLength": 30 },
+        "totalLoanAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "monthlyInstallment": { "type": "number" },
+        "nextDueDate": { "type": "string", "maxLength": 15 },
+        "notes": { "type": "string", "maxLength": 250 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "title",
+        "lenderType",
+        "totalLoanAmount",
+        "paidAmount",
+        "monthlyInstallment",
+        "nextDueDate",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "GarmentWorkplace": {
+      "title": "GarmentWorkplace",
+      "description": "Garment workplace history and current factory details for a worker.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "factoryName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "factoryAddress": { "type": "string", "maxLength": 250 },
+        "factoryArea": { "type": "string", "maxLength": 100 },
+        "department": { "type": "string", "maxLength": 100 },
+        "floorNumber": { "type": "string", "maxLength": 50 },
+        "lineNumber": { "type": "string", "maxLength": 50 },
+        "designation": { "type": "string", "maxLength": 100 },
+        "supervisorName": { "type": "string", "maxLength": 100 },
+        "joiningDate": { "type": "string", "maxLength": 15 },
+        "factoryPhone": { "type": "string", "maxLength": 30 },
+        "notes": { "type": "string", "maxLength": 300 },
+        "isCurrent": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "factoryName", "isCurrent", "updatedAt"]
+    },
+    "WorkerContact": {
+      "title": "WorkerContact",
+      "description": "Personal contacts and workplace phonebook entry for a worker.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "phone": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "designation": { "type": "string", "maxLength": 100 },
+        "category": {
+          "type": "string",
+          "enum": ["supervisor", "line_chief", "production_manager", "hr_admin", "security", "coworker", "emergency", "other"],
+          "maxLength": 30
+        },
+        "department": { "type": "string", "maxLength": 100 },
+        "lineNumber": { "type": "string", "maxLength": 50 },
+        "notes": { "type": "string", "maxLength": 300 },
+        "isFavorite": { "type": "boolean" },
+        "isEmergency": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "fullName", "phone", "category", "isFavorite", "isEmergency", "updatedAt"]
+    },
+    "UserDirectoryEntry": {
+      "title": "UserDirectoryEntry",
+      "description": "Non-financial, privacy-preserving account status summary for platform administration.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "accountStatus": { "type": "string", "enum": ["active", "suspended"], "maxLength": 20 },
+        "suspensionReason": { "type": "string", "maxLength": 300 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "accountStatus", "updatedAt"]
+    },
+    "PlatformAnnouncement": {
+      "title": "PlatformAnnouncement",
+      "description": "Public or targeted announcement published by authorized administrators.",
+      "type": "object",
+      "properties": {
+        "titleBn": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "messageBn": { "type": "string", "minLength": 1, "maxLength": 1500 },
+        "category": { "type": "string", "enum": ["general", "maintenance", "new_feature", "security", "important_update"], "maxLength": 30 },
+        "status": { "type": "string", "enum": ["draft", "published", "archived"], "maxLength": 20 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["titleBn", "messageBn", "category", "status", "updatedAt"]
+    },
+    "AdminAuditLog": {
+      "title": "AdminAuditLog",
+      "description": "Immutable administrative action log for security and compliance auditing.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actionType": { "type": "string", "maxLength": 60 },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "reason": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "actionType", "targetId", "reason", "createdAt"]
+    },
+    "DemoSystemConfig": {
+      "title": "DemoSystemConfig",
+      "description": "Public read-only demo account configuration and status managed by Super Admin.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "demoEmail": { "type": "string", "maxLength": 120 },
+        "maintenanceMessageBn": { "type": "string", "maxLength": 400 },
+        "maintenanceMessageEn": { "type": "string", "maxLength": 400 },
+        "lastResetAt": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["enabled", "demoEmail", "maintenanceMessageBn", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "WorkerProfile",
+      "description": "Private worker profile and salary/OT policy configuration."
+    },
+    "/users/{userId}/overtime/{overtimeId}": {
+      "schema": "OvertimeRecord",
+      "description": "Daily overtime records owned by the worker."
+    },
+    "/users/{userId}/salaryRecords/{salaryId}": {
+      "schema": "SalaryRecord",
+      "description": "Monthly salary breakdowns and payslip estimates owned by the worker."
+    },
+    "/users/{userId}/payments/{paymentId}": {
+      "schema": "SalaryPayment",
+      "description": "Actual salary payment records owned by the worker."
+    },
+    "/users/{userId}/attendance/{attendanceId}": {
+      "schema": "AttendanceRecord",
+      "description": "Daily attendance and leave records owned by the worker."
+    },
+    "/users/{userId}/expenses/{expenseId}": {
+      "schema": "ExpenseRecord",
+      "description": "Personal daily expense records owned by the worker."
+    },
+    "/users/{userId}/savings/{savingId}": {
+      "schema": "SavingsGoal",
+      "description": "Personal savings goals and budget targets owned by the worker."
+    },
+    "/users/{userId}/documents/{docId}": {
+      "schema": "VaultDocument",
+      "description": "Private document vault entries owned by the worker."
+    },
+    "/users/{userId}/reminders/{reminderId}": {
+      "schema": "ReminderItem",
+      "description": "Personal reminders owned by the worker."
+    },
+    "/users/{userId}/loans/{loanId}": {
+      "schema": "PersonalLoan",
+      "description": "Personal loans, factory advances, and installment plans owned by the worker."
+    },
+    "/users/{userId}/workplaces/{workplaceId}": {
+      "schema": "GarmentWorkplace",
+      "description": "Garment workplace history and current factory details owned by the worker."
+    },
+    "/users/{userId}/contacts/{contactId}": {
+      "schema": "WorkerContact",
+      "description": "Personal contacts and workplace phonebook owned by the worker."
+    },
+    "/feedback/{feedbackId}": {
+      "schema": "SupportFeedback",
+      "description": "Support inquiries and feedback submitted by workers."
+    },
+    "/userDirectory/{userId}": {
+      "schema": "UserDirectoryEntry",
+      "description": "Non-financial account status directory managed by platform administrators."
+    },
+    "/announcements/{announcementId}": {
+      "schema": "PlatformAnnouncement",
+      "description": "Platform announcements managed by administrators."
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AdminAuditLog",
+      "description": "Append-only immutable administrative audit log."
+    },
+    "/demoConfig/{configId}": {
+      "schema": "DemoSystemConfig",
+      "description": "Publicly readable, Super Admin writable configuration for the Read-Only Demo Account system."
+    }
+  }
+}

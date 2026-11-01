@@ -1,0 +1,6 @@
+{
+  "name": "শ্রমিক সাথী (Shromik Sathi)",
+  "description": "বাংলাদেশের গার্মেন্টস শ্রমিকদের জন্য বেতন, ওভারটাইম, হাজিরা, ছুটি, সঞ্চয় ও ব্যক্তিগত হিসাব ব্যবস্থাপনার নির্ভরযোগ্য ডিজিটাল সহকারী।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
