@@ -446,6 +446,7 @@ export type MoreSubView =
 
 export interface AlarmItem {
   id: string;
+  userId?: string;
   time: string; // 'HH:mm'
   label: string;
   isEnabled: boolean;
@@ -454,6 +455,8 @@ export interface AlarmItem {
   customToneName?: string;
   customToneId?: string;
   lastTriggeredDate?: string; // YYYY-MM-DD to avoid double trigger in same minute
+  createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 export interface RentAdvanceInstallment {

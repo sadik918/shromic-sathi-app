@@ -1981,7 +1981,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                     onClick={async () => {
                       setIsManualSyncing(true);
                       try {
-                        await syncOfflineDataToCloud();
+                        await syncOfflineDataToCloud(true);
                         setNotice(
                           lang === 'bn'
                             ? 'ক্লাউডের সাথে সকল ডাটা সফলভাবে সিঙ্ক হয়েছে!'

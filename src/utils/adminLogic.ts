@@ -145,6 +145,8 @@ export interface AdminUserDirectoryEntry {
   language: 'bn' | 'en';
   offlineSyncState: 'synced' | 'pending' | 'error';
   appVersion: string;
+  role?: 'user' | AdminRole;
+  createdAtMs?: number;
   suspensionReason?: string;
   suspendedAt?: string;
   suspendedBy?: string;
@@ -521,6 +523,8 @@ export function filterAndPaginateUsers(params: {
   searchQuery: string;
   statusFilter: 'all' | 'active' | 'suspended';
   monthFilter: string; // 'all' or YYYY-MM
+  registrationPeriod?: 'all' | 'today' | 'this_month';
+  todayISO?: string;
   page: number;
   pageSize: number;
 }): {
@@ -528,13 +532,35 @@ export function filterAndPaginateUsers(params: {
   totalItems: number;
   totalPages: number;
   currentPage: number;
+  startIndex: number;
+  endIndex: number;
 } {
-  const { users, searchQuery, statusFilter, monthFilter, page, pageSize } = params;
+  const {
+    users,
+    searchQuery,
+    statusFilter,
+    monthFilter,
+    registrationPeriod = 'all',
+    todayISO = '',
+    page,
+    pageSize,
+  } = params;
   const q = searchQuery.trim().toLowerCase();
+  const safePageSize = Math.max(1, pageSize);
 
   const filtered = users.filter((u) => {
     if (statusFilter !== 'all' && u.accountStatus !== statusFilter) return false;
-    if (monthFilter !== 'all' && !u.registeredAt.startsWith(monthFilter)) return false;
+    if (monthFilter !== 'all' && !(u.registeredAt || '').startsWith(monthFilter)) return false;
+    if (registrationPeriod === 'today' && todayISO && u.registeredAt !== todayISO) {
+      return false;
+    }
+    if (
+      registrationPeriod === 'this_month' &&
+      todayISO &&
+      !(u.registeredAt || '').startsWith(todayISO.slice(0, 7))
+    ) {
+      return false;
+    }
     if (q) {
       const matchName = u.displayName.toLowerCase().includes(q);
       const matchEmail = u.email.toLowerCase().includes(q);
@@ -545,12 +571,14 @@ export function filterAndPaginateUsers(params: {
   });
 
   const totalItems = filtered.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / Math.max(1, pageSize)));
+  const totalPages = Math.max(1, Math.ceil(totalItems / safePageSize));
   const currentPage = Math.min(Math.max(1, page), totalPages);
-  const start = (currentPage - 1) * pageSize;
-  const items = filtered.slice(start, start + pageSize);
+  const start = (currentPage - 1) * safePageSize;
+  const items = filtered.slice(start, start + safePageSize);
+  const startIndex = totalItems === 0 ? 0 : start + 1;
+  const endIndex = totalItems === 0 ? 0 : start + items.length;
 
-  return { items, totalItems, totalPages, currentPage };
+  return { items, totalItems, totalPages, currentPage, startIndex, endIndex };
 }
 
 /**

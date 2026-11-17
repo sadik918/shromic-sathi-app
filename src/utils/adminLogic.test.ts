@@ -157,7 +157,25 @@ test('Overview metrics compute exact counts from stored data and user pagination
     pageSize: 10,
   });
   assert.equal(suspendedPage.totalItems, 1);
+  assert.equal(suspendedPage.startIndex, 1);
+  assert.equal(suspendedPage.endIndex, 1);
   assert.equal(suspendedPage.items[0].uid, 'usr_rmg_6890_spam_bot');
+
+  // Filter by New Today & verify range bounds + page clamping
+  const todayPage = filterAndPaginateUsers({
+    users: store.users,
+    searchQuery: '',
+    statusFilter: 'all',
+    monthFilter: 'all',
+    registrationPeriod: 'today',
+    todayISO: '2026-10-28',
+    page: 5, // out-of-range page should clamp cleanly to 1
+    pageSize: 5,
+  });
+  assert.equal(todayPage.totalItems, 1);
+  assert.equal(todayPage.currentPage, 1);
+  assert.equal(todayPage.startIndex, 1);
+  assert.equal(todayPage.endIndex, 1);
 });
 
 import {

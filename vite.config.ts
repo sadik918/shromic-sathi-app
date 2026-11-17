@@ -11,8 +11,10 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        injectRegister: 'auto',
         includeAssets: [
           'icon.svg',
+          'alarm-sw-helper.js',
           'assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
         ],
         manifest: {
@@ -50,23 +52,22 @@ export default defineConfig(() => {
           clientsClaim: true,
           skipWaiting: true,
           cleanupOutdatedCaches: true,
+          importScripts: ['/alarm-sw-helper.js'],
           navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/api\//, /^\/__\//],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
           runtimeCaching: [
             {
               urlPattern: ({ request }) =>
-                request.mode === 'navigate' ||
-                request.destination === 'document' ||
                 request.destination === 'script' ||
                 request.destination === 'style' ||
                 request.destination === 'worker',
-              handler: 'NetworkFirst',
+              handler: 'StaleWhileRevalidate',
               options: {
-                cacheName: 'shromik-sathi-app-shell-v1',
-                networkTimeoutSeconds: 3,
+                cacheName: 'shromik-sathi-static-assets-v2',
                 expiration: {
-                  maxEntries: 80,
+                  maxEntries: 100,
                   maxAgeSeconds: 60 * 60 * 24 * 90,
                 },
                 cacheableResponse: {
@@ -79,9 +80,9 @@ export default defineConfig(() => {
                 request.destination === 'image' || request.destination === 'font',
               handler: 'CacheFirst',
               options: {
-                cacheName: 'shromik-sathi-media-cache-v1',
+                cacheName: 'shromik-sathi-media-cache-v2',
                 expiration: {
-                  maxEntries: 60,
+                  maxEntries: 80,
                   maxAgeSeconds: 60 * 60 * 24 * 365,
                 },
                 cacheableResponse: {
@@ -120,7 +121,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
           type: 'module',
         },
       }),

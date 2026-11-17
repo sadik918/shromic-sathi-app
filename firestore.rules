@@ -36,7 +36,10 @@ service cloud.firestore {
     function isAdmin() {
       return isVerified() && isNotDemoAccount() && (
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        request.auth.token.email == 'sadikulislam45974@gmail.com'
+        (
+          request.auth.token.email == 'sadikulislam45974@gmail.com' &&
+          request.auth.token.email_verified == true
+        )
       );
     }
     function hasParentProfile(userId) {
@@ -52,23 +55,31 @@ service cloud.firestore {
           'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
           'foodAllowance', 'attendanceBonus', 'grossSalary', 'otWageBase',
           'otDivisor', 'otMultiplier', 'effectiveFrom', 'language', 'privacyConsent',
-          'createdAt', 'updatedAt'
+          'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'userId', 'fullName', 'photoUrl', 'phone', 'address', 'emergencyContact',
+          'id', 'userId', 'fullName', 'photoUrl', 'phone', 'address', 'emergencyContact',
           'factoryName', 'factoryBranch', 'department', 'designation', 'employeeId',
           'employmentType', 'joiningDate', 'salaryGrade', 'basicSalary',
           'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
-          'foodAllowance', 'attendanceBonus', 'grossSalary', 'otWageBase',
-          'otDivisor', 'otMultiplier', 'otCalculationMode', 'otCustomHourlyRate',
+          'foodAllowance', 'attendanceBonus', 'hasAttendanceBonus',
+          'attendanceBonusAmount', 'attendanceBonusDays', 'maxConsecutiveAbsences',
+          'bonusCutoffTimeEnabled', 'latePenaltyEnabled', 'maxLateDaysForBonus',
+          'grossSalary', 'otWageBase', 'otDivisor', 'otMultiplier',
+          'otCalculationMode', 'otCustomHourlyRate',
           'shiftPattern', 'dayShiftStartTime', 'nightShiftStartTime', 'rotationStartDate',
+          'attendanceWindowStartDay', 'attendanceWindowEndDay',
+          'attendanceWindowStartNight', 'attendanceWindowEndNight',
+          'dayBonusCutoffTime', 'nightBonusCutoffTime',
+          'weeklyHolidayDay', 'expectedPayDay', 'monthlyBudgetTarget', 'openingCashBalance',
           'effectiveFrom', 'language', 'privacyConsent',
           'createdAt', 'updatedAt'
         ]) &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
         data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.userId == request.auth.uid &&
-        data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120 &&
-        data.photoUrl is string && data.photoUrl.size() <= 150000 &&
+        data.fullName is string && data.fullName.size() <= 120 &&
+        data.photoUrl is string && data.photoUrl.size() <= 500000 &&
         data.phone is string && data.phone.size() <= 30 &&
         data.address is string && data.address.size() <= 300 &&
         data.emergencyContact is string && data.emergencyContact.size() <= 120 &&
@@ -78,8 +89,8 @@ service cloud.firestore {
         data.designation is string && data.designation.size() <= 100 &&
         data.employeeId is string && data.employeeId.size() <= 60 &&
         data.employmentType is string && data.employmentType.size() <= 30 &&
-        data.employmentType in ['permanent', 'probation', 'contractual', 'piece_rate', 'helper'] &&
-        data.joiningDate is string && data.joiningDate.size() <= 20 &&
+        data.employmentType in ['permanent', 'probation', 'contractual', 'piece_rate', 'helper', ''] &&
+        data.joiningDate is string && data.joiningDate.size() <= 35 &&
         data.salaryGrade is string && data.salaryGrade.size() <= 40 &&
         data.basicSalary is number && data.basicSalary >= 0 && data.basicSalary <= 1000000 &&
         data.houseRentAllowance is number && data.houseRentAllowance >= 0 && data.houseRentAllowance <= 1000000 &&
@@ -87,20 +98,37 @@ service cloud.firestore {
         data.transportAllowance is number && data.transportAllowance >= 0 && data.transportAllowance <= 500000 &&
         data.foodAllowance is number && data.foodAllowance >= 0 && data.foodAllowance <= 500000 &&
         data.attendanceBonus is number && data.attendanceBonus >= 0 && data.attendanceBonus <= 500000 &&
+        (!('hasAttendanceBonus' in data) || data.hasAttendanceBonus is bool) &&
+        (!('attendanceBonusAmount' in data) || (data.attendanceBonusAmount is number && data.attendanceBonusAmount >= 0 && data.attendanceBonusAmount <= 500000)) &&
+        (!('attendanceBonusDays' in data) || (data.attendanceBonusDays is number && data.attendanceBonusDays >= 0 && data.attendanceBonusDays <= 31)) &&
+        (!('maxConsecutiveAbsences' in data) || (data.maxConsecutiveAbsences is number && data.maxConsecutiveAbsences >= 0 && data.maxConsecutiveAbsences <= 31)) &&
+        (!('bonusCutoffTimeEnabled' in data) || data.bonusCutoffTimeEnabled is bool) &&
+        (!('latePenaltyEnabled' in data) || data.latePenaltyEnabled is bool) &&
+        (!('maxLateDaysForBonus' in data) || (data.maxLateDaysForBonus is number && data.maxLateDaysForBonus >= 0 && data.maxLateDaysForBonus <= 31)) &&
         data.grossSalary is number && data.grossSalary >= 0 && data.grossSalary <= 5000000 &&
         data.otWageBase is string && data.otWageBase.size() <= 20 && data.otWageBase in ['basic', 'gross'] &&
-        data.otDivisor is number && data.otDivisor > 0 && data.otDivisor <= 1000 &&
-        data.otMultiplier is number && data.otMultiplier > 0 && data.otMultiplier <= 10 &&
+        data.otDivisor is number && data.otDivisor >= 0 && data.otDivisor <= 1000 &&
+        data.otMultiplier is number && data.otMultiplier >= 0 && data.otMultiplier <= 10 &&
         (!('otCalculationMode' in data) || (data.otCalculationMode is string && data.otCalculationMode.size() <= 20 && data.otCalculationMode in ['formula', 'manual'])) &&
         (!('otCustomHourlyRate' in data) || (data.otCustomHourlyRate is number && data.otCustomHourlyRate >= 0 && data.otCustomHourlyRate <= 100000)) &&
-        (!('shiftPattern' in data) || (data.shiftPattern is string && data.shiftPattern in ['day', 'night', 'weekly_rotation'])) &&
+        (!('shiftPattern' in data) || (data.shiftPattern is string && data.shiftPattern in ['day', 'night', 'weekly_rotation', 'general'])) &&
         (!('dayShiftStartTime' in data) || (data.dayShiftStartTime is string && data.dayShiftStartTime.size() <= 10)) &&
         (!('nightShiftStartTime' in data) || (data.nightShiftStartTime is string && data.nightShiftStartTime.size() <= 10)) &&
-        (!('rotationStartDate' in data) || (data.rotationStartDate is string && data.rotationStartDate.size() <= 20)) &&
-        data.effectiveFrom is string && data.effectiveFrom.size() <= 20 &&
+        (!('rotationStartDate' in data) || (data.rotationStartDate is string && data.rotationStartDate.size() <= 35)) &&
+        (!('attendanceWindowStartDay' in data) || (data.attendanceWindowStartDay is string && data.attendanceWindowStartDay.size() <= 10)) &&
+        (!('attendanceWindowEndDay' in data) || (data.attendanceWindowEndDay is string && data.attendanceWindowEndDay.size() <= 10)) &&
+        (!('attendanceWindowStartNight' in data) || (data.attendanceWindowStartNight is string && data.attendanceWindowStartNight.size() <= 10)) &&
+        (!('attendanceWindowEndNight' in data) || (data.attendanceWindowEndNight is string && data.attendanceWindowEndNight.size() <= 10)) &&
+        (!('dayBonusCutoffTime' in data) || (data.dayBonusCutoffTime is string && data.dayBonusCutoffTime.size() <= 10)) &&
+        (!('nightBonusCutoffTime' in data) || (data.nightBonusCutoffTime is string && data.nightBonusCutoffTime.size() <= 10)) &&
+        (!('weeklyHolidayDay' in data) || (data.weeklyHolidayDay is string && data.weeklyHolidayDay in ['friday', 'saturday', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday'])) &&
+        (!('expectedPayDay' in data) || (data.expectedPayDay is number && data.expectedPayDay >= 0 && data.expectedPayDay <= 31)) &&
+        (!('monthlyBudgetTarget' in data) || (data.monthlyBudgetTarget is number && data.monthlyBudgetTarget >= 0 && data.monthlyBudgetTarget <= 5000000)) &&
+        (!('openingCashBalance' in data) || (data.openingCashBalance is number && data.openingCashBalance >= -5000000 && data.openingCashBalance <= 50000000)) &&
+        data.effectiveFrom is string && data.effectiveFrom.size() <= 35 &&
         data.language is string && data.language.size() <= 10 && data.language in ['bn', 'en'] &&
         data.privacyConsent is bool &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
@@ -109,7 +137,7 @@ service cloud.firestore {
           'userId', 'date', 'month', 'startTime', 'endTime', 'breakMinutes',
           'totalMinutes', 'approvedHours', 'basicSalarySnapshot', 'divisorSnapshot',
           'multiplierSnapshot', 'hourlyRateSnapshot', 'estimatedEarnings', 'notes',
-          'createdAt', 'updatedAt'
+          'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'userId', 'date', 'month', 'startTime', 'endTime', 'breakMinutes',
@@ -132,7 +160,7 @@ service cloud.firestore {
         data.hourlyRateSnapshot is number && data.hourlyRateSnapshot >= 0 &&
         data.estimatedEarnings is number && data.estimatedEarnings >= 0 &&
         data.notes is string && data.notes.size() <= 300 &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
@@ -142,7 +170,7 @@ service cloud.firestore {
           'medicalAllowance', 'transportAllowance', 'foodAllowance', 'attendanceBonus',
           'overtimeHours', 'overtimeEarnings', 'festivalBonus', 'otherAllowances',
           'advanceDeduction', 'absenceDeduction', 'otherDeductions', 'adjustments',
-          'estimatedGross', 'estimatedNetPayable', 'notes', 'createdAt', 'updatedAt'
+          'estimatedGross', 'estimatedNetPayable', 'notes', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'userId', 'month', 'effectiveDate', 'basicSalary', 'houseRentAllowance',
@@ -172,14 +200,14 @@ service cloud.firestore {
         data.estimatedGross is number && data.estimatedGross >= 0 &&
         data.estimatedNetPayable is number &&
         data.notes is string && data.notes.size() <= 400 &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
     function isValidSalaryPayment(data) {
       return data.keys().hasAll([
           'userId', 'month', 'paymentDate', 'amountReceived', 'paymentMethod',
-          'isPartial', 'referenceNote', 'createdAt', 'updatedAt'
+          'isPartial', 'referenceNote', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'userId', 'month', 'paymentDate', 'amountReceived', 'paymentMethod',
@@ -194,14 +222,14 @@ service cloud.firestore {
         data.paymentMethod in ['cash', 'bkash', 'nagad', 'rocket', 'bank'] &&
         data.isPartial is bool &&
         data.referenceNote is string && data.referenceNote.size() <= 300 &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
     function isValidAttendanceRecord(data) {
       return data.keys().hasAll([
           'userId', 'date', 'month', 'status', 'leaveCategory',
-          'checkIn', 'checkOut', 'notes', 'createdAt', 'updatedAt'
+          'checkIn', 'checkOut', 'notes', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'userId', 'date', 'month', 'status', 'leaveCategory',
@@ -219,14 +247,14 @@ service cloud.firestore {
         data.checkOut is string && data.checkOut.size() <= 10 &&
         data.notes is string && data.notes.size() <= 300 &&
         (!('hasAttendanceBonus' in data) || data.hasAttendanceBonus is bool) &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
     function isValidExpenseRecord(data) {
       return data.keys().hasAll([
           'userId', 'date', 'month', 'category', 'amount', 'description',
-          'createdAt', 'updatedAt'
+          'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'userId', 'date', 'month', 'category', 'amount', 'description',
@@ -240,18 +268,19 @@ service cloud.firestore {
         data.category in ['food', 'rent', 'transport', 'family', 'medical', 'education', 'other'] &&
         data.amount is number && data.amount >= 0 && data.amount <= 5000000 &&
         data.description is string && data.description.size() <= 250 &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
     function isValidSavingsGoal(data) {
       return data.keys().hasAll([
           'userId', 'title', 'targetAmount', 'savedAmount', 'monthlyBudget',
-          'deadline', 'notes', 'createdAt', 'updatedAt'
+          'deadline', 'notes', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'userId', 'title', 'targetAmount', 'savedAmount', 'monthlyBudget',
-          'deadline', 'notes', 'createdAt', 'updatedAt'
+          'deadline', 'notes', 'storageLocation', 'commissionType', 'commissionAmount',
+          'frequency', 'lastDepositDate', 'nextDueDate', 'createdAt', 'updatedAt'
         ]) &&
         data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.userId == request.auth.uid &&
@@ -261,14 +290,20 @@ service cloud.firestore {
         data.monthlyBudget is number && data.monthlyBudget >= 0 && data.monthlyBudget <= 5000000 &&
         data.deadline is string && data.deadline.size() <= 20 &&
         data.notes is string && data.notes.size() <= 250 &&
-        data.createdAt is timestamp &&
+        (!('storageLocation' in data) || (data.storageLocation is string && data.storageLocation.size() <= 120)) &&
+        (!('commissionType' in data) || (data.commissionType is string && data.commissionType in ['commission', 'non_commission'])) &&
+        (!('commissionAmount' in data) || (data.commissionAmount is number && data.commissionAmount >= 0 && data.commissionAmount <= 5000000)) &&
+        (!('frequency' in data) || (data.frequency is string && data.frequency in ['monthly', 'weekly', 'daily'])) &&
+        (!('lastDepositDate' in data) || (data.lastDepositDate is string && data.lastDepositDate.size() <= 20)) &&
+        (!('nextDueDate' in data) || (data.nextDueDate is string && data.nextDueDate.size() <= 20)) &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
     function isValidVaultDocument(data) {
       return data.keys().hasAll([
           'userId', 'title', 'category', 'fileName', 'fileType', 'fileSize',
-          'fileData', 'issueDate', 'notes', 'createdAt', 'updatedAt'
+          'fileData', 'issueDate', 'notes', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'userId', 'title', 'category', 'fileName', 'fileType', 'fileSize',
@@ -285,14 +320,14 @@ service cloud.firestore {
         data.fileData is string && data.fileData.size() <= 750000 &&
         data.issueDate is string && data.issueDate.size() <= 20 &&
         data.notes is string && data.notes.size() <= 300 &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
     function isValidReminderItem(data) {
       return data.keys().hasAll([
           'userId', 'title', 'category', 'dueDate', 'isCompleted',
-          'notes', 'createdAt', 'updatedAt'
+          'notes', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'userId', 'title', 'category', 'dueDate', 'isCompleted',
@@ -306,36 +341,50 @@ service cloud.firestore {
         data.dueDate is string && data.dueDate.size() <= 15 &&
         data.isCompleted is bool &&
         data.notes is string && data.notes.size() <= 250 &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
     function isValidPersonalLoan(data) {
       return data.keys().hasAll([
-          'userId', 'title', 'lenderType', 'totalLoanAmount', 'paidAmount',
-          'monthlyInstallment', 'nextDueDate', 'notes', 'createdAt', 'updatedAt'
+          'userId', 'title', 'totalLoanAmount', 'paidAmount',
+          'monthlyInstallment', 'nextDueDate', 'notes', 'updatedAt'
         ]) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'title', 'lenderType', 'totalLoanAmount', 'paidAmount',
+          'monthlyInstallment', 'nextDueDate', 'notes',
+          'personName', 'contactNumber', 'direction', 'originalAmount',
+          'transactionDate', 'expectedRepaymentDate', 'reason', 'repaymentArrangement',
+          'installmentAmount', 'repaymentFrequency', 'nextInstallmentDate',
+          'reminderEnabled', 'status', 'repayments', 'isArchived',
+          'createdAt', 'updatedAt'
+        ]) &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
         data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.userId == request.auth.uid &&
         data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
-        data.lenderType is string && data.lenderType.size() <= 30 &&
+        (!('lenderType' in data) || (data.lenderType is string && data.lenderType.size() <= 30)) &&
         data.totalLoanAmount is number && data.totalLoanAmount >= 0 && data.totalLoanAmount <= 50000000 &&
         data.paidAmount is number && data.paidAmount >= 0 && data.paidAmount <= 50000000 &&
         data.monthlyInstallment is number && data.monthlyInstallment >= 0 && data.monthlyInstallment <= 5000000 &&
-        data.nextDueDate is string && data.nextDueDate.size() <= 15 &&
+        data.nextDueDate is string && data.nextDueDate.size() <= 20 &&
         data.notes is string && data.notes.size() <= 300 &&
         (!('personName' in data) || (data.personName is string && data.personName.size() <= 100)) &&
         (!('contactNumber' in data) || (data.contactNumber is string && data.contactNumber.size() <= 30)) &&
         (!('direction' in data) || (data.direction is string && data.direction in ['lent', 'borrowed'])) &&
-        (!('originalAmount' in data) || (data.originalAmount is number && data.originalAmount >= 0)) &&
+        (!('originalAmount' in data) || (data.originalAmount is number && data.originalAmount >= 0 && data.originalAmount <= 50000000)) &&
         (!('transactionDate' in data) || (data.transactionDate is string && data.transactionDate.size() <= 20)) &&
         (!('expectedRepaymentDate' in data) || (data.expectedRepaymentDate is string && data.expectedRepaymentDate.size() <= 20)) &&
         (!('reason' in data) || (data.reason is string && data.reason.size() <= 300)) &&
-        (!('repaymentArrangement' in data) || (data.repaymentArrangement is string && data.repaymentArrangement in ['lump_sum', 'weekly', 'monthly', 'custom'])) &&
-        (!('status' in data) || (data.status is string && data.status in ['pending', 'partially_repaid', 'fully_settled', 'overdue', 'due_today'])) &&
-        (!('repayments' in data) || data.repayments is list) &&
+        (!('repaymentArrangement' in data) || (data.repaymentArrangement is string && data.repaymentArrangement.size() <= 250)) &&
+        (!('installmentAmount' in data) || (data.installmentAmount is number && data.installmentAmount >= 0 && data.installmentAmount <= 5000000)) &&
+        (!('repaymentFrequency' in data) || (data.repaymentFrequency is string && data.repaymentFrequency in ['lump_sum', 'weekly', 'monthly', 'custom'])) &&
+        (!('nextInstallmentDate' in data) || (data.nextInstallmentDate is string && data.nextInstallmentDate.size() <= 20)) &&
+        (!('reminderEnabled' in data) || data.reminderEnabled is bool) &&
+        (!('status' in data) || (data.status is string && data.status in ['pending', 'partially_repaid', 'fully_settled', 'overdue', 'due_today', 'archived'])) &&
+        (!('repayments' in data) || (data.repayments is list && data.repayments.size() <= 500)) &&
         (!('isArchived' in data) || data.isArchived is bool) &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
@@ -363,6 +412,15 @@ service cloud.firestore {
       return data.keys().hasAll([
           'userId', 'factoryName', 'isCurrent', 'updatedAt'
         ]) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'factoryName', 'factoryAddress', 'factoryArea', 'department',
+          'floorNumber', 'lineNumber', 'designation', 'employeeId', 'supervisorName',
+          'joiningDate', 'leavingDate', 'leavingReason', 'shiftPattern',
+          'grossSalary', 'basicSalary', 'totalReceivedSalary', 'totalExpectedSalary',
+          'totalOvertimeHours', 'totalOvertimeEarnings', 'totalPresentDays',
+          'totalAbsentDays', 'totalLeaveDays', 'monthsWorked',
+          'factoryPhone', 'notes', 'isCurrent', 'createdAt', 'updatedAt'
+        ]) &&
         data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.userId == request.auth.uid &&
         data.factoryName is string && data.factoryName.size() >= 1 && data.factoryName.size() <= 150 &&
@@ -373,10 +431,25 @@ service cloud.firestore {
         (!('floorNumber' in data) || (data.floorNumber is string && data.floorNumber.size() <= 50)) &&
         (!('lineNumber' in data) || (data.lineNumber is string && data.lineNumber.size() <= 50)) &&
         (!('designation' in data) || (data.designation is string && data.designation.size() <= 100)) &&
+        (!('employeeId' in data) || (data.employeeId is string && data.employeeId.size() <= 60)) &&
         (!('supervisorName' in data) || (data.supervisorName is string && data.supervisorName.size() <= 100)) &&
         (!('joiningDate' in data) || (data.joiningDate is string && data.joiningDate.size() <= 20)) &&
+        (!('leavingDate' in data) || (data.leavingDate is string && data.leavingDate.size() <= 20)) &&
+        (!('leavingReason' in data) || (data.leavingReason is string && data.leavingReason.size() <= 200)) &&
+        (!('shiftPattern' in data) || (data.shiftPattern is string && data.shiftPattern in ['day', 'night', 'weekly_rotation', 'general'])) &&
+        (!('grossSalary' in data) || (data.grossSalary is number && data.grossSalary >= 0 && data.grossSalary <= 5000000)) &&
+        (!('basicSalary' in data) || (data.basicSalary is number && data.basicSalary >= 0 && data.basicSalary <= 1000000)) &&
+        (!('totalReceivedSalary' in data) || (data.totalReceivedSalary is number && data.totalReceivedSalary >= 0)) &&
+        (!('totalExpectedSalary' in data) || (data.totalExpectedSalary is number && data.totalExpectedSalary >= 0)) &&
+        (!('totalOvertimeHours' in data) || (data.totalOvertimeHours is number && data.totalOvertimeHours >= 0)) &&
+        (!('totalOvertimeEarnings' in data) || (data.totalOvertimeEarnings is number && data.totalOvertimeEarnings >= 0)) &&
+        (!('totalPresentDays' in data) || (data.totalPresentDays is number && data.totalPresentDays >= 0)) &&
+        (!('totalAbsentDays' in data) || (data.totalAbsentDays is number && data.totalAbsentDays >= 0)) &&
+        (!('totalLeaveDays' in data) || (data.totalLeaveDays is number && data.totalLeaveDays >= 0)) &&
+        (!('monthsWorked' in data) || (data.monthsWorked is number && data.monthsWorked >= 0)) &&
         (!('factoryPhone' in data) || (data.factoryPhone is string && data.factoryPhone.size() <= 30)) &&
         (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+        (!('createdAt' in data) || data.createdAt is timestamp) &&
         data.isCurrent is bool &&
         data.updatedAt is timestamp;
     }
@@ -384,6 +457,12 @@ service cloud.firestore {
     function isValidWorkerContact(data) {
       return data.keys().hasAll([
           'userId', 'fullName', 'phone', 'category', 'isFavorite', 'isEmergency', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'fullName', 'phone', 'photoUrl', 'designation',
+          'category', 'customCategory', 'department', 'lineNumber', 'notes',
+          'isPinned', 'isFavorite', 'isEmergency', 'source',
+          'googleResourceName', 'isSyncedToGoogle', 'createdAt', 'updatedAt'
         ]) &&
         data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.userId == request.auth.uid &&
@@ -401,8 +480,56 @@ service cloud.firestore {
         (!('source' in data) || (data.source is string && data.source in ['google', 'manual'])) &&
         (!('googleResourceName' in data) || (data.googleResourceName is string && data.googleResourceName.size() <= 200)) &&
         (!('isSyncedToGoogle' in data) || data.isSyncedToGoogle is bool) &&
+        (!('createdAt' in data) || data.createdAt is timestamp) &&
         data.isFavorite is bool &&
         data.isEmergency is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAlarmItem(data) {
+      return data.keys().hasAll([
+          'userId', 'time', 'label', 'isEnabled', 'repeatDays', 'toneId', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'time', 'label', 'isEnabled', 'repeatDays', 'toneId',
+          'customToneName', 'customToneId', 'lastTriggeredDate', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId == request.auth.uid &&
+        data.time is string && data.time.size() >= 4 && data.time.size() <= 10 &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 150 &&
+        data.isEnabled is bool &&
+        data.repeatDays is list && data.repeatDays.size() <= 7 &&
+        data.toneId is string && data.toneId in ['factory_siren', 'digital_beep', 'gentle_chime', 'morning_bell', 'custom_device'] &&
+        (!('customToneName' in data) || (data.customToneName is string && data.customToneName.size() <= 120)) &&
+        (!('customToneId' in data) || (data.customToneId is string && data.customToneId.size() <= 128)) &&
+        (!('lastTriggeredDate' in data) || (data.lastTriggeredDate is string && data.lastTriggeredDate.size() <= 20)) &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserDirectoryEntry(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'accountStatus', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'registeredAt', 'lastSeenDate',
+          'accountStatus', 'suspensionReason', 'role', 'authProvider',
+          'language', 'emailVerified', 'offlineSyncState', 'appVersion',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.accountStatus is string && data.accountStatus in ['active', 'suspended'] &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 150)) &&
+        (!('registeredAt' in data) || (data.registeredAt is string && data.registeredAt.size() <= 25)) &&
+        (!('lastSeenDate' in data) || (data.lastSeenDate is string && data.lastSeenDate.size() <= 25)) &&
+        (!('suspensionReason' in data) || (data.suspensionReason is string && data.suspensionReason.size() <= 300)) &&
+        (!('role' in data) || (data.role is string && data.role in ['user', 'support_moderator', 'admin', 'super_admin'])) &&
+        (!('authProvider' in data) || (data.authProvider is string && data.authProvider in ['google.com', 'password'])) &&
+        (!('language' in data) || (data.language is string && data.language in ['bn', 'en'])) &&
+        (!('emailVerified' in data) || data.emailVerified is bool) &&
+        (!('offlineSyncState' in data) || (data.offlineSyncState is string && data.offlineSyncState in ['synced', 'pending', 'error'])) &&
+        (!('appVersion' in data) || (data.appVersion is string && data.appVersion.size() <= 40)) &&
+        (!('createdAt' in data) || data.createdAt is timestamp) &&
         data.updatedAt is timestamp;
     }
 
@@ -418,23 +545,68 @@ service cloud.firestore {
       allow create: if isOwner(userId) && isValidId(userId) && isValidWorkerProfile(incoming()) &&
         incoming().createdAt == request.time && incoming().updatedAt == request.time;
       allow update: if isValidWorkerProfile(incoming()) && isOwner(userId) && isValidId(userId) &&
-        incoming().userId == existing().userId &&
-        incoming().createdAt == existing().createdAt &&
+        (!('userId' in existing()) || existing().userId != userId || incoming().userId == existing().userId) &&
+        incoming().userId == userId &&
+        (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
         incoming().updatedAt == request.time && (
           incoming().diff(existing()).affectedKeys().hasOnly([
             'fullName', 'photoUrl', 'phone', 'address', 'emergencyContact',
             'factoryName', 'factoryBranch', 'department', 'designation', 'employeeId',
             'employmentType', 'joiningDate', 'salaryGrade', 'basicSalary',
             'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
-            'foodAllowance', 'attendanceBonus', 'grossSalary', 'otWageBase',
-            'otDivisor', 'otMultiplier', 'otCalculationMode', 'otCustomHourlyRate',
+            'foodAllowance', 'attendanceBonus', 'hasAttendanceBonus',
+            'attendanceBonusAmount', 'attendanceBonusDays', 'maxConsecutiveAbsences',
+            'bonusCutoffTimeEnabled', 'latePenaltyEnabled', 'maxLateDaysForBonus',
+            'grossSalary', 'otWageBase', 'otDivisor', 'otMultiplier',
+            'otCalculationMode', 'otCustomHourlyRate',
             'shiftPattern', 'dayShiftStartTime', 'nightShiftStartTime', 'rotationStartDate',
-            'attendanceWindowStartDay', 'attendanceWindowEndDay', 'attendanceWindowStartNight', 'attendanceWindowEndNight',
-            'hasAttendanceBonus', 'attendanceBonusAmount', 'attendanceBonusDays', 'maxConsecutiveAbsences',
-            'dayBonusCutoffTime', 'nightBonusCutoffTime', 'weeklyHolidayDay', 'expectedPayDay', 'monthlyBudgetTarget',
+            'attendanceWindowStartDay', 'attendanceWindowEndDay',
+            'attendanceWindowStartNight', 'attendanceWindowEndNight',
+            'dayBonusCutoffTime', 'nightBonusCutoffTime',
+            'weeklyHolidayDay', 'expectedPayDay', 'monthlyBudgetTarget', 'openingCashBalance',
             'effectiveFrom', 'language', 'privacyConsent',
             'updatedAt'
-          ])
+          ]) ||
+          (
+            incoming().diff(existing()).addedKeys().hasOnly([
+              'userId', 'createdAt',
+              'fullName', 'photoUrl', 'phone', 'address', 'emergencyContact',
+              'factoryName', 'factoryBranch', 'department', 'designation', 'employeeId',
+              'employmentType', 'joiningDate', 'salaryGrade', 'basicSalary',
+              'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
+              'foodAllowance', 'attendanceBonus', 'hasAttendanceBonus',
+              'attendanceBonusAmount', 'attendanceBonusDays', 'maxConsecutiveAbsences',
+              'bonusCutoffTimeEnabled', 'latePenaltyEnabled', 'maxLateDaysForBonus',
+              'grossSalary', 'otWageBase', 'otDivisor', 'otMultiplier',
+              'otCalculationMode', 'otCustomHourlyRate',
+              'shiftPattern', 'dayShiftStartTime', 'nightShiftStartTime', 'rotationStartDate',
+              'attendanceWindowStartDay', 'attendanceWindowEndDay',
+              'attendanceWindowStartNight', 'attendanceWindowEndNight',
+              'dayBonusCutoffTime', 'nightBonusCutoffTime',
+              'weeklyHolidayDay', 'expectedPayDay', 'monthlyBudgetTarget', 'openingCashBalance',
+              'effectiveFrom', 'language', 'privacyConsent',
+              'updatedAt'
+            ]) &&
+            incoming().diff(existing()).changedKeys().hasOnly([
+              'userId', 'createdAt',
+              'fullName', 'photoUrl', 'phone', 'address', 'emergencyContact',
+              'factoryName', 'factoryBranch', 'department', 'designation', 'employeeId',
+              'employmentType', 'joiningDate', 'salaryGrade', 'basicSalary',
+              'houseRentAllowance', 'medicalAllowance', 'transportAllowance',
+              'foodAllowance', 'attendanceBonus', 'hasAttendanceBonus',
+              'attendanceBonusAmount', 'attendanceBonusDays', 'maxConsecutiveAbsences',
+              'bonusCutoffTimeEnabled', 'latePenaltyEnabled', 'maxLateDaysForBonus',
+              'grossSalary', 'otWageBase', 'otDivisor', 'otMultiplier',
+              'otCalculationMode', 'otCustomHourlyRate',
+              'shiftPattern', 'dayShiftStartTime', 'nightShiftStartTime', 'rotationStartDate',
+              'attendanceWindowStartDay', 'attendanceWindowEndDay',
+              'attendanceWindowStartNight', 'attendanceWindowEndNight',
+              'dayBonusCutoffTime', 'nightBonusCutoffTime',
+              'weeklyHolidayDay', 'expectedPayDay', 'monthlyBudgetTarget', 'openingCashBalance',
+              'effectiveFrom', 'language', 'privacyConsent',
+              'updatedAt'
+            ])
+          )
         );
       allow delete: if isOwner(userId) && isValidId(userId);
 
@@ -448,7 +620,7 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidOvertimeRecord(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(overtimeId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'date', 'month', 'startTime', 'endTime', 'breakMinutes',
@@ -469,7 +641,7 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidSalaryRecord(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(salaryId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'month', 'effectiveDate', 'basicSalary', 'houseRentAllowance',
@@ -492,7 +664,7 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidSalaryPayment(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(paymentId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'month', 'paymentDate', 'amountReceived', 'paymentMethod',
@@ -512,10 +684,10 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidAttendanceRecord(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(attendanceId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'date', 'month', 'status', 'leaveCategory', 'checkIn', 'checkOut', 'notes', 'updatedAt'
+            'date', 'month', 'status', 'leaveCategory', 'checkIn', 'checkOut', 'notes', 'hasAttendanceBonus', 'updatedAt'
           ]) &&
           hasParentProfile(userId);
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(attendanceId) && hasParentProfile(userId);
@@ -531,7 +703,7 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidExpenseRecord(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(expenseId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'date', 'month', 'category', 'amount', 'description', 'updatedAt'
@@ -550,10 +722,12 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidSavingsGoal(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(savingId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'title', 'targetAmount', 'savedAmount', 'monthlyBudget', 'deadline', 'notes', 'updatedAt'
+            'title', 'targetAmount', 'savedAmount', 'monthlyBudget', 'deadline', 'notes',
+            'storageLocation', 'commissionType', 'commissionAmount', 'frequency',
+            'lastDepositDate', 'nextDueDate', 'updatedAt'
           ]) &&
           hasParentProfile(userId);
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(savingId) && hasParentProfile(userId);
@@ -569,7 +743,7 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidVaultDocument(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(docId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'title', 'category', 'fileName', 'fileType', 'fileSize', 'fileData', 'issueDate', 'notes', 'updatedAt'
@@ -588,7 +762,7 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidReminderItem(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(reminderId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'title', 'category', 'dueDate', 'isCompleted', 'notes', 'updatedAt'
@@ -607,12 +781,13 @@ service cloud.firestore {
           hasParentProfile(userId);
         allow update: if isValidPersonalLoan(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(loanId) &&
           incoming().userId == existing().userId &&
-          incoming().createdAt == existing().createdAt &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'title', 'lenderType', 'totalLoanAmount', 'paidAmount', 'monthlyInstallment', 'nextDueDate', 'notes',
+            'id', 'title', 'lenderType', 'totalLoanAmount', 'paidAmount', 'monthlyInstallment', 'nextDueDate', 'notes',
             'personName', 'contactNumber', 'direction', 'originalAmount', 'transactionDate', 'expectedRepaymentDate',
-            'reason', 'repaymentArrangement', 'status', 'repayments', 'isArchived', 'updatedAt'
+            'reason', 'repaymentArrangement', 'installmentAmount', 'repaymentFrequency', 'nextInstallmentDate',
+            'reminderEnabled', 'status', 'repayments', 'isArchived', 'updatedAt'
           ]) &&
           hasParentProfile(userId);
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(loanId) && hasParentProfile(userId);
@@ -625,10 +800,21 @@ service cloud.firestore {
         allow create: if isOwner(userId) && isValidId(userId) && isValidId(workplaceId) &&
           isValidGarmentWorkplace(incoming()) &&
           incoming().updatedAt == request.time &&
+          (!('createdAt' in incoming()) || incoming().createdAt == request.time) &&
           hasParentProfile(userId);
         allow update: if isValidGarmentWorkplace(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(workplaceId) &&
           incoming().userId == existing().userId &&
+          (!('createdAt' in existing()) || !('createdAt' in incoming()) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'id', 'factoryName', 'factoryAddress', 'factoryArea', 'department',
+            'floorNumber', 'lineNumber', 'designation', 'employeeId', 'supervisorName',
+            'joiningDate', 'leavingDate', 'leavingReason', 'shiftPattern',
+            'grossSalary', 'basicSalary', 'totalReceivedSalary', 'totalExpectedSalary',
+            'totalOvertimeHours', 'totalOvertimeEarnings', 'totalPresentDays',
+            'totalAbsentDays', 'totalLeaveDays', 'monthsWorked',
+            'factoryPhone', 'notes', 'isCurrent', 'updatedAt'
+          ]) &&
           hasParentProfile(userId);
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(workplaceId) && hasParentProfile(userId);
       }
@@ -640,12 +826,40 @@ service cloud.firestore {
         allow create: if isOwner(userId) && isValidId(userId) && isValidId(contactId) &&
           isValidWorkerContact(incoming()) &&
           incoming().updatedAt == request.time &&
+          (!('createdAt' in incoming()) || incoming().createdAt == request.time) &&
           hasParentProfile(userId);
         allow update: if isValidWorkerContact(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(contactId) &&
           incoming().userId == existing().userId &&
+          (!('createdAt' in existing()) || !('createdAt' in incoming()) || incoming().createdAt == existing().createdAt) &&
           incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'id', 'fullName', 'phone', 'photoUrl', 'designation', 'category',
+            'customCategory', 'department', 'lineNumber', 'notes', 'isPinned',
+            'isFavorite', 'isEmergency', 'source', 'googleResourceName',
+            'isSyncedToGoogle', 'updatedAt'
+          ]) &&
           hasParentProfile(userId);
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(contactId) && hasParentProfile(userId);
+      }
+
+      // Subcollection: Duty Alarms
+      match /alarms/{alarmId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(alarmId) && hasParentProfile(userId);
+        allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(alarmId) &&
+          isValidAlarmItem(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          hasParentProfile(userId);
+        allow update: if isValidAlarmItem(incoming()) && isOwner(userId) && isValidId(userId) && isValidId(alarmId) &&
+          incoming().userId == existing().userId &&
+          (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'time', 'label', 'isEnabled', 'repeatDays', 'toneId',
+            'customToneName', 'customToneId', 'lastTriggeredDate', 'updatedAt'
+          ]) &&
+          hasParentProfile(userId);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(alarmId) && hasParentProfile(userId);
       }
     }
 
@@ -675,19 +889,42 @@ service cloud.firestore {
     match /userDirectory/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
-      allow create: if isValidId(userId) && (isOwner(userId) || isAdmin()) &&
-        incoming().keys().hasAll(['uid', 'displayName', 'accountStatus', 'updatedAt']) &&
-        incoming().keys().hasOnly(['uid', 'displayName', 'accountStatus', 'suspensionReason', 'updatedAt']) &&
-        incoming().uid is string && incoming().uid.size() <= 128 &&
-        incoming().displayName is string && incoming().displayName.size() >= 1 && incoming().displayName.size() <= 120 &&
-        incoming().accountStatus in ['active', 'suspended'] &&
-        incoming().updatedAt == request.time;
-      allow update: if isAdmin() && isValidId(userId) &&
-        incoming().uid == existing().uid &&
-        incoming().accountStatus in ['active', 'suspended'] &&
-        (!('suspensionReason' in incoming()) || (incoming().suspensionReason is string && incoming().suspensionReason.size() <= 300)) &&
+      allow create: if isValidId(userId) &&
+        isValidUserDirectoryEntry(incoming()) &&
         incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['accountStatus', 'suspensionReason', 'updatedAt']);
+        (!('createdAt' in incoming()) || incoming().createdAt == request.time) && (
+          (
+            isOwner(userId) &&
+            incoming().uid == userId &&
+            incoming().accountStatus == 'active' &&
+            (!('role' in incoming()) || incoming().role == 'user') &&
+            !('suspensionReason' in incoming())
+          ) ||
+          isAdmin()
+        );
+      allow update: if isValidId(userId) &&
+        isValidUserDirectoryEntry(incoming()) &&
+        incoming().uid == existing().uid &&
+        (!('createdAt' in existing()) || !('createdAt' in incoming()) || incoming().createdAt == existing().createdAt) &&
+        incoming().updatedAt == request.time && (
+          (
+            isOwner(userId) &&
+            incoming().accountStatus == existing().accountStatus &&
+            ((!('role' in existing()) && !('role' in incoming())) || ('role' in existing() && 'role' in incoming() && incoming().role == existing().role)) &&
+            ((!('suspensionReason' in existing()) && !('suspensionReason' in incoming())) || ('suspensionReason' in existing() && 'suspensionReason' in incoming() && incoming().suspensionReason == existing().suspensionReason)) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'email', 'lastSeenDate', 'authProvider',
+              'language', 'emailVerified', 'offlineSyncState', 'appVersion', 'updatedAt'
+            ])
+          ) ||
+          (
+            isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'email', 'accountStatus', 'suspensionReason',
+              'role', 'offlineSyncState', 'updatedAt'
+            ])
+          )
+        );
       allow delete: if false;
     }
 
@@ -743,13 +980,34 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin() && isValidId(configId);
     }
 
-    // User Subscriptions (Owner or Admin access)
+    // User Subscriptions (Owner can only submit upgrade request; Admin manages plan grants)
     match /userSubscriptions/{userId} {
-      allow get: if isOwner(userId) || isAdmin();
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
-      allow create, update: if (isOwner(userId) || isAdmin()) && isValidId(userId);
-      allow delete: if isAdmin();
+      allow create: if isValidId(userId) && (
+        isAdmin() ||
+        (
+          isOwner(userId) &&
+          incoming().userId == userId &&
+          incoming().planId == 'starter_free' &&
+          incoming().status == 'free' &&
+          (!('tier' in incoming()) || incoming().tier == 'starter_free') &&
+          (!('isComplimentary' in incoming()) || incoming().isComplimentary == false)
+        )
+      );
+      allow update: if isValidId(userId) && (
+        isAdmin() ||
+        (
+          isOwner(userId) &&
+          incoming().userId == existing().userId &&
+          incoming().planId == existing().planId &&
+          incoming().status == existing().status &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'pendingRequest', 'updatedAt', 'userEmail', 'userDisplayName'
+          ])
+        )
+      );
+      allow delete: if isAdmin() && isValidId(userId);
     }
   }
 }
-

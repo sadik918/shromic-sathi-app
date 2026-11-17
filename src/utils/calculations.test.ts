@@ -1529,3 +1529,50 @@ test('House rent allowance defaults strictly to 0 for new profiles without autom
   assert.equal(userSpecifiedRent, 2500);
 });
 
+test('Offline Bengali spoken-word voice parser extracts spoken numbers and fractional hours without internet', () => {
+  const otSpoken = parseBengaliVoiceEntryLocal('আজ তিন ঘণ্টা ওভারটাইম করেছি', '2026-10-27');
+  assert.equal(otSpoken.entryType, 'overtime');
+  assert.equal(otSpoken.amountOrHours, 3);
+  assert.equal(otSpoken.date, '2026-10-27');
+
+  const otHalf = parseBengaliVoiceEntryLocal('গতকাল আড়াই ঘণ্টা ওটি করেছি', '2026-10-27');
+  assert.equal(otHalf.entryType, 'overtime');
+  assert.equal(otHalf.amountOrHours, 2.5);
+  assert.equal(otHalf.date, '2026-10-26');
+
+  const expSpoken = parseBengaliVoiceEntryLocal('আজ বাজার দুইশো টাকা খরচ', '2026-10-27');
+  assert.equal(expSpoken.entryType, 'expense');
+  assert.equal(expSpoken.categoryOrStatus, 'food');
+  assert.equal(expSpoken.amountOrHours, 200);
+
+  const paySpoken = parseBengaliVoiceEntryLocal('বেতন পেয়েছি বারো হাজার টাকা বিকাশ', '2026-10-27');
+  assert.equal(paySpoken.entryType, 'payment');
+  assert.equal(paySpoken.categoryOrStatus, 'bkash');
+  assert.equal(paySpoken.amountOrHours, 12000);
+});
+
+test('Android System Clock SET_ALARM intent URL and VALARM .ics generator produce valid hardware alarm payloads', async () => {
+  const { buildAndroidSystemClockIntentUrl, generateAlarmIcsContent } = await import(
+    './alarmKeepAlive'
+  );
+  const sampleAlarm = {
+    id: 'alarm_shift_1',
+    time: '07:00',
+    label: 'সকাল শিফট শুরু',
+    isEnabled: true,
+    repeatDays: [6, 0, 1, 2, 3, 4],
+    toneId: 'factory_siren' as const,
+  };
+
+  const intentUrl = buildAndroidSystemClockIntentUrl(sampleAlarm);
+  assert.equal(intentUrl.startsWith('intent:#Intent;action=android.intent.action.SET_ALARM;'), true);
+  assert.equal(intentUrl.includes('i.android.intent.extra.alarm.HOUR=7;'), true);
+  assert.equal(intentUrl.includes('i.android.intent.extra.alarm.MINUTES=0;'), true);
+
+  const ics = generateAlarmIcsContent(sampleAlarm);
+  assert.equal(ics.includes('BEGIN:VCALENDAR'), true);
+  assert.equal(ics.includes('BEGIN:VALARM'), true);
+  assert.equal(ics.includes('RRULE:FREQ=WEEKLY;BYDAY=SA,SU,MO,TU,WE,TH'), true);
+});
+
+

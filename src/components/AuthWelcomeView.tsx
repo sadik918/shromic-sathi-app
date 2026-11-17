@@ -48,11 +48,6 @@ export const AuthWelcomeView: React.FC = () => {
 
   const handleGoogleSignIn = async () => {
     setAuthError('');
-    const termsError = validateSignupTermsAcceptance(authMode, acceptedTerms, lang);
-    if (termsError) {
-      setAuthError(termsError);
-      return;
-    }
     setIsSubmitting(true);
     try {
       await loginWithGoogle(authMode);

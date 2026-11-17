@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   Banknote,
   Calendar,
   CheckCircle2,
@@ -13,6 +14,7 @@ import {
   Sun,
   Wallet,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { DataProvider, useData } from './context/DataContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -34,12 +36,44 @@ const VoiceEntryModal = lazy(() =>
   import('./components/VoiceEntryModal').then((m) => ({ default: m.VoiceEntryModal }))
 );
 import { getCustomToneFromStorage, playAlarmTone, stopAlarmSound } from './utils/alarmAudio';
+import {
+  notifyAlarmRingingViaServiceWorker,
+  startBackgroundAlarmGuard,
+  syncAlarmsWithServiceWorker,
+} from './utils/alarmKeepAlive';
 import { getAccurateBstNow, syncOnlineAccurateTime } from './utils/networkTime';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import type { AlarmItem, MoreSubView, NavTab } from './types';
 import { formatShortMonthName, T } from './utils/i18n';
 import { parseCalendarReminderMeta } from './utils/calendarReminders';
 import { toBengaliDigits } from './utils/subscriptionLogic';
+
+const VALID_NAV_TABS: NavTab[] = [
+  'dashboard',
+  'overtime',
+  'salary',
+  'attendance',
+  'expenses',
+  'more',
+  'admin',
+];
+
+const VALID_MORE_SUBVIEWS: MoreSubView[] = [
+  'profile',
+  'contacts',
+  'factory',
+  'salary',
+  'finance',
+  'personal_loans',
+  'documents',
+  'reports',
+  'reminders',
+  'support',
+  'alarm',
+  'calculator',
+  'subscriptions',
+  'admin_panel',
+];
 
 const AVAILABLE_MONTHS = [
   '2027-03',
@@ -63,31 +97,81 @@ const WorkspaceShell: React.FC = () => {
   const {
     user,
     authReady,
+    cloudDataLoaded,
+    cloudSyncError,
+    clearCloudSyncError,
     isDemoMode,
     needsOnboarding,
     pendingWritesCount,
+    offlinePendingCount,
+    syncOfflineDataToCloud,
+    currentMonthISO,
     selectedMonth,
     setSelectedMonth,
     darkMode,
     toggleDarkMode,
     lang,
     setLang,
+    overtime,
+    attendance,
+    salaryRecords,
+    payments,
+    expenses,
     reminders,
+    alarms: syncedAlarms,
     isAdminUser,
     subscriptionRenewalNotice,
   } = useData();
 
-  const { syncState } = useOnlineStatus(pendingWritesCount);
+  const { syncState } = useOnlineStatus(pendingWritesCount + offlinePendingCount);
+
+  const monthOptions = React.useMemo(() => {
+    const set = new Set<string>(AVAILABLE_MONTHS);
+    if (currentMonthISO) set.add(currentMonthISO);
+    if (selectedMonth) set.add(selectedMonth);
+    for (const o of overtime) if (o.month) set.add(o.month);
+    for (const a of attendance) if (a.month) set.add(a.month);
+    for (const s of salaryRecords) if (s.month) set.add(s.month);
+    for (const p of payments) if (p.month) set.add(p.month);
+    for (const e of expenses) if (e.month) set.add(e.month);
+    return Array.from(set).sort().reverse();
+  }, [
+    currentMonthISO,
+    selectedMonth,
+    overtime,
+    attendance,
+    salaryRecords,
+    payments,
+    expenses,
+  ]);
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('view') === 'admin' || params.get('tab') === 'admin') {
-        return 'admin';
+      const urlTab = params.get('tab') || params.get('view');
+      if (urlTab && VALID_NAV_TABS.includes(urlTab as NavTab)) {
+        return urlTab as NavTab;
+      }
+      const storedTab = localStorage.getItem('shromik_sathi_active_tab');
+      if (storedTab && VALID_NAV_TABS.includes(storedTab as NavTab)) {
+        return storedTab as NavTab;
       }
     }
     return 'dashboard';
   });
-  const [moreSubView, setMoreSubView] = useState<MoreSubView>('profile');
+  const [moreSubView, setMoreSubView] = useState<MoreSubView>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlSub = params.get('sub');
+      if (urlSub && VALID_MORE_SUBVIEWS.includes(urlSub as MoreSubView)) {
+        return urlSub as MoreSubView;
+      }
+      const storedSub = localStorage.getItem('shromik_sathi_more_subview');
+      if (storedSub && VALID_MORE_SUBVIEWS.includes(storedSub as MoreSubView)) {
+        return storedSub as MoreSubView;
+      }
+    }
+    return 'profile';
+  });
   const [moreMenuTrigger, setMoreMenuTrigger] = useState(0);
   const [renewalModalTrigger, setRenewalModalTrigger] = useState(0);
   const [attendanceFocusDate, setAttendanceFocusDate] = useState<string | undefined>(undefined);
@@ -95,6 +179,63 @@ const WorkspaceShell: React.FC = () => {
   const [toastMsg, setToastMsg] = useState('');
   const [ringingAlarm, setRingingAlarm] = useState<AlarmItem | null>(null);
   const [lastTriggeredKey, setLastTriggeredKey] = useState<string>('');
+
+  // Persist current tab and sub-view so reloading (online or offline) stays on the exact same page
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem('shromik_sathi_active_tab', activeTab);
+      localStorage.setItem('shromik_sathi_more_subview', moreSubView);
+    } catch {
+      // ignore storage errors
+    }
+  }, [activeTab, moreSubView]);
+
+  // Keep Service Worker and Background Alarm Guard synchronized with active alarms
+  useEffect(() => {
+    const activeAlarms =
+      user && !isDemoMode
+        ? cloudDataLoaded
+          ? syncedAlarms
+          : loadSavedAlarms(user.uid)
+        : loadSavedAlarms();
+    void syncAlarmsWithServiceWorker(activeAlarms);
+    const hasEnabled = activeAlarms.some((a) => a.isEnabled);
+    if (hasEnabled) {
+      startBackgroundAlarmGuard(() => activeAlarms);
+    }
+  }, [user, isDemoMode, cloudDataLoaded, syncedAlarms]);
+
+  // Listen for Service Worker background alarm triggers & notification button actions
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onSwMessage = async (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'SW_ALARM_TRIGGERED' && data.alarm) {
+        const triggered: AlarmItem = data.alarm;
+        setRingingAlarm(triggered);
+        let customUrl: string | undefined;
+        if (triggered.toneId === 'custom_device' && triggered.customToneId) {
+          const stored = await getCustomToneFromStorage(triggered.customToneId);
+          customUrl = stored?.dataUrl;
+        }
+        playAlarmTone(triggered.toneId, customUrl, true);
+      } else if (data.type === 'SW_NOTIFICATION_ACTION') {
+        if (data.action === 'dismiss') {
+          stopAlarmSound();
+          setRingingAlarm(null);
+        } else if (data.action === 'snooze_5') {
+          stopAlarmSound();
+          setRingingAlarm(null);
+        }
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onSwMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener('message', onSwMessage);
+    };
+  }, []);
 
   // Synchronize online accurate time on startup and periodically
   useEffect(() => {
@@ -115,7 +256,12 @@ const WorkspaceShell: React.FC = () => {
 
       if (triggerKey === lastTriggeredKey) return;
 
-      const alarms = loadSavedAlarms();
+      const alarms =
+        user && !isDemoMode
+          ? cloudDataLoaded
+            ? syncedAlarms
+            : loadSavedAlarms(user.uid)
+          : loadSavedAlarms();
       const matching = alarms.find(
         (a) => a.isEnabled && a.time === currentTimeStr && a.repeatDays.includes(currentDay)
       );
@@ -123,6 +269,7 @@ const WorkspaceShell: React.FC = () => {
       if (matching) {
         setLastTriggeredKey(triggerKey);
         setRingingAlarm(matching);
+        void notifyAlarmRingingViaServiceWorker(matching);
         let customUrl: string | undefined;
         if (matching.toneId === 'custom_device' && matching.customToneId) {
           const stored = await getCustomToneFromStorage(matching.customToneId);
@@ -167,7 +314,7 @@ const WorkspaceShell: React.FC = () => {
 
     const interval = setInterval(checkAlarms, 2500);
     return () => clearInterval(interval);
-  }, [lastTriggeredKey, reminders]);
+  }, [lastTriggeredKey, reminders, user, isDemoMode, cloudDataLoaded, syncedAlarms]);
 
   const handleDismissRingingAlarm = () => {
     stopAlarmSound();
@@ -219,7 +366,7 @@ const WorkspaceShell: React.FC = () => {
     setTimeout(() => setToastMsg(''), 3500);
   };
 
-  if (!authReady && !isDemoMode) {
+  if ((!authReady || (Boolean(user) && !cloudDataLoaded)) && !isDemoMode) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-300 text-sm font-medium">
         <div className="w-16 h-16 rounded-full bg-white p-1 shadow-xs border border-emerald-100 dark:border-slate-700 flex items-center justify-center">
@@ -324,7 +471,14 @@ const WorkspaceShell: React.FC = () => {
               <BrandWordmark size="header" dataTestId="header-brand-wordmark" />
             </a>
 
-            <span
+            <button
+              type="button"
+              data-testid="header-sync-status-btn"
+              onClick={() => {
+                if (typeof navigator === 'undefined' || navigator.onLine) {
+                  void syncOfflineDataToCloud(true);
+                }
+              }}
               title={
                 syncState === 'offline'
                   ? dict.syncOffline
@@ -332,7 +486,14 @@ const WorkspaceShell: React.FC = () => {
                   ? dict.syncPending
                   : dict.syncSynced
               }
-              className="inline-flex items-center justify-center shrink-0"
+              aria-label={
+                syncState === 'offline'
+                  ? dict.syncOffline
+                  : syncState === 'syncing'
+                  ? dict.syncPending
+                  : dict.syncSynced
+              }
+              className="inline-flex items-center justify-center shrink-0 cursor-pointer p-0.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               {syncState === 'offline' ? (
                 <WifiOff className="w-3.5 h-3.5 text-amber-500" />
@@ -341,7 +502,7 @@ const WorkspaceShell: React.FC = () => {
               ) : (
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
               )}
-            </span>
+            </button>
           </div>
 
           {/* Zone 2: Desktop single-line navigation links */}
@@ -384,7 +545,7 @@ const WorkspaceShell: React.FC = () => {
                 onChange={(e) => setSelectedMonth(e.target.value)}
                 className="bg-transparent text-xs font-bold text-emerald-950 dark:text-emerald-200 focus:outline-none cursor-pointer pr-0.5"
               >
-                {AVAILABLE_MONTHS.map((m) => (
+                {monthOptions.map((m) => (
                   <option
                     key={m}
                     value={m}
@@ -576,6 +737,26 @@ const WorkspaceShell: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-5">
+        {cloudSyncError && (
+          <div
+            role="alert"
+            data-testid="cloud-sync-error-banner"
+            className="mb-3 rounded-2xl border border-rose-200 dark:border-rose-800/80 bg-rose-50 dark:bg-rose-950/50 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200 flex items-center justify-between gap-2.5 no-print"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+              <span className="font-medium leading-snug">{cloudSyncError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={clearCloudSyncError}
+              aria-label={lang === 'bn' ? 'সতর্কবার্তা বন্ধ করুন' : 'Dismiss sync error'}
+              className="w-7 h-7 rounded-lg text-rose-600 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 flex items-center justify-center shrink-0 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         {(activeTab === 'dashboard' || (activeTab === 'admin' && !isAdminUser)) && (
           <DashboardView
             onNavigateTab={handleNavigate}

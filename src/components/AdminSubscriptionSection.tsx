@@ -57,6 +57,7 @@ interface AdminSubscriptionSectionProps {
     reason: string;
     metadata?: Record<string, any>;
   }) => any;
+  directoryUsers?: Array<{ uid: string; displayName: string; email: string }>;
 }
 
 export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> = ({
@@ -67,6 +68,7 @@ export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> =
   showToast,
   showError,
   recordAudit,
+  directoryUsers = [],
 }) => {
   const {
     subscriptionConfig,
@@ -1062,6 +1064,31 @@ export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> =
           </div>
 
           <form onSubmit={handleAssignUser} className="space-y-3.5 text-xs">
+            {directoryUsers.length > 0 && (
+              <div>
+                <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  নিবন্ধিত ইউজার তালিকা থেকে বাছাই করুন (ঐচ্ছিক)
+                </label>
+                <select
+                  aria-label="নিবন্ধিত ইউজার নির্বাচন করুন"
+                  data-testid="admin-sub-user-picker"
+                  value={
+                    directoryUsers.some((u) => u.uid === assignTargetUid) ? assignTargetUid : ''
+                  }
+                  onChange={(e) => {
+                    if (e.target.value) setAssignTargetUid(e.target.value);
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-medium"
+                >
+                  <option value="">-- ইউজার নির্বাচন করুন (অথবা নিচে UID/ইমেইল লিখুন) --</option>
+                  {directoryUsers.map((u) => (
+                    <option key={u.uid} value={u.uid}>
+                      {u.displayName} {u.email ? `(${u.email})` : ''} — {u.uid.slice(0, 10)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div>
               <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
                 টার্গেট ইউজারের UID অথবা ইমেইল (বর্তমান ইউজারের জন্য &apos;current&apos;) *

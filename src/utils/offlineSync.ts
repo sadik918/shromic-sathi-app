@@ -10,7 +10,9 @@ export type OfflineSyncCollection =
   | 'reminders'
   | 'loans'
   | 'workplaces'
-  | 'contacts';
+  | 'contacts'
+  | 'alarms'
+  | 'userDirectory';
 
 export interface OfflineMutation {
   key: string;

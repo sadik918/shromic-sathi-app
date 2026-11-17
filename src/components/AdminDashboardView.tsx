@@ -39,11 +39,28 @@ import {
   X,
   Layers,
 } from 'lucide-react';
-import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDocsFromServer,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+} from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../context/DataContext';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { toBengaliDigits } from '../utils/calculations';
+import { formatMonthLabel } from '../utils/i18n';
+import {
+  classifyFirestoreReadError,
+  extractAvailableRegistrationMonths,
+  isOfflineOrTransientFirestoreError,
+  mapFirestoreUserDirectoryDoc,
+  mergeUserDirectories,
+  type ClassifiedFirestoreReadError,
+} from '../utils/cloudSyncHelpers';
 import { AdminSubscriptionSection } from './AdminSubscriptionSection';
 import { AdminSettingsSection } from './AdminSettingsSection';
 import { AdminMonitoringSection } from './AdminMonitoringSection';
@@ -349,18 +366,97 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     });
   };
 
+  // Real-time Firestore listener for `/userDirectory` (Admin-only list rule)
+  const [isRefreshingUsers, setIsRefreshingUsers] = useState(false);
+  const [directorySyncStatus, setDirectorySyncStatus] = useState<
+    'idle' | 'loading' | 'live' | 'cached' | 'error'
+  >('idle');
+  const [directoryReadError, setDirectoryReadError] =
+    useState<ClassifiedFirestoreReadError | null>(null);
+
+  useEffect(() => {
+    if (!isAdminUser || !user || isDemoMode) {
+      setDirectorySyncStatus('idle');
+      setDirectoryReadError(null);
+      return;
+    }
+    setDirectorySyncStatus('loading');
+    const unsub = onSnapshot(
+      collection(db, 'userDirectory'),
+      (snapshot) => {
+        const remoteUsers = snapshot.docs.map((d) =>
+          mapFirestoreUserDirectoryDoc(d.id, d.data() as Record<string, unknown>, todayISO)
+        );
+        setDirectoryReadError(null);
+        setDirectorySyncStatus(snapshot.metadata.fromCache ? 'cached' : 'live');
+        setStore((prev) => {
+          const nextUsers = mergeUserDirectories(remoteUsers, prev.users, {
+            firestoreConnected: true,
+          });
+          const nextState = { ...prev, users: nextUsers };
+          saveAdminStore(nextState);
+          return nextState;
+        });
+      },
+      (err) => {
+        console.error('Admin userDirectory listener error:', err);
+        const classified = classifyFirestoreReadError(err);
+        setDirectoryReadError(classified);
+        setDirectorySyncStatus('error');
+        setErrorBanner(lang === 'bn' ? classified.messageBn : classified.messageEn);
+      }
+    );
+    return () => unsub();
+  }, [isAdminUser, user, isDemoMode, todayISO, lang]);
+
+  const handleRefreshUsersFromCloud = async () => {
+    if (!isAdminUser || !user || isDemoMode) return;
+    setIsRefreshingUsers(true);
+    setDirectorySyncStatus('loading');
+    setDirectoryReadError(null);
+    try {
+      const snapshot = await getDocsFromServer(collection(db, 'userDirectory'));
+      const remoteUsers = snapshot.docs.map((d) =>
+        mapFirestoreUserDirectoryDoc(d.id, d.data() as Record<string, unknown>, todayISO)
+      );
+      setDirectorySyncStatus('live');
+      setDirectoryReadError(null);
+      setStore((prev) => {
+        const nextUsers = mergeUserDirectories(remoteUsers, prev.users, {
+          firestoreConnected: true,
+        });
+        const nextState = { ...prev, users: nextUsers };
+        saveAdminStore(nextState);
+        return nextState;
+      });
+      showToast(
+        lang === 'bn'
+          ? `ক্লাউড থেকে ${toBengaliDigits(remoteUsers.length)} জন ইউজারের তথ্য রিফ্রেশ হয়েছে।`
+          : `Refreshed ${remoteUsers.length} users from Firestore.`
+      );
+    } catch (err) {
+      console.error('Admin userDirectory refresh error:', err);
+      const classified = classifyFirestoreReadError(err);
+      setDirectoryReadError(classified);
+      setDirectorySyncStatus('error');
+      showError(lang === 'bn' ? classified.messageBn : classified.messageEn);
+    } finally {
+      setIsRefreshingUsers(false);
+    }
+  };
+
   // Sync current logged-in worker's non-sensitive directory entry & live feedback into store
   useEffect(() => {
     setStore((prev) => {
       let updated = false;
       let nextUsers = prev.users;
 
-      if (profile && profile.userId) {
+      if (isDemoMode && profile && profile.userId) {
         const sanitizedCurrent = sanitizeUserForAdminDirectory({
           ...profile,
           email: user?.email || 'worker.current@shromiksathi.app',
           emailVerified: user?.emailVerified ?? true,
-          registeredAt: profile.joiningDate || todayISO,
+          registeredAt: todayISO,
           lastSeenDate: todayISO,
         });
         if (!prev.users.some((u) => u.uid === sanitizedCurrent.uid)) {
@@ -383,7 +479,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       saveAdminStore(nextState);
       return nextState;
     });
-  }, [profile, user, feedbackList, todayISO]);
+  }, [isDemoMode, profile, user, feedbackList, todayISO]);
 
   const effectiveRole: AdminRole | null =
     !isAdminUser || simulatedRole === 'ordinary_worker' ? null : simulatedRole;
@@ -482,10 +578,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
   const [userSearch, setUserSearch] = useState('');
   const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'suspended'>('all');
   const [userMonthFilter, setUserMonthFilter] = useState<string>('all');
+  const [userRegistrationPeriod, setUserRegistrationPeriod] = useState<'all' | 'today'>('all');
   const [userPage, setUserPage] = useState(1);
+  const [userPageSize, setUserPageSize] = useState(10);
   const [selectedUserDetail, setSelectedUserDetail] = useState<AdminUserDirectoryEntry | null>(null);
   const [suspendModalUser, setSuspendModalUser] = useState<AdminUserDirectoryEntry | null>(null);
   const [suspendReasonInput, setSuspendReasonInput] = useState('');
+
+  const availableRegistrationMonths = useMemo(
+    () => extractAvailableRegistrationMonths(store.users, todayISO.slice(0, 7)),
+    [store.users, todayISO]
+  );
 
   const paginatedUsers = useMemo(
     () =>
@@ -494,11 +597,43 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
         searchQuery: userSearch,
         statusFilter: userStatusFilter,
         monthFilter: userMonthFilter,
+        registrationPeriod: userRegistrationPeriod,
+        todayISO,
         page: userPage,
-        pageSize: 5,
+        pageSize: userPageSize,
       }),
-    [store.users, userSearch, userStatusFilter, userMonthFilter, userPage]
+    [
+      store.users,
+      userSearch,
+      userStatusFilter,
+      userMonthFilter,
+      userRegistrationPeriod,
+      todayISO,
+      userPage,
+      userPageSize,
+    ]
   );
+
+  useEffect(() => {
+    if (userPage > paginatedUsers.totalPages) {
+      setUserPage(paginatedUsers.totalPages);
+    }
+  }, [userPage, paginatedUsers.totalPages]);
+
+  const hasActiveUserFilters = Boolean(
+    userSearch.trim() ||
+      userStatusFilter !== 'all' ||
+      userMonthFilter !== 'all' ||
+      userRegistrationPeriod !== 'all'
+  );
+
+  const handleResetUserFilters = () => {
+    setUserSearch('');
+    setUserStatusFilter('all');
+    setUserMonthFilter('all');
+    setUserRegistrationPeriod('all');
+    setUserPage(1);
+  };
 
   const handleConfirmUserStatusChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -569,17 +704,49 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     });
 
     if (user && !isDemoMode) {
-      setDoc(
-        doc(db, 'userDirectory', suspendModalUser.uid),
-        {
-          uid: suspendModalUser.uid,
-          displayName: suspendModalUser.displayName,
+      try {
+        await updateDoc(doc(db, 'userDirectory', suspendModalUser.uid), {
           accountStatus: targetStatus,
-          ...(targetStatus === 'suspended' ? { suspensionReason: trimmedReason } : {}),
+          suspensionReason: targetStatus === 'suspended' ? trimmedReason : '',
           updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      ).catch(() => {});
+        });
+      } catch (err: any) {
+        if (err?.code === 'not-found') {
+          try {
+            await setDoc(doc(db, 'userDirectory', suspendModalUser.uid), {
+              uid: suspendModalUser.uid,
+              displayName: (suspendModalUser.displayName || 'Garment Worker').slice(0, 120),
+              email: suspendModalUser.email,
+              registeredAt: suspendModalUser.registeredAt,
+              lastSeenDate: suspendModalUser.lastSeenDate,
+              accountStatus: targetStatus,
+              ...(targetStatus === 'suspended' ? { suspensionReason: trimmedReason } : {}),
+              role: suspendModalUser.role || 'user',
+              authProvider: suspendModalUser.authProvider,
+              language: suspendModalUser.language,
+              emailVerified: suspendModalUser.emailVerified,
+              offlineSyncState: suspendModalUser.offlineSyncState,
+              appVersion: suspendModalUser.appVersion,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          } catch (createErr) {
+            if (!isOfflineOrTransientFirestoreError(createErr)) {
+              showError(
+                lang === 'bn'
+                  ? 'ফায়ারবেসে অ্যাকাউন্ট স্ট্যাটাস সংরক্ষণ করা যায়নি।'
+                  : 'Failed to save user status in Firestore.'
+              );
+            }
+          }
+        } else if (!isOfflineOrTransientFirestoreError(err)) {
+          showError(
+            lang === 'bn'
+              ? 'ফায়ারবেসে অ্যাকাউন্ট স্ট্যাটাস আপডেট করা যায়নি।'
+              : 'Failed to update user status in Firestore.'
+          );
+        }
+      }
     }
 
     setSuspendModalUser(null);
@@ -2160,8 +2327,61 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                 />
               </div>
 
+              {/* Firestore User Directory Sync Status & Read Error Bar */}
+              {!isDemoMode && (
+                <div
+                  data-testid="admin-directory-status-bar"
+                  className={`rounded-2xl border px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs ${
+                    directoryReadError
+                      ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                      : directorySyncStatus === 'live'
+                      ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/70 text-emerald-800 dark:text-emerald-200'
+                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {directoryReadError ? (
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    ) : (
+                      <CheckCircle2
+                        className={`w-4 h-4 shrink-0 ${
+                          directorySyncStatus === 'live' ? 'text-emerald-600' : 'text-slate-400'
+                        }`}
+                      />
+                    )}
+                    <span className="font-semibold">
+                      {directoryReadError
+                        ? `${lang === 'bn' ? directoryReadError.messageBn : directoryReadError.messageEn} [${directoryReadError.code}]`
+                        : directorySyncStatus === 'loading'
+                        ? lang === 'bn'
+                          ? 'ফায়ারবেস থেকে ইউজার ডিরেক্টরি লোড হচ্ছে...'
+                          : 'Loading live user directory from Firestore...'
+                        : directorySyncStatus === 'cached'
+                        ? lang === 'bn'
+                          ? 'অফলাইন/ক্যাশ করা ইউজার তালিকা দেখানো হচ্ছে'
+                          : 'Showing cached user directory (reconnecting...)'
+                        : lang === 'bn'
+                        ? `ক্লাউড ডিরেক্টরি সিঙ্ক সক্রিয় · নতুন আজ ${toBengaliDigits(metrics.newRegistrationsToday)} জন`
+                        : `Live Firestore directory active · ${metrics.newRegistrationsToday} new today`}
+                    </span>
+                  </div>
+
+                  {directoryReadError && (
+                    <button
+                      type="button"
+                      data-testid="admin-directory-retry-btn"
+                      onClick={handleRefreshUsersFromCloud}
+                      disabled={isRefreshingUsers}
+                      className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold cursor-pointer disabled:opacity-60"
+                    >
+                      {lang === 'bn' ? 'আবার চেষ্টা করুন' : 'Retry'}
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Search & Filter Bar — Mobile & Desktop Responsive */}
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 sm:p-4 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 sm:gap-3">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
@@ -2181,7 +2401,25 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                   />
                 </div>
 
-                <div className="grid grid-cols-2 sm:flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="admin-user-today-filter"
+                    onClick={() => {
+                      setUserRegistrationPeriod((prev) => (prev === 'today' ? 'all' : 'today'));
+                      setUserPage(1);
+                    }}
+                    className={`min-h-[40px] px-3 rounded-xl border text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                      userRegistrationPeriod === 'today'
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    {lang === 'bn'
+                      ? `আজকের নতুন (${toBengaliDigits(metrics.newRegistrationsToday)})`
+                      : `New Today (${metrics.newRegistrationsToday})`}
+                  </button>
+
                   <select
                     aria-label="Filter by account status"
                     data-testid="admin-user-status-filter"
@@ -2190,7 +2428,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                       setUserStatusFilter(e.target.value as 'all' | 'active' | 'suspended');
                       setUserPage(1);
                     }}
-                    className="w-full sm:w-auto min-h-[40px] px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                    className="flex-1 sm:flex-none sm:w-auto min-h-[40px] px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
                   >
                     <option value="all">{lang === 'bn' ? 'সকল স্ট্যাটাস' : 'All Statuses'}</option>
                     <option value="active">{lang === 'bn' ? 'সক্রিয়' : 'Active'}</option>
@@ -2199,18 +2437,44 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
 
                   <select
                     aria-label="Filter by registration month"
+                    data-testid="admin-user-month-filter"
                     value={userMonthFilter}
                     onChange={(e) => {
                       setUserMonthFilter(e.target.value);
                       setUserPage(1);
                     }}
-                    className="w-full sm:w-auto min-h-[40px] px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                    className="flex-1 sm:flex-none sm:w-auto min-h-[40px] px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
                   >
                     <option value="all">{lang === 'bn' ? 'সকল মাস' : 'All Months'}</option>
-                    <option value="2026-10">{lang === 'bn' ? 'অক্টোবর ২০২৬' : 'Oct 2026'}</option>
-                    <option value="2026-09">{lang === 'bn' ? 'সেপ্টেম্বর ২০২৬' : 'Sep 2026'}</option>
-                    <option value="2026-08">{lang === 'bn' ? 'আগস্ট ২০২৬' : 'Aug 2026'}</option>
+                    {availableRegistrationMonths.map((monthKey) => (
+                      <option key={monthKey} value={monthKey}>
+                        {formatMonthLabel(monthKey, lang)}
+                      </option>
+                    ))}
                   </select>
+
+                  {hasActiveUserFilters && (
+                    <button
+                      type="button"
+                      data-testid="admin-user-reset-filters"
+                      onClick={handleResetUserFilters}
+                      className="min-h-[40px] px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer shrink-0"
+                    >
+                      {lang === 'bn' ? 'সব দেখুন' : 'Reset'}
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    data-testid="admin-refresh-users-btn"
+                    onClick={handleRefreshUsersFromCloud}
+                    disabled={isRefreshingUsers}
+                    aria-label={lang === 'bn' ? 'ইউজারের তালিকা রিফ্রেশ করুন' : 'Refresh users'}
+                    className="min-h-[40px] px-3 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingUsers ? 'animate-spin' : ''}`} />
+                    <span>{lang === 'bn' ? 'রিফ্রেশ' : 'Refresh'}</span>
+                  </button>
                 </div>
               </div>
 
@@ -2229,9 +2493,16 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                         <div key={u.uid} className="p-3.5 space-y-2.5 text-xs">
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <p className="font-bold text-slate-900 dark:text-white text-sm truncate">
-                                {u.displayName}
-                              </p>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <p className="font-bold text-slate-900 dark:text-white text-sm truncate">
+                                  {u.displayName}
+                                </p>
+                                {u.registeredAt === todayISO && (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200 text-[10px] font-bold shrink-0">
+                                    {lang === 'bn' ? 'নতুন' : 'New'}
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-slate-500 dark:text-slate-400 truncate">{u.email}</p>
                             </div>
                             <span
@@ -2410,7 +2681,19 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                                 }`}
                               >
                                 <td className="py-3 px-4">
-                                  <p className="font-bold text-slate-900 dark:text-white">{u.displayName}</p>
+                                  <div className="flex items-center gap-1.5">
+                                    <p className="font-bold text-slate-900 dark:text-white">{u.displayName}</p>
+                                    {u.registeredAt === todayISO && (
+                                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200 text-[10px] font-bold shrink-0">
+                                        {lang === 'bn' ? 'নতুন' : 'New'}
+                                      </span>
+                                    )}
+                                    {u.role && u.role !== 'user' && (
+                                      <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 dark:bg-indigo-900/70 dark:text-indigo-200 text-[10px] font-bold shrink-0">
+                                        {u.role}
+                                      </span>
+                                    )}
+                                  </div>
                                   <p className="text-slate-500 dark:text-slate-400">{u.email}</p>
                                 </td>
                                 <td className="py-3 px-4 font-mono text-[11px] text-slate-600 dark:text-slate-300">
@@ -2593,12 +2876,30 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
 
                 {/* Pagination Bar */}
                 <div className="px-3.5 sm:px-4 py-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
-                  <span>
+                  <span data-testid="admin-user-pagination-summary">
                     {lang === 'bn'
-                      ? `মোট ${toBengaliDigits(paginatedUsers.totalItems)} জন · পৃষ্ঠা ${toBengaliDigits(paginatedUsers.currentPage)} / ${toBengaliDigits(paginatedUsers.totalPages)}`
-                      : `Total ${paginatedUsers.totalItems} · Page ${paginatedUsers.currentPage}/${paginatedUsers.totalPages}`}
+                      ? `দেখানো হচ্ছে ${toBengaliDigits(paginatedUsers.startIndex)}–${toBengaliDigits(paginatedUsers.endIndex)} / মোট ${toBengaliDigits(paginatedUsers.totalItems)} জন · পৃষ্ঠা ${toBengaliDigits(paginatedUsers.currentPage)} / ${toBengaliDigits(paginatedUsers.totalPages)}`
+                      : `Showing ${paginatedUsers.startIndex}–${paginatedUsers.endIndex} of ${paginatedUsers.totalItems} · Page ${paginatedUsers.currentPage}/${paginatedUsers.totalPages}`}
                   </span>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex items-center gap-1.5">
+                      <span>{lang === 'bn' ? 'প্রতি পৃষ্ঠা:' : 'Per page:'}</span>
+                      <select
+                        aria-label={lang === 'bn' ? 'প্রতি পৃষ্ঠায় ইউজার সংখ্যা' : 'Users per page'}
+                        data-testid="admin-user-page-size"
+                        value={userPageSize}
+                        onChange={(e) => {
+                          setUserPageSize(Number(e.target.value) || 10);
+                          setUserPage(1);
+                        }}
+                        className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                      >
+                        <option value={5}>{lang === 'bn' ? '৫' : '5'}</option>
+                        <option value={10}>{lang === 'bn' ? '১০' : '10'}</option>
+                        <option value={25}>{lang === 'bn' ? '২৫' : '25'}</option>
+                        <option value={50}>{lang === 'bn' ? '৫০' : '50'}</option>
+                      </select>
+                    </label>
                     <button
                       type="button"
                       disabled={paginatedUsers.currentPage <= 1}
@@ -3108,6 +3409,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                 showToast={showToast}
                 showError={showError}
                 recordAudit={recordAudit}
+                directoryUsers={store.users}
               />
             </div>
           )}

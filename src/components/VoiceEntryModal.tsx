@@ -132,15 +132,26 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
     setIsParsing(true);
     setSpeechError('');
 
-    // Immediately compute deterministic local Bengali parse so it's instant & reliable
+    // Immediately compute deterministic local Bengali parse so it works 100% offline with 0ms latency
     const localProposal = parseBengaliVoiceEntryLocal(clean, defaultDate);
 
+    // When offline, skip the network call immediately so voice entry works instantly offline
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setProposal(localProposal);
+      setIsParsing(false);
+      return;
+    }
+
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1800);
       const resp = await fetch('/api/gemini/parse-voice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transcript: clean, currentDate: defaultDate }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (resp.ok) {
         const aiResult = await resp.json();
@@ -203,7 +214,8 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
       const recognition = new SpeechRecognition();
       recognitionRef.current = recognition;
       recognition.lang = lang === 'bn' ? 'bn-BD' : 'en-US';
-      recognition.interimResults = false;
+      recognition.interimResults = true;
+      recognition.continuous = false;
       recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
@@ -216,22 +228,43 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
         if (event?.error === 'not-allowed' || event?.error === 'service-not-allowed') {
           setSpeechError(
             lang === 'bn'
-              ? 'মাইক্রোফোন অনুমতি পাওয়া যায়নি। অনুগ্রহ করে ব্রাউজারে মাইক্রোফোন Allow করুন অথবা নিচে লিখুন।'
-              : 'Microphone access was denied. Please allow microphone access or type below.'
+              ? 'মাইক্রোফোন অনুমতি পাওয়া যায়নি। অনুগ্রহ করে ব্রাউজারে মাইক্রোফোন Allow করুন অথবা নিচের কুইক বাটন/বক্স ব্যবহার করুন।'
+              : 'Microphone access was denied. Please allow microphone access or use quick chips/type below.'
+          );
+          return;
+        }
+        if (event?.error === 'network') {
+          setSpeechError(
+            lang === 'bn'
+              ? 'অফলাইন ভয়েস এন্ট্রি চালু আছে — কিবোর্ডের ভয়েস মাইক 🎤 বা নিচের ১-ট্যাপ বাটন/বক্সে বলুন বা লিখুন।'
+              : 'Offline Voice Entry active — use your keyboard mic or quick buttons/text box below.'
           );
           return;
         }
         setSpeechError(
           lang === 'bn'
-            ? 'কণ্ঠস্বর শোনা যায়নি। আবার মাইক্রোফোন বাটনে ট্যাপ করে বলুন অথবা বাংলায় লিখুন।'
-            : 'Could not capture audio. Please tap the mic button to speak again or type below.'
+            ? 'কণ্ঠস্বর শোনা যায়নি। আবার মাইক্রোফোন বাটনে ট্যাপ করে বলুন অথবা নিচের কুইক বাটন ব্যবহার করুন।'
+            : 'Could not capture audio. Please tap the mic button to speak again or use quick buttons below.'
         );
       };
       recognition.onresult = (event: any) => {
-        const spoken = event.results?.[0]?.[0]?.transcript || '';
-        if (spoken) {
-          setTranscript(spoken);
-          void parseAndShowProposal(spoken);
+        let finalSpoken = '';
+        let interimSpoken = '';
+        for (let i = 0; i < (event.results?.length || 0); i++) {
+          const res = event.results[i];
+          const textPiece = res?.[0]?.transcript || '';
+          if (res?.isFinal) {
+            finalSpoken += textPiece;
+          } else {
+            interimSpoken += textPiece;
+          }
+        }
+        const combined = (finalSpoken || interimSpoken).trim();
+        if (combined) {
+          setTranscript(combined);
+        }
+        if (finalSpoken.trim()) {
+          void parseAndShowProposal(finalSpoken.trim());
         }
       };
       recognition.start();
@@ -242,27 +275,9 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
 
   const handleRequestAndAllowMicrophone = async () => {
     setSpeechError('');
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        // Release the test audio stream tracks immediately so SpeechRecognition can use the mic cleanly
-        stream.getTracks().forEach((track) => track.stop());
-      }
-      persistMicPermissionGranted();
-      startWebSpeech();
-    } catch (err: any) {
-      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
-        setSpeechError(
-          lang === 'bn'
-            ? 'মাইক্রোফোন অনুমতি পাওয়া যায়নি। কথা বলতে চাইলে অনুগ্রহ করে মাইক্রোফোন Allow করুন অথবা নিচে লিখুন।'
-            : 'Microphone permission was not granted. Please allow microphone access to speak, or type below.'
-        );
-        return;
-      }
-      // If getUserMedia is unavailable in this frame/browser, fall back to Web Speech API directly
-      persistMicPermissionGranted();
-      startWebSpeech();
-    }
+    // Start SpeechRecognition directly so Android WebView/Chrome doesn't lock the mic hardware with an extra getUserMedia stream
+    persistMicPermissionGranted();
+    startWebSpeech();
   };
 
   // When the user opens Voice Entry ("কণ্ঠস্বরে এন্ট্রি"), check or request microphone access here (never on initial app load).
@@ -649,12 +664,22 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
             )}
 
             <div>
-              <label
-                htmlFor="voice-transcript-input"
-                className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5"
-              >
-                {lang === 'bn' ? 'অথবা লিখে এন্ট্রি করুন' : 'Or type entry'}
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <label
+                  htmlFor="voice-transcript-input"
+                  className="block text-xs font-semibold text-slate-600 dark:text-slate-300"
+                >
+                  {lang === 'bn'
+                    ? 'কণ্ঠস্বর বা লিখে এন্ট্রি করুন (অফলাইনেও সচল)'
+                    : 'Voice or text entry (works offline)'}
+                </label>
+                <span
+                  data-testid="offline-voice-ready-badge"
+                  className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800 text-[10px] font-bold text-emerald-700 dark:text-emerald-300"
+                >
+                  {lang === 'bn' ? 'অফলাইন ভয়েস রেডি' : 'Offline Ready'}
+                </span>
+              </div>
               <textarea
                 id="voice-transcript-input"
                 data-testid="voice-transcript-input"
@@ -663,11 +688,41 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
                 onChange={(e) => setTranscript(e.target.value)}
                 placeholder={
                   lang === 'bn'
-                    ? 'যেমন: আজ ৩ ঘণ্টা ওভারটাইম করেছি / বাজার ২৫০ টাকা'
-                    : 'e.g., 3 hours overtime today / food expense 250'
+                    ? 'যেমন: আজ ২ ঘণ্টা ওভারটাইম / আজ উপস্থিত / বাজার ২৫০ টাকা'
+                    : 'e.g., 2 hours overtime today / present today / food 250'
                 }
                 className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/80 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-600/30 focus:border-emerald-600 transition-colors"
               />
+
+              {/* 1-Tap Offline Quick Voice Phrases for Garment Workers */}
+              <div className="mt-2.5">
+                <span className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
+                  {lang === 'bn'
+                    ? 'অফলাইন ১-ট্যাপ দ্রুত কমান্ড:'
+                    : 'Offline 1-Tap Quick Commands:'}
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: 'আজ ২ ঘণ্টা ওভারটাইম', cmd: 'আজ ২ ঘণ্টা ওভারটাইম করেছি' },
+                    { label: 'আজ ৩ ঘণ্টা ওভারটাইম', cmd: 'আজ ৩ ঘণ্টা ওভারটাইম করেছি' },
+                    { label: 'আজ উপস্থিত (হাজির)', cmd: 'আজ উপস্থিত হাজিরা' },
+                    { label: 'বাজার ২০০ টাকা', cmd: 'আজ বাজার ২০০ টাকা খরচ' },
+                    { label: 'গাড়ি ভাড়া ৫০ টাকা', cmd: 'আজ রিকশা ভাড়া ৫০ টাকা' },
+                  ].map((chip) => (
+                    <button
+                      key={chip.cmd}
+                      type="button"
+                      onClick={() => {
+                        setTranscript(chip.cmd);
+                        void parseAndShowProposal(chip.cmd);
+                      }}
+                      className="text-[11px] font-semibold px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-emerald-50 dark:bg-slate-800 dark:hover:bg-emerald-950/60 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700 transition-colors cursor-pointer"
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2.5 pt-1">

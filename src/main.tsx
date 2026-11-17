@@ -1,13 +1,30 @@
 import {createRoot} from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
 
-if (import.meta.env.PROD && typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
-      // Handled by VitePWA
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  if (import.meta.env.PROD) {
+    registerSW({
+      immediate: true,
+      onRegisteredSW(_swUrl, registration) {
+        if (registration) {
+          void registration.update();
+        }
+      },
     });
-  });
+  } else {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => {
+        for (const reg of regs) {
+          void reg.unregister();
+        }
+      })
+      .catch(() => {
+        // Ignore SW cleanup errors in dev
+      });
+  }
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

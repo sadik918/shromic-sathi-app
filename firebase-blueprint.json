@@ -7,7 +7,7 @@
       "properties": {
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "fullName": { "type": "string", "minLength": 1, "maxLength": 120 },
-        "photoUrl": { "type": "string", "maxLength": 2000 },
+        "photoUrl": { "type": "string", "maxLength": 150000 },
         "phone": { "type": "string", "maxLength": 30 },
         "address": { "type": "string", "maxLength": 300 },
         "emergencyContact": { "type": "string", "maxLength": 120 },
@@ -25,12 +25,33 @@
         "transportAllowance": { "type": "number" },
         "foodAllowance": { "type": "number" },
         "attendanceBonus": { "type": "number" },
+        "hasAttendanceBonus": { "type": "boolean" },
+        "attendanceBonusAmount": { "type": "number" },
+        "attendanceBonusDays": { "type": "number" },
+        "maxConsecutiveAbsences": { "type": "number" },
+        "bonusCutoffTimeEnabled": { "type": "boolean" },
+        "latePenaltyEnabled": { "type": "boolean" },
+        "maxLateDaysForBonus": { "type": "number" },
         "grossSalary": { "type": "number" },
         "otWageBase": { "type": "string", "enum": ["basic", "gross"], "maxLength": 20 },
         "otDivisor": { "type": "number" },
         "otMultiplier": { "type": "number" },
         "otCalculationMode": { "type": "string", "enum": ["formula", "manual"], "maxLength": 20 },
         "otCustomHourlyRate": { "type": "number" },
+        "shiftPattern": { "type": "string", "enum": ["day", "night", "weekly_rotation", "general"], "maxLength": 30 },
+        "dayShiftStartTime": { "type": "string", "maxLength": 10 },
+        "nightShiftStartTime": { "type": "string", "maxLength": 10 },
+        "rotationStartDate": { "type": "string", "maxLength": 20 },
+        "attendanceWindowStartDay": { "type": "string", "maxLength": 10 },
+        "attendanceWindowEndDay": { "type": "string", "maxLength": 10 },
+        "attendanceWindowStartNight": { "type": "string", "maxLength": 10 },
+        "attendanceWindowEndNight": { "type": "string", "maxLength": 10 },
+        "dayBonusCutoffTime": { "type": "string", "maxLength": 10 },
+        "nightBonusCutoffTime": { "type": "string", "maxLength": 10 },
+        "weeklyHolidayDay": { "type": "string", "enum": ["friday", "saturday", "sunday", "monday", "tuesday", "wednesday", "thursday"], "maxLength": 20 },
+        "expectedPayDay": { "type": "number" },
+        "monthlyBudgetTarget": { "type": "number" },
+        "openingCashBalance": { "type": "number" },
         "effectiveFrom": { "type": "string", "maxLength": 20 },
         "language": { "type": "string", "enum": ["bn", "en"], "maxLength": 10 },
         "privacyConsent": { "type": "boolean" },
@@ -227,6 +248,12 @@
         "monthlyBudget": { "type": "number" },
         "deadline": { "type": "string", "maxLength": 20 },
         "notes": { "type": "string", "maxLength": 250 },
+        "storageLocation": { "type": "string", "maxLength": 120 },
+        "commissionType": { "type": "string", "enum": ["commission", "non_commission"], "maxLength": 30 },
+        "commissionAmount": { "type": "number" },
+        "frequency": { "type": "string", "enum": ["monthly", "weekly", "daily"], "maxLength": 20 },
+        "lastDepositDate": { "type": "string", "maxLength": 20 },
+        "nextDueDate": { "type": "string", "maxLength": 20 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -331,19 +358,33 @@
       "properties": {
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 150 },
-        "lenderType": { "type": "string", "enum": ["factory_advance", "ngo_loan", "cooperative", "family_loan"], "maxLength": 30 },
+        "lenderType": { "type": "string", "maxLength": 30 },
         "totalLoanAmount": { "type": "number" },
         "paidAmount": { "type": "number" },
         "monthlyInstallment": { "type": "number" },
-        "nextDueDate": { "type": "string", "maxLength": 15 },
-        "notes": { "type": "string", "maxLength": 250 },
+        "nextDueDate": { "type": "string", "maxLength": 20 },
+        "notes": { "type": "string", "maxLength": 300 },
+        "personName": { "type": "string", "maxLength": 100 },
+        "contactNumber": { "type": "string", "maxLength": 30 },
+        "direction": { "type": "string", "enum": ["lent", "borrowed"], "maxLength": 20 },
+        "originalAmount": { "type": "number" },
+        "transactionDate": { "type": "string", "maxLength": 20 },
+        "expectedRepaymentDate": { "type": "string", "maxLength": 20 },
+        "reason": { "type": "string", "maxLength": 300 },
+        "repaymentArrangement": { "type": "string", "maxLength": 250 },
+        "installmentAmount": { "type": "number" },
+        "repaymentFrequency": { "type": "string", "enum": ["lump_sum", "weekly", "monthly", "custom"], "maxLength": 30 },
+        "nextInstallmentDate": { "type": "string", "maxLength": 20 },
+        "reminderEnabled": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pending", "partially_repaid", "fully_settled", "overdue", "due_today", "archived"], "maxLength": 30 },
+        "repayments": { "type": "array" },
+        "isArchived": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
         "userId",
         "title",
-        "lenderType",
         "totalLoanAmount",
         "paidAmount",
         "monthlyInstallment",
@@ -358,6 +399,7 @@
       "description": "Garment workplace history and current factory details for a worker.",
       "type": "object",
       "properties": {
+        "id": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "factoryName": { "type": "string", "minLength": 1, "maxLength": 150 },
         "factoryAddress": { "type": "string", "maxLength": 250 },
@@ -366,8 +408,22 @@
         "floorNumber": { "type": "string", "maxLength": 50 },
         "lineNumber": { "type": "string", "maxLength": 50 },
         "designation": { "type": "string", "maxLength": 100 },
+        "employeeId": { "type": "string", "maxLength": 60 },
         "supervisorName": { "type": "string", "maxLength": 100 },
-        "joiningDate": { "type": "string", "maxLength": 15 },
+        "joiningDate": { "type": "string", "maxLength": 20 },
+        "leavingDate": { "type": "string", "maxLength": 20 },
+        "leavingReason": { "type": "string", "maxLength": 200 },
+        "shiftPattern": { "type": "string", "enum": ["day", "night", "weekly_rotation", "general"], "maxLength": 30 },
+        "grossSalary": { "type": "number" },
+        "basicSalary": { "type": "number" },
+        "totalReceivedSalary": { "type": "number" },
+        "totalExpectedSalary": { "type": "number" },
+        "totalOvertimeHours": { "type": "number" },
+        "totalOvertimeEarnings": { "type": "number" },
+        "totalPresentDays": { "type": "number" },
+        "totalAbsentDays": { "type": "number" },
+        "totalLeaveDays": { "type": "number" },
+        "monthsWorked": { "type": "number" },
         "factoryPhone": { "type": "string", "maxLength": 30 },
         "notes": { "type": "string", "maxLength": 300 },
         "isCurrent": { "type": "boolean" },
@@ -381,6 +437,7 @@
       "description": "Personal contacts and workplace phonebook entry for a worker.",
       "type": "object",
       "properties": {
+        "id": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "fullName": { "type": "string", "minLength": 1, "maxLength": 100 },
         "phone": { "type": "string", "minLength": 1, "maxLength": 30 },
@@ -406,6 +463,25 @@
       },
       "required": ["userId", "fullName", "phone", "category", "isFavorite", "isEmergency", "updatedAt"]
     },
+    "AlarmItem": {
+      "title": "AlarmItem",
+      "description": "Worker personal duty/shift alarm configuration synchronized across devices.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "time": { "type": "string", "maxLength": 10 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "isEnabled": { "type": "boolean" },
+        "repeatDays": { "type": "array" },
+        "toneId": { "type": "string", "enum": ["factory_siren", "digital_beep", "gentle_chime", "morning_bell", "custom_device"], "maxLength": 30 },
+        "customToneName": { "type": "string", "maxLength": 120 },
+        "customToneId": { "type": "string", "maxLength": 128 },
+        "lastTriggeredDate": { "type": "string", "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "time", "label", "isEnabled", "repeatDays", "toneId", "createdAt", "updatedAt"]
+    },
     "UserDirectoryEntry": {
       "title": "UserDirectoryEntry",
       "description": "Non-financial, privacy-preserving account status summary for platform administration.",
@@ -413,8 +489,18 @@
       "properties": {
         "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "email": { "type": "string", "maxLength": 150 },
+        "registeredAt": { "type": "string", "maxLength": 25 },
+        "lastSeenDate": { "type": "string", "maxLength": 25 },
         "accountStatus": { "type": "string", "enum": ["active", "suspended"], "maxLength": 20 },
         "suspensionReason": { "type": "string", "maxLength": 300 },
+        "role": { "type": "string", "enum": ["user", "support_moderator", "admin", "super_admin"], "maxLength": 30 },
+        "authProvider": { "type": "string", "enum": ["google.com", "password"], "maxLength": 20 },
+        "language": { "type": "string", "enum": ["bn", "en"], "maxLength": 10 },
+        "emailVerified": { "type": "boolean" },
+        "offlineSyncState": { "type": "string", "enum": ["synced", "pending", "error"], "maxLength": 20 },
+        "appVersion": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "displayName", "accountStatus", "updatedAt"]
@@ -458,6 +544,45 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["enabled", "demoEmail", "maintenanceMessageBn", "updatedAt"]
+    },
+    "SubscriptionConfig": {
+      "title": "SubscriptionConfig",
+      "description": "Platform-wide subscription configuration, plan catalog, coupons, and role matrix.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "renewalWarningDays": { "type": "number" },
+        "plans": { "type": "array" },
+        "coupons": { "type": "array" },
+        "matrix": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "UserSubscription": {
+      "title": "UserSubscription",
+      "description": "Worker subscription status and manual payment upgrade requests.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 150 },
+        "userDisplayName": { "type": "string", "maxLength": 120 },
+        "planId": { "type": "string", "maxLength": 80 },
+        "tier": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["free", "active", "expired", "cancelled", "pending"], "maxLength": 20 },
+        "billingCycle": { "type": "string", "enum": ["monthly", "yearly", "custom", "lifetime"], "maxLength": 20 },
+        "startedAt": { "type": "string", "maxLength": 40 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "expiresAt": { "type": ["string", "null"] },
+        "endDate": { "type": ["string", "null"] },
+        "isComplimentary": { "type": "boolean" },
+        "complimentaryReason": { "type": "string", "maxLength": 300 },
+        "grantedByAdminUid": { "type": "string", "maxLength": 128 },
+        "grantedByAdminEmail": { "type": "string", "maxLength": 150 },
+        "pendingRequest": { "type": "object" },
+        "paymentHistory": { "type": "array" },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["userId", "planId", "status"]
     }
   },
   "firestore": {
@@ -509,6 +634,10 @@
       "schema": "WorkerContact",
       "description": "Personal contacts and workplace phonebook owned by the worker."
     },
+    "/users/{userId}/alarms/{alarmId}": {
+      "schema": "AlarmItem",
+      "description": "Personal duty alarms owned by the worker."
+    },
     "/feedback/{feedbackId}": {
       "schema": "SupportFeedback",
       "description": "Support inquiries and feedback submitted by workers."
@@ -528,6 +657,14 @@
     "/demoConfig/{configId}": {
       "schema": "DemoSystemConfig",
       "description": "Publicly readable, Super Admin writable configuration for the Read-Only Demo Account system."
+    },
+    "/subscriptionConfig/{configId}": {
+      "schema": "SubscriptionConfig",
+      "description": "Subscription configuration and catalog managed by platform administrators."
+    },
+    "/userSubscriptions/{userId}": {
+      "schema": "UserSubscription",
+      "description": "Per-user subscription state and upgrade request workflow."
     }
   }
 }

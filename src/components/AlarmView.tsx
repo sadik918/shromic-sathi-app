@@ -11,6 +11,8 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  ShieldCheck,
+  Smartphone,
   Trash2,
   Upload,
   Volume2,
@@ -25,6 +27,12 @@ import {
   saveCustomToneToStorage,
   stopAlarmSound,
 } from '../utils/alarmAudio';
+import {
+  registerPhoneSystemHardwareAlarm,
+  requestAlarmNotificationPermission,
+  startBackgroundAlarmGuard,
+  syncAlarmsWithServiceWorker,
+} from '../utils/alarmKeepAlive';
 import { formatNumber, toBengaliDigits } from '../utils/calculations';
 import { getAccurateBstNow, syncOnlineAccurateTime } from '../utils/networkTime';
 import { useData } from '../context/DataContext';
@@ -69,22 +77,29 @@ const DEFAULT_ALARMS: AlarmItem[] = [
   },
 ];
 
+function getAlarmStorageKey(uid?: string): string {
+  return uid ? `${STORAGE_KEY}_${uid}` : STORAGE_KEY;
+}
+
 // Load alarms from storage
-export function loadSavedAlarms(): AlarmItem[] {
+export function loadSavedAlarms(uid?: string): AlarmItem[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_ALARMS;
+    const raw = localStorage.getItem(getAlarmStorageKey(uid));
+    if (!raw) return uid ? [] : DEFAULT_ALARMS;
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_ALARMS;
+    if (Array.isArray(parsed)) {
+      return parsed.length > 0 ? parsed : uid ? [] : DEFAULT_ALARMS;
+    }
+    return uid ? [] : DEFAULT_ALARMS;
   } catch {
-    return DEFAULT_ALARMS;
+    return uid ? [] : DEFAULT_ALARMS;
   }
 }
 
 // Save alarms to storage
-export function persistAlarms(alarms: AlarmItem[]): void {
+export function persistAlarms(alarms: AlarmItem[], uid?: string): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(alarms));
+    localStorage.setItem(getAlarmStorageKey(uid), JSON.stringify(alarms));
   } catch {
     // Ignore quota issues
   }
@@ -112,8 +127,25 @@ interface AlarmViewProps {
 }
 
 export const AlarmView: React.FC<AlarmViewProps> = () => {
-  const { isReadOnlyDemo, triggerReadOnlyBlock } = useData();
-  const [alarms, setAlarms] = useState<AlarmItem[]>(() => loadSavedAlarms());
+  const {
+    user,
+    isDemoMode,
+    isReadOnlyDemo,
+    triggerReadOnlyBlock,
+    alarms: syncedAlarms,
+    saveAlarm,
+    deleteAlarm,
+  } = useData();
+  const [localAlarms, setLocalAlarms] = useState<AlarmItem[]>(() => loadSavedAlarms(user?.uid));
+  const isCloudAlarmMode = Boolean(user && !isDemoMode);
+  const alarms = isCloudAlarmMode ? syncedAlarms : localAlarms;
+
+  useEffect(() => {
+    if (isCloudAlarmMode && user?.uid) {
+      persistAlarms(syncedAlarms, user.uid);
+    }
+    void syncAlarmsWithServiceWorker(alarms);
+  }, [alarms, isCloudAlarmMode, syncedAlarms, user?.uid]);
   const [currentTime, setCurrentTime] = useState<string>('');
   const [isOnlineTimeSynced, setIsOnlineTimeSynced] = useState<boolean>(false);
   const [isSyncingTime, setIsSyncingTime] = useState<boolean>(false);
@@ -130,6 +162,18 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
   const [formToneId, setFormToneId] = useState<AlarmToneId>('factory_siren');
   const [formCustomToneName, setFormCustomToneName] = useState('');
   const [formCustomToneDataUrl, setFormCustomToneDataUrl] = useState('');
+  const [syncWithPhoneClock, setSyncWithPhoneClock] = useState(false);
+
+  const handleSetPhoneHardwareAlarm = (alarm: AlarmItem) => {
+    startBackgroundAlarmGuard(() => alarms);
+    void requestAlarmNotificationPermission();
+    const method = registerPhoneSystemHardwareAlarm(alarm);
+    if (method === 'android_intent') {
+      showToast('ফোনের সিস্টেম ঘড়িতে (Clock App) অ্যালার্মটি খুলেছে — সেভ নিশ্চিত করুন');
+    } else {
+      showToast('ফোনের সিস্টেম অ্যালার্ম ফাইল ডাউনলোড হয়েছে (অ্যাপ/ফোন বন্ধ থাকলেও বাজবে)');
+    }
+  };
 
   const handleManualSyncTime = async () => {
     setIsSyncingTime(true);
@@ -190,24 +234,57 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
     setTimeout(() => setToastMsg(''), 3000);
   };
 
-  const handleToggleAlarm = (id: string) => {
+  const handleToggleAlarm = async (id: string) => {
     if (isReadOnlyDemo) {
       triggerReadOnlyBlock();
       return;
     }
-    setAlarms((prev) => {
-      const updated = prev.map((a) => (a.id === id ? { ...a, isEnabled: !a.isEnabled } : a));
+    const target = alarms.find((a) => a.id === id);
+    if (!target) return;
+    const updatedItem: AlarmItem = { ...target, isEnabled: !target.isEnabled };
+
+    if (isCloudAlarmMode) {
+      const nextList = alarms.map((a) => (a.id === id ? updatedItem : a));
+      persistAlarms(nextList, user?.uid);
+      void syncAlarmsWithServiceWorker(nextList);
+      startBackgroundAlarmGuard(() => nextList);
+      void requestAlarmNotificationPermission();
+      try {
+        await saveAlarm(updatedItem);
+      } catch {
+        showToast('অ্যালার্ম সংরক্ষণ করা যায়নি, আবার চেষ্টা করুন');
+      }
+      return;
+    }
+
+    setLocalAlarms((prev) => {
+      const updated = prev.map((a) => (a.id === id ? updatedItem : a));
       persistAlarms(updated);
+      void syncAlarmsWithServiceWorker(updated);
+      startBackgroundAlarmGuard(() => updated);
+      void requestAlarmNotificationPermission();
       return updated;
     });
   };
 
-  const handleDeleteAlarm = (id: string) => {
+  const handleDeleteAlarm = async (id: string) => {
     if (isReadOnlyDemo) {
       triggerReadOnlyBlock();
       return;
     }
-    setAlarms((prev) => {
+    if (isCloudAlarmMode) {
+      const nextList = alarms.filter((a) => a.id !== id);
+      persistAlarms(nextList, user?.uid);
+      try {
+        await deleteAlarm(id);
+        showToast('অ্যালার্ম মুছে ফেলা হয়েছে');
+      } catch {
+        showToast('অ্যালার্ম মুছে ফেলা যায়নি, আবার চেষ্টা করুন');
+      }
+      return;
+    }
+
+    setLocalAlarms((prev) => {
       const updated = prev.filter((a) => a.id !== id);
       persistAlarms(updated);
       return updated;
@@ -320,16 +397,44 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
       customToneId: formToneId === 'custom_device' ? customToneId : undefined,
     };
 
-    setAlarms((prev) => {
+    startBackgroundAlarmGuard(() => [...alarms, newAlarm]);
+    void requestAlarmNotificationPermission();
+
+    if (isCloudAlarmMode) {
+      const nextList = editingAlarm
+        ? alarms.map((a) => (a.id === editingAlarm.id ? newAlarm : a))
+        : [...alarms, newAlarm];
+      persistAlarms(nextList, user?.uid);
+      void syncAlarmsWithServiceWorker(nextList);
+      try {
+        await saveAlarm(newAlarm);
+        setIsModalOpen(false);
+        if (syncWithPhoneClock) {
+          handleSetPhoneHardwareAlarm(newAlarm);
+        } else {
+          showToast(editingAlarm ? 'অ্যালার্ম আপডেট করা হয়েছে' : 'নতুন অ্যালার্ম যুক্ত করা হয়েছে');
+        }
+      } catch {
+        showToast('অ্যালার্ম সেভ করা যায়নি, আবার চেষ্টা করুন');
+      }
+      return;
+    }
+
+    setLocalAlarms((prev) => {
       const updated = editingAlarm
         ? prev.map((a) => (a.id === editingAlarm.id ? newAlarm : a))
         : [...prev, newAlarm];
       persistAlarms(updated);
+      void syncAlarmsWithServiceWorker(updated);
       return updated;
     });
 
     setIsModalOpen(false);
-    showToast(editingAlarm ? 'অ্যালার্ম আপডেট করা হয়েছে' : 'নতুন অ্যালার্ম যুক্ত করা হয়েছে');
+    if (syncWithPhoneClock) {
+      handleSetPhoneHardwareAlarm(newAlarm);
+    } else {
+      showToast(editingAlarm ? 'অ্যালার্ম আপডেট করা হয়েছে' : 'নতুন অ্যালার্ম যুক্ত করা হয়েছে');
+    }
   };
 
   const toggleRepeatDay = (day: number) => {
@@ -376,6 +481,13 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
                 {isOnlineTimeSynced
                   ? 'অনলাইন সঠিক সময় (গুগল সিঙ্কড)'
                   : 'বাংলাদেশ মান সময় (BST)'}
+              </span>
+              <span
+                data-testid="background-alarm-guard-badge"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-400/20 text-emerald-100 border border-emerald-300/30"
+              >
+                <ShieldCheck className="w-3 h-3 text-emerald-200" />
+                <span>ব্যাকগ্রাউন্ড ও অফলাইন অ্যালার্ম সক্রিয়</span>
               </span>
             </div>
           </div>
@@ -522,7 +634,19 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
                     <span className="truncate">{toneDisplay}</span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+                    {/* Native Phone System Clock Bridge (Rings even if app is closed or phone is powered off) */}
+                    <button
+                      type="button"
+                      data-testid={`system-clock-alarm-${alarm.id}`}
+                      onClick={() => handleSetPhoneHardwareAlarm(alarm)}
+                      title="ফোনের ঘড়িতে সেট করুন (অ্যাপ বা ফোন বন্ধ থাকলেও বাজবে)"
+                      className="min-h-[30px] px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/70 border border-emerald-200/80 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-[11px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Smartphone className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                      <span>ফোনের ঘড়িতে সেট</span>
+                    </button>
+
                     {/* Test Audio Button */}
                     <button
                       type="button"
@@ -852,6 +976,25 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
                   })}
                 </div>
               </div>
+
+              {/* 5. Optional: Sync with Native Phone Clock for Power-Off / Force-Closed Reliability */}
+              <label className="flex items-start gap-2.5 p-3 rounded-2xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/60 dark:bg-emerald-950/40 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="sync-phone-clock-checkbox"
+                  checked={syncWithPhoneClock}
+                  onChange={(e) => setSyncWithPhoneClock(e.target.checked)}
+                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
+                />
+                <div className="text-xs">
+                  <span className="font-bold text-emerald-950 dark:text-emerald-200 block">
+                    ফোনের সিস্টেম ঘড়িতেও যুক্ত করুন (অ্যাপ বা ফোন বন্ধ থাকলেও বাজবে)
+                  </span>
+                  <span className="text-[11px] text-emerald-800/90 dark:text-emerald-300/80 block mt-0.5">
+                    অ্যান্ড্রয়েড ফোনের নিজস্ব Clock অ্যাপে অ্যালার্মটি যুক্ত হবে, ফলে ব্যাকগ্রাউন্ড থেকে অ্যাপ কেটে দিলে বা ফোন বন্ধ থাকলেও সঠিক সময়ে বাজবে।
+                  </span>
+                </div>
+              </label>
 
               {/* Form Buttons */}
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">

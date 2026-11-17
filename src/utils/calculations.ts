@@ -1040,8 +1040,60 @@ export function validateVaultFile(fileName: string, fileType: string, fileSize: 
   return { valid: true };
 }
 
-/**
- * Deterministic Bengali & English voice/text parser so speech entry works reliably
+const BENGALI_SPOKEN_NUMBERS: Array<[RegExp, number]> = [
+  [/দেড়|দেড়/, 1.5],
+  [/আড়াই|আড়াই/, 2.5],
+  [/সাড়ে\s*তিন|সাড়ে\s*তিন/, 3.5],
+  [/সাড়ে\s*চার|সাড়ে\s*চার/, 4.5],
+  [/সাড়ে\s*পাঁচ|সাড়ে\s*পাঁচ/, 5.5],
+  [/পনেরো\s*হাজার|পনের\s*হাজার/, 15000],
+  [/বারো\s*হাজার/, 12000],
+  [/দশ\s*হাজার/, 10000],
+  [/পাঁচ\s*হাজার/, 5000],
+  [/চার\s*হাজার/, 4000],
+  [/তিন\s*হাজার/, 3000],
+  [/দুই\s*হাজার/, 2000],
+  [/এক\s*হাজার|হাজার\s*টাকা/, 1000],
+  [/পাঁচশো|পাঁচশ|পাঁচ\s*শত/, 500],
+  [/চারশো|চারশ|চার\s*শত/, 400],
+  [/তিনশো|তিনশ|তিন\s*শত/, 300],
+  [/দুইশো|দুইশ|দুই\s*শত/, 200],
+  [/একশো|একশ|এক\s*শত/, 100],
+  [/পঞ্চাশ/, 50],
+  [/ত্রিশ/, 30],
+  [/বিশ|কুড়ি|কুড়ি/, 20],
+  [/পনেরো|পনের/, 15],
+  [/বারো|বার/, 12],
+  [/এগারো|এগার/, 11],
+  [/দশ|ten/, 10],
+  [/নয়|নয়|nine/, 9],
+  [/আট|eight/, 8],
+  [/সাত|seven/, 7],
+  [/ছয়|ছয়|six/, 6],
+  [/পাঁচ|পাচ|five/, 5],
+  [/চার|four/, 4],
+  [/তিন|three/, 3],
+  [/দুই|দু|two/, 2],
+  [/এক|one/, 1],
+];
+
+function extractSpokenOrDigitNumber(text: string): number {
+  const numMatch = text.match(/(\d+(?:\.\d+)?)/);
+  if (numMatch) {
+    return Number(numMatch[1]);
+  }
+  const hasHalfPrefix = /সাড়ে|সাড়ে/.test(text);
+  for (const [pattern, val] of BENGALI_SPOKEN_NUMBERS) {
+    if (pattern.test(text)) {
+      if (hasHalfPrefix && val >= 1 && val <= 12 && Number.isInteger(val)) {
+        return val + 0.5;
+      }
+      return val;
+    }
+  }
+  return 0;
+}
+
 /**
  * Deterministic Bengali & English voice/text parser so speech entry works reliably
  * even offline or without external AI latency. Automatically detects entry type AND date.
@@ -1078,9 +1130,8 @@ export function parseBengaliVoiceEntryLocal(
     resolvedDate = defaultDate;
   }
 
-  // Extract first number after removing date prefix (supports decimals like 2.5)
-  const numMatch = cleanedForNum.match(/(\d+(?:\.\d+)?)/);
-  const extractedNum = numMatch ? Number(numMatch[1]) : 0;
+  // Extract first number after removing date prefix (supports digits, decimals like 2.5, and Bengali spoken words)
+  const extractedNum = extractSpokenOrDigitNumber(cleanedForNum);
 
   // 2. Detect Overtime
   if (
