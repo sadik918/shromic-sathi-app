@@ -389,12 +389,18 @@ service cloud.firestore {
         data.userId == request.auth.uid &&
         data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
         data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 30 &&
-        data.category is string && data.category in ['supervisor', 'line_chief', 'production_manager', 'hr_admin', 'security', 'coworker', 'emergency', 'other'] &&
+        data.category is string && data.category in ['supervisor', 'line_chief', 'production_manager', 'hr_admin', 'security', 'coworker', 'emergency', 'other', 'google'] &&
         (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 100000)) &&
+        (!('customCategory' in data) || (data.customCategory is string && data.customCategory.size() <= 100)) &&
         (!('designation' in data) || (data.designation is string && data.designation.size() <= 100)) &&
         (!('department' in data) || (data.department is string && data.department.size() <= 100)) &&
         (!('lineNumber' in data) || (data.lineNumber is string && data.lineNumber.size() <= 50)) &&
         (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+        (!('isPinned' in data) || data.isPinned is bool) &&
+        (!('source' in data) || (data.source is string && data.source in ['google', 'manual'])) &&
+        (!('googleResourceName' in data) || (data.googleResourceName is string && data.googleResourceName.size() <= 200)) &&
+        (!('isSyncedToGoogle' in data) || data.isSyncedToGoogle is bool) &&
         data.isFavorite is bool &&
         data.isEmergency is bool &&
         data.updatedAt is timestamp;

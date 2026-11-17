@@ -6,6 +6,8 @@ import {
   createUserWithEmailAndPassword,
   updateProfile as updateFirebaseAuthProfile,
   updatePassword,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
   signOut,
   deleteUser,
   type User,
@@ -85,6 +87,10 @@ import {
   type OfflineSyncCollection,
 } from '../utils/offlineSync';
 import {
+  deleteContactPhotoFromDevice,
+  saveContactPhotoToDevice,
+} from '../utils/deviceMediaStore';
+import {
   DEFAULT_GLOBAL_SUBSCRIPTION_CONFIG,
   DEFAULT_SUBSCRIPTION_PLANS,
   DEFAULT_COUPON_CODES,
@@ -107,6 +113,7 @@ import {
   type SubscriptionRenewalNotice,
   type UserSubscriptionRecord,
 } from '../utils/subscriptionLogic';
+import { resolveWorkerDisplayName } from '../utils/homeAnalytics';
 
 interface DataContextValue {
   user: User | null;
@@ -153,7 +160,7 @@ interface DataContextValue {
   loginWithGoogle: (mode?: 'signin' | 'signup') => Promise<void>;
   loginWithCredentials: (identifier: string, password: string) => Promise<void>;
   signUpWithCredentials: (fullName: string, identifier: string, password: string) => Promise<void>;
-  changeUserPassword: (newPassword: string) => Promise<void>;
+  changeUserPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   needsOnboarding: boolean;
   isManualSetupMode: boolean;
   isProfileSetupIncomplete: boolean;
@@ -196,6 +203,7 @@ interface DataContextValue {
   submitFeedback: (category: FeedbackCategory, message: string) => Promise<void>;
   resolveFeedback: (id: string) => Promise<void>;
   importBackupNonDestructive: (bundle: BackupBundle) => Promise<{ added: number; skipped: number }>;
+  seedSampleDemoData: (options?: { silent?: boolean }) => Promise<{ added: number }>;
   subscriptionConfig: GlobalSubscriptionConfig;
   subscriptionPlans: SubscriptionPlan[];
   userSubscription: UserSubscriptionRecord | null;
@@ -257,6 +265,29 @@ function makeStableId(prefix: string): string {
 function logFirestoreWarning(err: unknown, operationType: OperationType, path: string) {
   const msg = err instanceof Error ? err.message : String(err);
   console.warn(`[Firestore Sync Notice] ${operationType} on ${path}: ${msg}`);
+}
+
+function lookupLocalAccountFullName(emailOrId?: string | null): string | null {
+  if (typeof window === 'undefined') return null;
+  const clean = (emailOrId || '').trim().toLowerCase();
+  if (!clean) return null;
+  try {
+    const raw = localStorage.getItem('shromik_sathi_local_accounts');
+    if (!raw) return null;
+    const list = JSON.parse(raw) as Array<{
+      identifier?: string;
+      email?: string;
+      fullName?: string;
+    }>;
+    const matched = list.find(
+      (a) =>
+        (a.email && a.email.toLowerCase() === clean) ||
+        (a.identifier && a.identifier.toLowerCase() === clean)
+    );
+    return matched?.fullName?.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 export function defaultWorkerProfile(uid: string, displayName?: string | null): WorkerProfile {
@@ -427,6 +458,29 @@ function recordMirrorPatchInOfflineQueue(
   }
 }
 
+function compactMirrorForQuota(mirror: UserLocalMirror): UserLocalMirror {
+  return {
+    ...mirror,
+    profile: mirror.profile
+      ? {
+          ...mirror.profile,
+          photoUrl:
+            mirror.profile.photoUrl && mirror.profile.photoUrl.length > 32768
+              ? ''
+              : mirror.profile.photoUrl,
+        }
+      : null,
+    documents: (mirror.documents || []).map((d) => ({
+      ...d,
+      fileData: d.fileData && d.fileData.length > 16384 ? '' : d.fileData,
+    })),
+    contacts: (mirror.contacts || []).map((c) => ({
+      ...c,
+      photoUrl: c.photoUrl && c.photoUrl.length > 8192 ? '' : c.photoUrl,
+    })),
+  };
+}
+
 function saveUserMirror(
   uid: string,
   patch: Partial<UserLocalMirror>,
@@ -438,12 +492,22 @@ function saveUserMirror(
       recordMirrorPatchInOfflineQueue(uid, current, patch);
     }
     const updated = { ...current, ...patch };
-    localStorage.setItem(`shromik_sathi_cloud_mirror_${uid}`, JSON.stringify(updated));
+    const storageKey = `shromik_sathi_cloud_mirror_${uid}`;
+    const serialized = JSON.stringify(updated);
+    if (serialized.length > 1_500_000) {
+      localStorage.setItem(storageKey, JSON.stringify(compactMirrorForQuota(updated)));
+    } else {
+      try {
+        localStorage.setItem(storageKey, serialized);
+      } catch {
+        localStorage.setItem(storageKey, JSON.stringify(compactMirrorForQuota(updated)));
+      }
+    }
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('shromik-sathi-offline-queue-updated'));
     }
   } catch {
-    // ignore quota errors
+    // ignore quota errors if browser storage is completely restricted
   }
 }
 
@@ -459,17 +523,45 @@ function mergeById<T extends { id: string }>(localItems: T[], remoteItems: T[]):
 }
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<User | null>(() => auth.currentUser);
+  const [authReady, setAuthReady] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      if (auth.currentUser) return true;
+      const activeEmail = (localStorage.getItem('shromik_sathi_active_email') || '').trim();
+      if (
+        localStorage.getItem('shromik_sathi_demo_active') === '1' &&
+        activeEmail &&
+        !isDemoAccountEmail(activeEmail) &&
+        localStorage.getItem('shromik_sathi_readonly_demo') !== '1'
+      ) {
+        return true;
+      }
+      const hasFirebaseCachedKey = Object.keys(localStorage).some((k) =>
+        k.startsWith('firebase:authUser:')
+      );
+      if (!hasFirebaseCachedKey) return true;
+    }
+    return false;
+  });
 
-  // Require login by default unless authenticated locally
+  // Require login by default unless authenticated with a real personal account locally
   const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
+      const activeEmail = (localStorage.getItem('shromik_sathi_active_email') || '').trim();
+      if (
+        localStorage.getItem('shromik_sathi_readonly_demo') === '1' ||
+        isDemoAccountEmail(activeEmail)
+      ) {
+        localStorage.removeItem('shromik_sathi_readonly_demo');
+        localStorage.removeItem('shromik_sathi_active_email');
+        localStorage.setItem('shromik_sathi_demo_active', '0');
+        return false;
+      }
       const params = new URLSearchParams(window.location.search);
       if (params.get('onboarding') === '1') {
         return true;
       }
-      if (localStorage.getItem('shromik_sathi_demo_active') === '1') {
+      if (localStorage.getItem('shromik_sathi_demo_active') === '1' && activeEmail) {
         return true;
       }
       return false;
@@ -477,32 +569,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return false;
   });
 
-  const [isReadOnlyDemo, setIsReadOnlyDemo] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('onboarding') === '1') {
-        return false;
-      }
-      const activeEmail = (localStorage.getItem('shromik_sathi_active_email') || '')
-        .trim()
-        .toLowerCase();
-      return (
-        localStorage.getItem('shromik_sathi_readonly_demo') === '1' ||
-        activeEmail === PUBLIC_DEMO_EMAIL
-      );
-    }
-    return false;
-  });
+  const [isReadOnlyDemo, setIsReadOnlyDemo] = useState<boolean>(false);
 
-  const [publicDemoConfig, setPublicDemoConfig] = useState<PublicDemoSystemConfig>(() =>
-    loadPublicDemoConfig()
-  );
+  const [publicDemoConfig, setPublicDemoConfig] = useState<PublicDemoSystemConfig>(() => ({
+    ...loadPublicDemoConfig(),
+    enabled: false,
+  }));
   const [readOnlyBlockedNotice, setReadOnlyBlockedNotice] = useState<string>('');
   const [initialAuthMode, setInitialAuthMode] = useState<'signin' | 'signup'>('signin');
 
   const [activeLocalEmail, setActiveLocalEmail] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('shromik_sathi_active_email') || '';
+      const stored = (localStorage.getItem('shromik_sathi_active_email') || '').trim();
+      if (stored && !isDemoAccountEmail(stored)) {
+        return stored;
+      }
     }
     return '';
   });
@@ -514,7 +595,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return loadUserStore(active);
       }
     }
-    return loadDemoState();
+    return createEmptyUserStore('guest@shromiksathi.app', 'শ্রমিক');
   });
 
   // Keep local user store in sync when active email changes
@@ -708,6 +789,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   const profileEnsuredRef = useRef<string | null>(null);
+  const inFlightSyncKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (darkMode) {
@@ -744,6 +826,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updatePublicDemoConfig = useCallback((patch: Partial<PublicDemoSystemConfig>) => {
     const next = savePublicDemoConfig(patch);
     setPublicDemoConfig(next);
+    setDoc(
+      doc(db, 'demoConfig', 'global'),
+      {
+        enabled: Boolean(next.enabled),
+        demoEmail: next.demoEmail || PUBLIC_DEMO_EMAIL,
+        maintenanceMessageBn:
+          (next.maintenanceMessageBn || 'ডেমো মোড বর্তমানে বন্ধ আছে।').slice(0, 400),
+        maintenanceMessageEn:
+          (next.maintenanceMessageEn || 'Public Demo Mode is disabled.').slice(0, 400),
+        lastResetAt: (next.lastResetAt || '').slice(0, 40),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch((err) => logFirestoreWarning(err, OperationType.WRITE, 'demoConfig/global'));
   }, []);
 
   const clearInitialAuthMode = useCallback(() => {
@@ -751,24 +847,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const enterDemoMode = useCallback(() => {
-    const check = validateDemoLoginAttempt({
-      identifier: PUBLIC_DEMO_EMAIL,
-      viaQuickButton: true,
-    });
-    if (!check.allowed) {
-      throw new Error(check.errorBn || 'ডেমো মোড বর্তমানে বন্ধ আছে।');
-    }
-    // Always load pristine sample data when entering public read-only demo mode
-    const freshSample = getInitialDemoState();
-    setDemoState(freshSample);
-    const updatedStats = recordDemoSessionStart();
-    setPublicDemoConfig(updatedStats);
-    setActiveLocalEmail(PUBLIC_DEMO_EMAIL);
-    localStorage.setItem('shromik_sathi_active_email', PUBLIC_DEMO_EMAIL);
-    localStorage.setItem('shromik_sathi_readonly_demo', '1');
-    setIsReadOnlyDemo(true);
-    setIsDemoMode(true);
-    localStorage.setItem('shromik_sathi_demo_active', '1');
+    // Public Demo Mode has been removed
+    setIsReadOnlyDemo(false);
+    setIsDemoMode(false);
   }, []);
 
   const exitDemoMode = useCallback(() => {
@@ -825,7 +906,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const fallbackTimer = window.setTimeout(() => {
       setAuthReady(true);
-    }, 1200);
+    }, 150);
     const unsub = onAuthStateChanged(auth, (u) => {
       window.clearTimeout(fallbackTimer);
       setUser(u);
@@ -909,7 +990,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             (pendingProfileMut.payload as WorkerProfile | undefined) ||
             defaultWorkerProfile(uid, user.displayName);
           setFbProfile(localProf);
-          if (typeof navigator === 'undefined' || navigator.onLine) {
+          if (
+            !snap.metadata.hasPendingWrites &&
+            (typeof navigator === 'undefined' || navigator.onLine) &&
+            !inFlightSyncKeysRef.current.has('profile:profile')
+          ) {
+            inFlightSyncKeysRef.current.add('profile:profile');
             try {
               const { createdAt: _c, updatedAt: _u, ...cleanFields } = localProf;
               await setDoc(
@@ -926,6 +1012,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               refreshOfflinePendingCount();
             } catch (err) {
               logFirestoreWarning(err, OperationType.UPDATE, `users/${uid}`);
+            } finally {
+              inFlightSyncKeysRef.current.delete('profile:profile');
             }
           }
           return;
@@ -996,58 +1084,74 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         (snap) => {
           const remoteList = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
           const currentQueue = loadOfflineQueue(uid);
-          setter((prevLocal) => {
-            const { mergedItems, itemsToUploadToCloud, idsToDeleteFromCloud } =
-              reconcileCollectionWithOfflineState({
-                collection: name,
-                localItems: prevLocal,
-                remoteItems: remoteList,
-                queue: currentQueue,
-              });
-            saveUserMirror(uid, { [name]: mergedItems }, { fromRemoteSnapshot: true });
-
-            if (
-              (typeof navigator === 'undefined' || navigator.onLine) &&
-              (itemsToUploadToCloud.length > 0 || idsToDeleteFromCloud.length > 0)
-            ) {
-              void (async () => {
-                await ensureParentProfileInFirestore(user);
-                for (const item of itemsToUploadToCloud) {
-                  if (!item?.id) continue;
-                  try {
-                    const { createdAt: _c, updatedAt: _u, ...cleanItem } = item as Record<
-                      string,
-                      any
-                    >;
-                    await setDoc(
-                      doc(db, 'users', uid, name, item.id),
-                      {
-                        ...cleanItem,
-                        id: item.id,
-                        userId: uid,
-                        updatedAt: serverTimestamp(),
-                      },
-                      { merge: true }
-                    );
-                    clearOfflineMutation(uid, name, item.id);
-                  } catch (err) {
-                    logFirestoreWarning(err, OperationType.WRITE, `users/${uid}/${name}/${item.id}`);
-                  }
-                }
-                for (const delId of idsToDeleteFromCloud) {
-                  try {
-                    await deleteDoc(doc(db, 'users', uid, name, delId));
-                    clearOfflineMutation(uid, name, delId);
-                  } catch (err) {
-                    logFirestoreWarning(err, OperationType.DELETE, `users/${uid}/${name}/${delId}`);
-                  }
-                }
-                refreshOfflinePendingCount();
-              })();
+          const localMirrorList = (loadUserMirror(uid)[name] as Array<{ id: string }>) || [];
+          const { mergedItems, itemsToUploadToCloud, idsToDeleteFromCloud } =
+            reconcileCollectionWithOfflineState({
+              collection: name,
+              localItems: localMirrorList,
+              remoteItems: remoteList,
+              queue: currentQueue,
+            });
+          saveUserMirror(uid, { [name]: mergedItems }, { fromRemoteSnapshot: true });
+          setter(mergedItems);
+          if (name === 'contacts') {
+            for (const c of mergedItems as WorkerContact[]) {
+              if (c?.id && c?.photoUrl) {
+                void saveContactPhotoToDevice(c.id, c.photoUrl);
+              }
             }
+          }
 
-            return mergedItems;
-          });
+          if (
+            !snap.metadata.hasPendingWrites &&
+            (typeof navigator === 'undefined' || navigator.onLine) &&
+            (itemsToUploadToCloud.length > 0 || idsToDeleteFromCloud.length > 0)
+          ) {
+            void (async () => {
+              await ensureParentProfileInFirestore(user);
+              for (const item of itemsToUploadToCloud) {
+                if (!item?.id) continue;
+                const syncKey = `${name}:${item.id}`;
+                if (inFlightSyncKeysRef.current.has(syncKey)) continue;
+                inFlightSyncKeysRef.current.add(syncKey);
+                try {
+                  const { createdAt: _c, updatedAt: _u, ...cleanItem } = item as Record<
+                    string,
+                    any
+                  >;
+                  await setDoc(
+                    doc(db, 'users', uid, name, item.id),
+                    {
+                      ...cleanItem,
+                      id: item.id,
+                      userId: uid,
+                      updatedAt: serverTimestamp(),
+                    },
+                    { merge: true }
+                  );
+                  clearOfflineMutation(uid, name, item.id);
+                } catch (err) {
+                  logFirestoreWarning(err, OperationType.WRITE, `users/${uid}/${name}/${item.id}`);
+                } finally {
+                  inFlightSyncKeysRef.current.delete(syncKey);
+                }
+              }
+              for (const delId of idsToDeleteFromCloud) {
+                const syncKey = `${name}:${delId}`;
+                if (inFlightSyncKeysRef.current.has(syncKey)) continue;
+                inFlightSyncKeysRef.current.add(syncKey);
+                try {
+                  await deleteDoc(doc(db, 'users', uid, name, delId));
+                  clearOfflineMutation(uid, name, delId);
+                } catch (err) {
+                  logFirestoreWarning(err, OperationType.DELETE, `users/${uid}/${name}/${delId}`);
+                } finally {
+                  inFlightSyncKeysRef.current.delete(syncKey);
+                }
+              }
+              refreshOfflinePendingCount();
+            })();
+          }
         },
         (err) => logFirestoreWarning(err, OperationType.LIST, `users/${uid}/${name}`)
       );
@@ -1081,11 +1185,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [authReady, user, isDemoMode, ensureParentProfileInFirestore, refreshOfflinePendingCount]);
 
-  const activeProfile: WorkerProfile = isDemoMode
+  const rawActiveProfile: WorkerProfile = isDemoMode
     ? demoState.profile
     : fbProfile || defaultWorkerProfile(user?.uid || 'guest', user?.displayName);
 
-  const lang: Language = langState || activeProfile.language || 'bn';
+  const effectiveEmail = user?.email || activeLocalEmail || '';
+  const localAccountFullName = isReadOnlyDemo
+    ? null
+    : lookupLocalAccountFullName(effectiveEmail);
+  const resolvedLang: Language =
+    langState || rawActiveProfile.language || 'bn';
+  const resolvedFullName = isReadOnlyDemo
+    ? rawActiveProfile.fullName
+    : resolveWorkerDisplayName({
+        profileFullName: rawActiveProfile.fullName,
+        authDisplayName: user?.displayName,
+        localAccountName: localAccountFullName,
+        email: effectiveEmail,
+        lang: resolvedLang,
+      });
+
+  const activeProfile: WorkerProfile =
+    resolvedFullName && resolvedFullName !== rawActiveProfile.fullName
+      ? { ...rawActiveProfile, fullName: resolvedFullName }
+      : rawActiveProfile;
+
+  const lang: Language = resolvedLang;
 
   useEffect(() => {
     if (activeProfile?.language && activeProfile.language !== langState) {
@@ -1097,10 +1222,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const withPendingTracking = async <T,>(fn: () => Promise<T>): Promise<T> => {
     setPendingWritesCount((c) => c + 1);
+    let settled = false;
+    const settleCounter = () => {
+      if (!settled) {
+        settled = true;
+        setPendingWritesCount((c) => Math.max(0, c - 1));
+      }
+    };
+    const safetyTimer =
+      typeof window !== 'undefined' ? window.setTimeout(settleCounter, 1200) : undefined;
     try {
-      return await fn();
+      return await Promise.race([
+        fn(),
+        new Promise<T>((resolve) => {
+          if (typeof window !== 'undefined') {
+            window.setTimeout(() => resolve(undefined as unknown as T), 1500);
+          }
+        }),
+      ]);
     } finally {
-      setPendingWritesCount((c) => Math.max(0, c - 1));
+      if (safetyTimer !== undefined) {
+        window.clearTimeout(safetyTimer);
+      }
+      settleCounter();
     }
   };
 
@@ -1200,6 +1344,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await withPendingTracking(async () => {
         await ensureParentProfileInFirestore(currentUser!, mirror.profile || undefined);
         for (const mut of queue) {
+          const syncKey = `${mut.collection}:${mut.docId}`;
+          if (inFlightSyncKeysRef.current.has(syncKey)) continue;
+          inFlightSyncKeysRef.current.add(syncKey);
           try {
             if (mut.collection === 'profile' && mut.action === 'upsert') {
               const profToUpload = mirror.profile || (mut.payload as WorkerProfile | undefined);
@@ -1243,6 +1390,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               mut.action === 'delete' ? OperationType.DELETE : OperationType.WRITE,
               `users/${uid}/${mut.collection}/${mut.docId}`
             );
+          } finally {
+            inFlightSyncKeysRef.current.delete(syncKey);
           }
         }
       });
@@ -1260,15 +1409,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const handleOnline = () => {
-      void syncOfflineDataToCloud();
+    const handleOnlineOrFocus = () => {
+      if (document.visibilityState === 'visible' || navigator.onLine) {
+        void syncOfflineDataToCloud();
+      }
     };
-    window.addEventListener('online', handleOnline);
+    window.addEventListener('online', handleOnlineOrFocus);
+    window.addEventListener('focus', handleOnlineOrFocus);
+    document.addEventListener('visibilitychange', handleOnlineOrFocus);
+
     if (navigator.onLine) {
       void syncOfflineDataToCloud();
     }
     return () => {
-      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('online', handleOnlineOrFocus);
+      window.removeEventListener('focus', handleOnlineOrFocus);
+      document.removeEventListener('visibilitychange', handleOnlineOrFocus);
     };
   }, [syncOfflineDataToCloud]);
 
@@ -2073,18 +2229,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
     }
 
-    // Handle dedicated Read-Only Demo Account login (demo@therate.gmail.com)
+    // Block Demo Account login since Demo Mode is removed
     if (isDemoAccountEmail(cleanId)) {
-      const check = validateDemoLoginAttempt({
-        identifier: cleanId,
-        password,
-        viaQuickButton: false,
-      });
-      if (!check.allowed) {
-        throw new Error(lang === 'bn' ? check.errorBn : check.errorEn);
-      }
-      enterDemoMode();
-      return;
+      throw new Error(
+        lang === 'bn'
+          ? 'ডেমো মোড বন্ধ করা হয়েছে। অনুগ্রহ করে আপনার নিজের অ্যাকাউন্ট দিয়ে লগইন বা সাইন আপ করুন।'
+          : 'Demo mode has been removed. Please log in or sign up with your personal account.'
+      );
     }
 
     // Check local registered accounts
@@ -2187,13 +2338,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const changeUserPassword = async (newPassword: string) => {
+  const changeUserPassword = async (currentPassword: string, newPassword: string) => {
     if (isReadOnlyDemo) {
       triggerReadOnlyBlock();
       return;
     }
-    const cleanPass = newPassword.trim();
-    if (!cleanPass || cleanPass.length < 4) {
+
+    const cleanCurrent = currentPassword.trim();
+    const cleanNew = newPassword.trim();
+
+    if (!cleanCurrent) {
+      throw new Error(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে বর্তমান পাসওয়ার্ড লিখুন।'
+          : 'Please enter your current password.'
+      );
+    }
+
+    if (!cleanNew || cleanNew.length < 4) {
       throw new Error(
         lang === 'bn'
           ? 'নতুন পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে।'
@@ -2201,9 +2363,66 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
     }
 
+    if (cleanCurrent === cleanNew) {
+      throw new Error(
+        lang === 'bn'
+          ? 'নতুন পাসওয়ার্ডটি বর্তমান পাসওয়ার্ড থেকে ভিন্ন হতে হবে।'
+          : 'New password must be different from current password.'
+      );
+    }
+
+    const email = (auth.currentUser?.email || activeLocalEmail || '').trim().toLowerCase();
+    const localAccountsRaw = localStorage.getItem('shromik_sathi_local_accounts');
+    const localAccounts: Array<{ identifier: string; email: string; password: string; fullName: string }> = localAccountsRaw ? JSON.parse(localAccountsRaw) : [];
+    const matchedLocal = localAccounts.find(
+      (a) =>
+        (email && (a.email.toLowerCase() === email || a.identifier.toLowerCase() === email)) ||
+        (user?.uid && a.identifier === user.uid)
+    );
+
+    // 1. Verify current password in Firebase Auth if online session
+    if (auth.currentUser && auth.currentUser.email) {
+      try {
+        const credential = EmailAuthProvider.credential(auth.currentUser.email, cleanCurrent);
+        await reauthenticateWithCredential(auth.currentUser, credential);
+      } catch (authErr: any) {
+        const errCode = authErr?.code || '';
+        if (errCode === 'auth/wrong-password' || errCode === 'auth/invalid-credential') {
+          throw new Error(
+            lang === 'bn'
+              ? 'বর্তমান পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে আপনার সঠিক বর্তমান পাসওয়ার্ড দিন।'
+              : 'Current password is incorrect. Please enter your correct current password.'
+          );
+        }
+        // If password reauth failed, also check if matchedLocal has mismatched password
+        if (matchedLocal && matchedLocal.password !== cleanCurrent) {
+          throw new Error(
+            lang === 'bn'
+              ? 'বর্তমান পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে আপনার সঠিক বর্তমান পাসওয়ার্ড দিন।'
+              : 'Current password is incorrect. Please enter your correct current password.'
+          );
+        }
+        throw new Error(
+          lang === 'bn'
+            ? `বর্তমান পাসওয়ার্ড যাচাই ব্যর্থ হয়েছে (${authErr?.message || 'ত্রুটি'})`
+            : `Could not verify current password (${authErr?.message || 'Error'})`
+        );
+      }
+    } else if (matchedLocal) {
+      // 2. Offline / local session: verify current password
+      if (matchedLocal.password !== cleanCurrent) {
+        throw new Error(
+          lang === 'bn'
+            ? 'বর্তমান পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে আপনার সঠিক বর্তমান পাসওয়ার্ড দিন।'
+            : 'Current password is incorrect. Please enter your correct current password.'
+        );
+      }
+    }
+
+    // 3. Current password is confirmed valid -> Update to new password!
     if (auth.currentUser) {
       try {
-        await updatePassword(auth.currentUser, cleanPass);
+        await updatePassword(auth.currentUser, cleanNew);
       } catch (err: any) {
         if (err?.code === 'auth/requires-recent-login') {
           throw new Error(
@@ -2220,20 +2439,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
+    // Update locally stored accounts registry
     try {
-      const email = auth.currentUser?.email || activeLocalEmail;
-      if (email) {
-        const localAccountsRaw = localStorage.getItem('shromik_sathi_local_accounts');
-        if (localAccountsRaw) {
-          const accounts: Array<{ identifier: string; email: string; password: string; fullName: string }> = JSON.parse(localAccountsRaw);
-          const updated = accounts.map((a) => {
-            if (a.email.toLowerCase() === email.toLowerCase() || (user?.uid && a.identifier === user.uid)) {
-              return { ...a, password: cleanPass };
-            }
-            return a;
-          });
-          localStorage.setItem('shromik_sathi_local_accounts', JSON.stringify(updated));
-        }
+      if (localAccountsRaw && localAccounts.length > 0) {
+        const updated = localAccounts.map((a) => {
+          if (
+            (email && (a.email.toLowerCase() === email || a.identifier.toLowerCase() === email)) ||
+            (user?.uid && a.identifier === user.uid)
+          ) {
+            return { ...a, password: cleanNew };
+          }
+          return a;
+        });
+        localStorage.setItem('shromik_sathi_local_accounts', JSON.stringify(updated));
       }
     } catch {
       // ignore storage errors
@@ -3866,20 +4084,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     const id = existingId || makeStableId('contact');
+    const cleanPhotoUrl = (rec.photoUrl || '').trim().slice(0, 95000);
     const sanitized: Omit<WorkerContact, 'id' | 'userId'> = {
       fullName: rec.fullName.trim().slice(0, 100),
       phone: rec.phone.trim().slice(0, 30),
+      photoUrl: cleanPhotoUrl,
       designation: (rec.designation || '').trim().slice(0, 100),
       category: rec.category,
+      customCategory: (rec.customCategory || '').trim().slice(0, 100),
       department: (rec.department || '').trim().slice(0, 100),
       lineNumber: (rec.lineNumber || '').trim().slice(0, 50),
       notes: (rec.notes || '').trim().slice(0, 300),
+      isPinned: Boolean(rec.isPinned),
       isFavorite: Boolean(rec.isFavorite),
       isEmergency: Boolean(rec.isEmergency),
       source: rec.source || 'manual',
       googleResourceName: rec.googleResourceName || '',
       isSyncedToGoogle: Boolean(rec.isSyncedToGoogle),
     };
+
+    // Persist compressed photo directly to IndexedDB device storage for zero-data offline loads
+    if (cleanPhotoUrl) {
+      await saveContactPhotoToDevice(id, cleanPhotoUrl);
+    } else if (existingId) {
+      await deleteContactPhotoFromDevice(id);
+    }
 
     if (isDemoMode || !user) {
       setDemoState((prev) => {
@@ -3946,11 +4175,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       {
         fullName: target.fullName,
         phone: target.phone,
+        photoUrl: target.photoUrl,
         designation: target.designation,
         category: target.category,
+        customCategory: target.customCategory,
         department: target.department,
         lineNumber: target.lineNumber,
         notes: target.notes,
+        isPinned: target.isPinned,
         isFavorite,
         isEmergency: target.isEmergency,
         source: target.source,
@@ -4257,6 +4489,169 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { added: totalAdded, skipped: totalSkipped };
   };
 
+  const seedSampleDemoData = useCallback(async (): Promise<{ added: number }> => {
+    if (isReadOnlyDemo) {
+      triggerReadOnlyBlock();
+      return { added: 0 };
+    }
+    const sample = getInitialDemoState();
+    let totalAdded = 0;
+
+    if (isDemoMode || !user) {
+      setDemoState((prev) => {
+        const mergeNonDestructive = <T extends { id: string }>(
+          curr: T[],
+          incoming: T[]
+        ): T[] => {
+          const seen = new Set(curr.map((x) => x.id));
+          const additions = incoming
+            .filter((x) => !seen.has(x.id))
+            .map((x) => ({ ...x, userId: prev.profile.userId }));
+          totalAdded += additions.length;
+          return [...curr, ...additions];
+        };
+
+        const hasProfileSalary = (prev.profile.basicSalary || 0) > 0;
+        const nextProfile: WorkerProfile = hasProfileSalary
+          ? prev.profile
+          : {
+              ...sample.profile,
+              ...prev.profile,
+              userId: prev.profile.userId,
+              fullName: prev.profile.fullName || sample.profile.fullName,
+              factoryName: prev.profile.factoryName || sample.profile.factoryName,
+              designation: prev.profile.designation || sample.profile.designation,
+              basicSalary: sample.profile.basicSalary,
+              houseRentAllowance: sample.profile.houseRentAllowance,
+              medicalAllowance: sample.profile.medicalAllowance,
+              transportAllowance: sample.profile.transportAllowance,
+              foodAllowance: sample.profile.foodAllowance,
+              attendanceBonus: sample.profile.attendanceBonus,
+              grossSalary: sample.profile.grossSalary,
+            };
+
+        const next: DemoStoreState = {
+          ...prev,
+          profile: nextProfile,
+          overtime: mergeNonDestructive(prev.overtime || [], sample.overtime),
+          salaryRecords: mergeNonDestructive(prev.salaryRecords || [], sample.salaryRecords),
+          payments: mergeNonDestructive(prev.payments || [], sample.payments),
+          attendance: mergeNonDestructive(prev.attendance || [], sample.attendance),
+          expenses: mergeNonDestructive(prev.expenses || [], sample.expenses),
+          savings: mergeNonDestructive(prev.savings || [], sample.savings),
+          reminders: mergeNonDestructive(prev.reminders || [], sample.reminders),
+          loans: mergeNonDestructive(prev.loans || [], sample.loans),
+          workplaces: mergeNonDestructive(prev.workplaces || [], sample.workplaces),
+          contacts: mergeNonDestructive(prev.contacts || [], sample.contacts),
+        };
+        persistCurrentLocalStore(next);
+        return next;
+      });
+      return { added: totalAdded };
+    }
+
+    const uid = user.uid;
+    await ensureParentProfileInFirestore(user);
+
+    const mergeAndSync = async <T extends { id: string }>(
+      colName: Exclude<OfflineSyncCollection, 'profile'>,
+      current: T[],
+      sampleItems: T[],
+      setter: React.Dispatch<React.SetStateAction<T[]>>
+    ) => {
+      const seen = new Set(current.map((x) => x.id));
+      const toAdd = sampleItems
+        .filter((x) => !seen.has(x.id))
+        .map((x) => ({ ...x, userId: uid }));
+      if (toAdd.length === 0) return;
+      totalAdded += toAdd.length;
+      const merged = [...current, ...toAdd];
+      setter(merged);
+      saveUserMirror(uid, { [colName]: merged });
+      for (const item of toAdd) {
+        try {
+          const { createdAt: _c, updatedAt: _u, ...clean } = item as Record<string, any>;
+          await setDoc(
+            doc(db, 'users', uid, colName, item.id),
+            {
+              ...clean,
+              id: item.id,
+              userId: uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+          clearOfflineMutation(uid, colName, item.id);
+        } catch (err) {
+          logFirestoreWarning(err, OperationType.CREATE, `users/${uid}/${colName}/${item.id}`);
+        }
+      }
+    };
+
+    if (!fbProfile || (fbProfile.basicSalary || 0) <= 0) {
+      const enrichedProfile: WorkerProfile = {
+        ...(fbProfile || defaultWorkerProfile(uid, user.displayName)),
+        factoryName: fbProfile?.factoryName || sample.profile.factoryName,
+        department: fbProfile?.department || sample.profile.department,
+        designation: fbProfile?.designation || sample.profile.designation,
+        basicSalary: sample.profile.basicSalary,
+        houseRentAllowance: sample.profile.houseRentAllowance,
+        medicalAllowance: sample.profile.medicalAllowance,
+        transportAllowance: sample.profile.transportAllowance,
+        foodAllowance: sample.profile.foodAllowance,
+        attendanceBonus: sample.profile.attendanceBonus,
+        grossSalary: sample.profile.grossSalary,
+      };
+      setFbProfile(enrichedProfile);
+      saveUserMirror(uid, { profile: enrichedProfile });
+      try {
+        const { createdAt: _c, updatedAt: _u, ...cleanProf } = enrichedProfile;
+        await setDoc(
+          doc(db, 'users', uid),
+          { ...cleanProf, userId: uid, updatedAt: serverTimestamp() },
+          { merge: true }
+        );
+        clearOfflineMutation(uid, 'profile', 'profile');
+      } catch (err) {
+        logFirestoreWarning(err, OperationType.UPDATE, `users/${uid}`);
+      }
+    }
+
+    await mergeAndSync('overtime', fbOvertime, sample.overtime, setFbOvertime);
+    await mergeAndSync('salaryRecords', fbSalaryRecords, sample.salaryRecords, setFbSalaryRecords);
+    await mergeAndSync('payments', fbPayments, sample.payments, setFbPayments);
+    await mergeAndSync('attendance', fbAttendance, sample.attendance, setFbAttendance);
+    await mergeAndSync('expenses', fbExpenses, sample.expenses, setFbExpenses);
+    await mergeAndSync('savings', fbSavings, sample.savings, setFbSavings);
+    await mergeAndSync('reminders', fbReminders, sample.reminders, setFbReminders);
+    await mergeAndSync('loans', fbLoans, sample.loans, setFbLoans);
+    await mergeAndSync('workplaces', fbWorkplaces, sample.workplaces, setFbWorkplaces);
+    await mergeAndSync('contacts', fbContacts, sample.contacts, setFbContacts);
+    refreshOfflinePendingCount();
+
+    return { added: totalAdded };
+  }, [
+    isReadOnlyDemo,
+    triggerReadOnlyBlock,
+    isDemoMode,
+    user,
+    persistCurrentLocalStore,
+    ensureParentProfileInFirestore,
+    fbProfile,
+    fbOvertime,
+    fbSalaryRecords,
+    fbPayments,
+    fbAttendance,
+    fbExpenses,
+    fbSavings,
+    fbReminders,
+    fbLoans,
+    fbWorkplaces,
+    fbContacts,
+    refreshOfflinePendingCount,
+  ]);
+
   const value: DataContextValue = {
     user,
     authReady,
@@ -4348,6 +4743,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     submitFeedback,
     resolveFeedback,
     importBackupNonDestructive,
+    seedSampleDemoData,
     subscriptionConfig,
     subscriptionPlans,
     userSubscription,

@@ -6,24 +6,21 @@ import {
   Lock,
   LogIn,
   Moon,
-  PlayCircle,
-  ShieldCheck,
   Sun,
   User,
   UserPlus,
 } from 'lucide-react';
 import { useData } from '../context/DataContext';
-import { DEMO_SAMPLE_DATA_BADGE, PUBLIC_DEMO_EMAIL } from '../utils/demoData';
 import { PWAInstallButton } from './PWAInstallButton';
 import { BrandWordmark } from './BrandWordmark';
+import { TermsPrivacyModal } from './TermsPrivacyModal';
+import { validateSignupTermsAcceptance } from '../utils/termsContent';
 
 export const AuthWelcomeView: React.FC = () => {
   const {
     loginWithGoogle,
     loginWithCredentials,
     signUpWithCredentials,
-    enterDemoMode,
-    publicDemoConfig,
     initialAuthMode,
     clearInitialAuthMode,
     lang,
@@ -39,6 +36,8 @@ export const AuthWelcomeView: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
 
   useEffect(() => {
     if (initialAuthMode) {
@@ -47,21 +46,13 @@ export const AuthWelcomeView: React.FC = () => {
     }
   }, [initialAuthMode, clearInitialAuthMode]);
 
-  const handleTryDemo = () => {
-    setAuthError('');
-    if (!publicDemoConfig.enabled) {
-      setAuthError(
-        lang === 'bn'
-          ? publicDemoConfig.maintenanceMessageBn
-          : publicDemoConfig.maintenanceMessageEn
-      );
-      return;
-    }
-    enterDemoMode();
-  };
-
   const handleGoogleSignIn = async () => {
     setAuthError('');
+    const termsError = validateSignupTermsAcceptance(authMode, acceptedTerms, lang);
+    if (termsError) {
+      setAuthError(termsError);
+      return;
+    }
     setIsSubmitting(true);
     try {
       await loginWithGoogle(authMode);
@@ -76,6 +67,11 @@ export const AuthWelcomeView: React.FC = () => {
   const handleCredentialsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
+    const termsError = validateSignupTermsAcceptance(authMode, acceptedTerms, lang);
+    if (termsError) {
+      setAuthError(termsError);
+      return;
+    }
     setIsSubmitting(true);
     try {
       if (authMode === 'signup') {
@@ -311,6 +307,73 @@ export const AuthWelcomeView: React.FC = () => {
               </div>
             </div>
 
+            {authMode === 'signup' && (
+              <div
+                data-testid="auth-terms-box"
+                className={`rounded-xl border px-3 py-2.5 transition-colors ${
+                  authError && !acceptedTerms
+                    ? 'border-rose-300 bg-rose-50/60 dark:border-rose-800 dark:bg-rose-950/30'
+                    : 'border-slate-200/90 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-800/50'
+                }`}
+              >
+                <div className="flex items-start gap-2.5">
+                  <input
+                    id="auth-terms-checkbox"
+                    data-testid="auth-terms-checkbox"
+                    type="checkbox"
+                    checked={acceptedTerms}
+                    onChange={(e) => {
+                      setAcceptedTerms(e.target.checked);
+                      if (e.target.checked && authError) {
+                        setAuthError('');
+                      }
+                    }}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600 cursor-pointer shrink-0 accent-emerald-700"
+                  />
+                  <label
+                    htmlFor="auth-terms-checkbox"
+                    className="text-xs leading-relaxed text-slate-700 dark:text-slate-300 select-none cursor-pointer"
+                  >
+                    {lang === 'bn' ? (
+                      <>
+                        আমি{' '}
+                        <button
+                          type="button"
+                          data-testid="open-terms-modal-btn"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setShowTermsModal(true);
+                          }}
+                          className="font-extrabold text-emerald-700 dark:text-emerald-400 underline underline-offset-2 hover:text-emerald-800 dark:hover:text-emerald-300 cursor-pointer"
+                        >
+                          শর্তাবলী এবং গোপনীয়তা নীতি
+                        </button>{' '}
+                        পড়েছি এবং সম্মত আছি।
+                      </>
+                    ) : (
+                      <>
+                        I have read and agree to the{' '}
+                        <button
+                          type="button"
+                          data-testid="open-terms-modal-btn"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setShowTermsModal(true);
+                          }}
+                          className="font-extrabold text-emerald-700 dark:text-emerald-400 underline underline-offset-2 hover:text-emerald-800 dark:hover:text-emerald-300 cursor-pointer"
+                        >
+                          Terms &amp; Conditions and Privacy Policy
+                        </button>
+                        .
+                      </>
+                    )}
+                  </label>
+                </div>
+              </div>
+            )}
+
             <button
               type="submit"
               data-testid="auth-submit-btn"
@@ -347,32 +410,6 @@ export const AuthWelcomeView: React.FC = () => {
             </button>
           </form>
 
-          {/* Read-Only Public Demo Preview CTA */}
-          <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
-            <button
-              type="button"
-              data-testid="try-demo-btn"
-              onClick={handleTryDemo}
-              disabled={isSubmitting}
-              className="w-full min-h-[46px] px-4 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/50 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <PlayCircle className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
-              <span>
-                {lang === 'bn' ? 'ডেমো দেখুন (Try Demo)' : 'Try Demo (Read-Only Preview)'}
-              </span>
-            </button>
-
-            <div className="flex flex-wrap items-center justify-between gap-1.5 px-1 text-[11px] text-slate-500 dark:text-slate-400">
-              <span className="inline-flex items-center gap-1 font-medium">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>{DEMO_SAMPLE_DATA_BADGE}</span>
-              </span>
-              <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500">
-                {PUBLIC_DEMO_EMAIL}
-              </span>
-            </div>
-          </div>
-
           {/* Bottom Mode Switcher */}
           <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 text-center">
             <p className="text-xs text-slate-600 dark:text-slate-400">
@@ -385,6 +422,7 @@ export const AuthWelcomeView: React.FC = () => {
                     onClick={() => {
                       setAuthMode('signup');
                       setAuthError('');
+                      setAcceptedTerms(false);
                     }}
                     className="font-extrabold text-emerald-700 dark:text-emerald-400 hover:underline ml-1 cursor-pointer"
                   >
@@ -417,6 +455,17 @@ export const AuthWelcomeView: React.FC = () => {
           ? 'শ্রমিক সাথী · আপনার ব্যক্তিগত বেতন ও ওভারটাইম সহকারী'
           : 'Shromik Sathi · Personal Salary & Overtime Assistant'}
       </footer>
+
+      <TermsPrivacyModal
+        open={showTermsModal}
+        lang={lang}
+        onAccept={() => {
+          setAcceptedTerms(true);
+          setAuthError('');
+          setShowTermsModal(false);
+        }}
+        onClose={() => setShowTermsModal(false)}
+      />
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Calendar,
@@ -28,8 +28,15 @@ import {
   toBengaliDigits,
 } from '../utils/calculations';
 import { formatDateReadable, formatDateSlashDMY, formatMonthLabel } from '../utils/i18n';
+import { buildOvertimePieAnalytics } from '../utils/homeAnalytics';
+import { OvertimeAnalyticsPieCard } from './AnalyticsChartCards';
 import { DateInputDMY } from './DateInputDMY';
 import { MissingRecordsSection } from './MissingRecordsSection';
+import { slicePreviewRecords } from '../utils/listPreview';
+import {
+  TransparentSeeMoreFooter,
+  useResponsiveListLimit,
+} from './TransparentSeeMoreFooter';
 
 function shiftDateString(dateStr: string, offsetDays: number): string {
   const d = new Date(`${dateStr}T12:00:00Z`);
@@ -104,6 +111,12 @@ export const OvertimeView: React.FC = () => {
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [listFilter, setListFilter] = useState<'month' | 'all'>('month');
+  const [isOtListExpanded, setIsOtListExpanded] = useState(false);
+  const otPreviewLimit = useResponsiveListLimit('overtime');
+
+  useEffect(() => {
+    setIsOtListExpanded(false);
+  }, [selectedMonth, listFilter]);
 
   // OT Policy Settings Panel state
   const [showPolicySettings, setShowPolicySettings] = useState(false);
@@ -153,6 +166,11 @@ export const OvertimeView: React.FC = () => {
 
   const summaries = summarizeOvertimeRecords(overtime, selectedMonth, date);
 
+  const otPieAnalytics = useMemo(
+    () => buildOvertimePieAnalytics({ selectedMonth, lang, overtime }),
+    [selectedMonth, lang, overtime]
+  );
+
   const displayedRecords = (
     listFilter === 'month' ? overtime.filter((r) => r.month === selectedMonth) : overtime
   ).sort((a, b) => {
@@ -160,6 +178,15 @@ export const OvertimeView: React.FC = () => {
     if (cmp !== 0) return cmp;
     return b.startTime.localeCompare(a.startTime);
   });
+
+  const {
+    visibleItems: visibleOvertimeRecords,
+    hiddenCount: hiddenOvertimeCount,
+    hasMore: hasMoreOvertime,
+  } = useMemo(
+    () => slicePreviewRecords(displayedRecords, isOtListExpanded, otPreviewLimit),
+    [displayedRecords, isOtListExpanded, otPreviewLimit]
+  );
 
   const displayedTotalHours = roundCurrency(
     displayedRecords.reduce((s, r) => s + r.approvedHours, 0)
@@ -766,6 +793,14 @@ export const OvertimeView: React.FC = () => {
         </div>
       </div>
 
+      {/* Overtime Pie Analytics Card (Monthly & Weekly Breakdown) */}
+      <OvertimeAnalyticsPieCard
+        selectedMonth={selectedMonth}
+        lang={lang}
+        analytics={otPieAnalytics}
+        onSelectMonth={setSelectedMonth}
+      />
+
       {/* Main Split: Add/Edit Overtime Form + Monthly Overtime List */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left: Saved Overtime Compact Card OR Add / Edit Overtime Form */}
@@ -1248,8 +1283,9 @@ export const OvertimeView: React.FC = () => {
                   : 'No overtime entries recorded for this month.'}
               </div>
             ) : (
-              <div className="space-y-2.5">
-                {displayedRecords.map((rec) => {
+              <div>
+                <div className="space-y-2.5">
+                  {visibleOvertimeRecords.map((rec) => {
                   const isBeingEdited = editingId === rec.id;
                   const badgeLabel =
                     rec.totalMinutes && rec.totalMinutes % 60 !== 0
@@ -1379,6 +1415,15 @@ export const OvertimeView: React.FC = () => {
                     </div>
                   );
                 })}
+                </div>
+                <TransparentSeeMoreFooter
+                  expanded={isOtListExpanded}
+                  hasMore={hasMoreOvertime}
+                  hiddenCount={hiddenOvertimeCount}
+                  lang={lang}
+                  onToggle={() => setIsOtListExpanded((prev) => !prev)}
+                  testId="overtime-list-see-more-btn"
+                />
               </div>
             )}
           </div>

@@ -52,6 +52,16 @@
     line-height: 1.45;
   }
 
+  button, a, input, select, textarea, [role="button"] {
+    touch-action: manipulation;
+  }
+
+  .recharts-wrapper,
+  .recharts-surface,
+  .recharts-sector {
+    outline: none !important;
+  }
+
   /* Visible accessible focus ring for keyboard and touch navigation */
   button:focus-visible,
   a:focus-visible,

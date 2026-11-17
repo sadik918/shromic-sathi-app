@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -63,7 +63,15 @@ import {
 } from '../utils/calendarReminders';
 import { CalendarDateReminderSection } from './CalendarDateReminderSection';
 import { DateInputDMY } from './DateInputDMY';
+import { HomeAnalyticsSection } from './HomeAnalyticsSection';
+import { EarnedSalarySummaryPieCard, RecentActivityPieChartCard } from './AnalyticsChartCards';
 import { MissingRecordsSection } from './MissingRecordsSection';
+import { getAccurateBstNow } from '../utils/networkTime';
+import {
+  buildRecentActivityPieAnalytics,
+  getTimeOfDayGreeting,
+  resolveWorkerDisplayName,
+} from '../utils/homeAnalytics';
 
 interface DashboardViewProps {
   onNavigateTab: (tab: NavTab, sub?: MoreSubView, targetDateISO?: string) => void;
@@ -108,7 +116,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     expenses,
     savings,
     loans,
+    workplaces,
     reminders,
+    isReadOnlyDemo,
     isProfileSetupIncomplete,
     reopenOnboarding,
     saveOvertime,
@@ -117,9 +127,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     saveReminder,
     toggleReminder,
     deleteReminder,
+    seedSampleDemoData,
   } = useData();
 
   const dict = T[lang];
+  const bstHour = Number(getAccurateBstNow().hh);
+  const timeGreeting = getTimeOfDayGreeting(Number.isFinite(bstHour) ? bstHour : 9, lang);
+  const workerDisplayName = resolveWorkerDisplayName({
+    profileFullName: profile.fullName,
+    authDisplayName: user?.displayName,
+    email: user?.email,
+    lang,
+  });
   const isUpcomingMonth = isFutureMonth(selectedMonth, currentMonthISO);
   const [quickDate, setQuickDate] = useState(() =>
     getDefaultDateForMonth(selectedMonth, todayISO)
@@ -145,37 +164,59 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const isQuickActionLocked = isUpcomingMonth || isQuickDateFuture;
 
   // Filter current month records & detect missing entries
-  const otSummary = summarizeOvertimeRecords(overtime, selectedMonth, quickDate);
-  const monthPayments = payments.filter((p) => p.month === selectedMonth);
-  const monthAttendance = attendance.filter((a) => a.month === selectedMonth);
-  const monthExpenses = expenses.filter((e) => e.month === selectedMonth);
-  const monthHolidays = getPublicHolidaysForMonth(selectedMonth);
+  const otSummary = useMemo(
+    () => summarizeOvertimeRecords(overtime, selectedMonth, quickDate),
+    [overtime, selectedMonth, quickDate]
+  );
+  const monthPayments = useMemo(
+    () => payments.filter((p) => p.month === selectedMonth),
+    [payments, selectedMonth]
+  );
+  const monthAttendance = useMemo(
+    () => attendance.filter((a) => a.month === selectedMonth),
+    [attendance, selectedMonth]
+  );
+  const monthExpenses = useMemo(
+    () => expenses.filter((e) => e.month === selectedMonth),
+    [expenses, selectedMonth]
+  );
+  const monthHolidays = useMemo(
+    () => getPublicHolidaysForMonth(selectedMonth),
+    [selectedMonth]
+  );
 
-  const savedSalaryRecord = salaryRecords.find((s) => s.month === selectedMonth);
+  const savedSalaryRecord = useMemo(
+    () => salaryRecords.find((s) => s.month === selectedMonth),
+    [salaryRecords, selectedMonth]
+  );
 
-  const computedSalary = calculateSalaryTotals({
-    basicSalary: savedSalaryRecord ? savedSalaryRecord.basicSalary : profile.basicSalary,
-    houseRentAllowance: savedSalaryRecord
-      ? savedSalaryRecord.houseRentAllowance
-      : profile.houseRentAllowance,
-    medicalAllowance: savedSalaryRecord
-      ? savedSalaryRecord.medicalAllowance
-      : profile.medicalAllowance,
-    transportAllowance: savedSalaryRecord
-      ? savedSalaryRecord.transportAllowance
-      : profile.transportAllowance,
-    foodAllowance: savedSalaryRecord ? savedSalaryRecord.foodAllowance : profile.foodAllowance,
-    attendanceBonus: savedSalaryRecord
-      ? savedSalaryRecord.attendanceBonus
-      : profile.attendanceBonus,
-    overtimeEarnings: otSummary.monthlyEarnings,
-    festivalBonus: savedSalaryRecord ? savedSalaryRecord.festivalBonus : 0,
-    otherAllowances: savedSalaryRecord ? savedSalaryRecord.otherAllowances : 0,
-    advanceDeduction: savedSalaryRecord ? savedSalaryRecord.advanceDeduction : 0,
-    absenceDeduction: savedSalaryRecord ? savedSalaryRecord.absenceDeduction : 0,
-    otherDeductions: savedSalaryRecord ? savedSalaryRecord.otherDeductions : 0,
-    adjustments: savedSalaryRecord ? savedSalaryRecord.adjustments : 0,
-  });
+  const computedSalary = useMemo(
+    () =>
+      calculateSalaryTotals({
+        basicSalary: savedSalaryRecord ? savedSalaryRecord.basicSalary : profile.basicSalary,
+        houseRentAllowance: savedSalaryRecord
+          ? savedSalaryRecord.houseRentAllowance
+          : profile.houseRentAllowance,
+        medicalAllowance: savedSalaryRecord
+          ? savedSalaryRecord.medicalAllowance
+          : profile.medicalAllowance,
+        transportAllowance: savedSalaryRecord
+          ? savedSalaryRecord.transportAllowance
+          : profile.transportAllowance,
+        foodAllowance: savedSalaryRecord ? savedSalaryRecord.foodAllowance : profile.foodAllowance,
+        attendanceBonus: savedSalaryRecord
+          ? savedSalaryRecord.attendanceBonus
+          : profile.attendanceBonus,
+        overtimeEarnings: otSummary.monthlyEarnings,
+        festivalBonus: savedSalaryRecord ? savedSalaryRecord.festivalBonus : 0,
+        otherAllowances: savedSalaryRecord ? savedSalaryRecord.otherAllowances : 0,
+        advanceDeduction: savedSalaryRecord ? savedSalaryRecord.advanceDeduction : 0,
+        absenceDeduction: savedSalaryRecord ? savedSalaryRecord.absenceDeduction : 0,
+        otherDeductions: savedSalaryRecord ? savedSalaryRecord.otherDeductions : 0,
+        adjustments: savedSalaryRecord ? savedSalaryRecord.adjustments : 0,
+      }),
+    [savedSalaryRecord, profile, otSummary.monthlyEarnings]
+  );
 
   const monthlyWageBase =
     (profile.grossSalary > 0 ? profile.grossSalary : 0) ||
@@ -183,86 +224,142 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     profile.basicSalary ||
     12500;
 
-  const attBonusEval = calculateAttendanceBonusEligibility({
-    recordsForMonth: monthAttendance,
-    profile,
-  });
+  const attBonusEval = useMemo(
+    () =>
+      calculateAttendanceBonusEligibility({
+        recordsForMonth: monthAttendance,
+        profile,
+      }),
+    [monthAttendance, profile]
+  );
 
-  const earnedSalaryBreakdown = computeDailyEarnedSalary({
-    monthlyWage: monthlyWageBase,
-    attendanceRecords: monthAttendance,
-    overtimeEarnings: otSummary.monthlyEarnings,
-    attendanceBonus: savedSalaryRecord ? savedSalaryRecord.attendanceBonus : profile.attendanceBonus,
-    isAttendanceBonusEligible: attBonusEval.isEligible,
-    otherAllowances: savedSalaryRecord
-      ? (savedSalaryRecord.festivalBonus || 0) + (savedSalaryRecord.otherAllowances || 0)
-      : 0,
-    deductions: savedSalaryRecord
-      ? savedSalaryRecord.advanceDeduction +
-        savedSalaryRecord.absenceDeduction +
-        savedSalaryRecord.otherDeductions
-      : 0,
-    adjustments: savedSalaryRecord ? savedSalaryRecord.adjustments : 0,
-  });
+  const earnedSalaryBreakdown = useMemo(
+    () =>
+      computeDailyEarnedSalary({
+        monthlyWage: monthlyWageBase,
+        attendanceRecords: monthAttendance,
+        overtimeEarnings: otSummary.monthlyEarnings,
+        attendanceBonus: savedSalaryRecord
+          ? savedSalaryRecord.attendanceBonus
+          : profile.attendanceBonus,
+        isAttendanceBonusEligible: attBonusEval.isEligible,
+        otherAllowances: savedSalaryRecord
+          ? (savedSalaryRecord.festivalBonus || 0) + (savedSalaryRecord.otherAllowances || 0)
+          : 0,
+        deductions: savedSalaryRecord
+          ? savedSalaryRecord.advanceDeduction +
+            savedSalaryRecord.absenceDeduction +
+            savedSalaryRecord.otherDeductions
+          : 0,
+        adjustments: savedSalaryRecord ? savedSalaryRecord.adjustments : 0,
+      }),
+    [
+      monthlyWageBase,
+      monthAttendance,
+      otSummary.monthlyEarnings,
+      savedSalaryRecord,
+      profile.attendanceBonus,
+      attBonusEval.isEligible,
+    ]
+  );
 
   const expectedNetSalary = earnedSalaryBreakdown.totalEarnedSalary;
-  const paymentSummary = summarizeMonthlyPayments(expectedNetSalary, monthPayments);
+  const paymentSummary = useMemo(
+    () => summarizeMonthlyPayments(expectedNetSalary, monthPayments),
+    [expectedNetSalary, monthPayments]
+  );
   const earnedOutstandingBalance = Math.max(
     0,
     Math.round(earnedSalaryBreakdown.totalEarnedSalary - paymentSummary.totalReceived)
   );
-  const attendanceSummary = summarizeAttendanceForMonth(monthAttendance);
-  const financeSummary = summarizePersonalFinances(monthPayments, monthExpenses, savings);
-  const loanSummary = summarizePersonalLoans(loans);
+  const attendanceSummary = useMemo(
+    () => summarizeAttendanceForMonth(monthAttendance),
+    [monthAttendance]
+  );
+  const financeSummary = useMemo(
+    () => summarizePersonalFinances(monthPayments, monthExpenses, savings),
+    [monthPayments, monthExpenses, savings]
+  );
+  const loanSummary = useMemo(() => summarizePersonalLoans(loans), [loans]);
 
   // Previous month comparison for Smart Salary Comparison & Financial Insights
-  const prevMonth = getPreviousMonth(selectedMonth);
-  const prevOtSummary = summarizeOvertimeRecords(overtime, prevMonth);
-  const prevSalaryRecord = salaryRecords.find((s) => s.month === prevMonth);
-  const prevComputedSalary = calculateSalaryTotals({
-    basicSalary: prevSalaryRecord ? prevSalaryRecord.basicSalary : profile.basicSalary,
-    houseRentAllowance: prevSalaryRecord
-      ? prevSalaryRecord.houseRentAllowance
-      : profile.houseRentAllowance,
-    medicalAllowance: prevSalaryRecord
-      ? prevSalaryRecord.medicalAllowance
-      : profile.medicalAllowance,
-    transportAllowance: prevSalaryRecord
-      ? prevSalaryRecord.transportAllowance
-      : profile.transportAllowance,
-    foodAllowance: prevSalaryRecord ? prevSalaryRecord.foodAllowance : profile.foodAllowance,
-    attendanceBonus: prevSalaryRecord ? prevSalaryRecord.attendanceBonus : profile.attendanceBonus,
-    overtimeEarnings: prevSalaryRecord
-      ? prevSalaryRecord.overtimeEarnings
-      : prevOtSummary.monthlyEarnings,
-    festivalBonus: prevSalaryRecord ? prevSalaryRecord.festivalBonus : 0,
-    otherAllowances: prevSalaryRecord ? prevSalaryRecord.otherAllowances : 0,
-    advanceDeduction: prevSalaryRecord ? prevSalaryRecord.advanceDeduction : 0,
-    absenceDeduction: prevSalaryRecord ? prevSalaryRecord.absenceDeduction : 0,
-    otherDeductions: prevSalaryRecord ? prevSalaryRecord.otherDeductions : 0,
-    adjustments: prevSalaryRecord ? prevSalaryRecord.adjustments : 0,
-  });
+  const prevMonth = useMemo(() => getPreviousMonth(selectedMonth), [selectedMonth]);
+  const prevOtSummary = useMemo(
+    () => summarizeOvertimeRecords(overtime, prevMonth),
+    [overtime, prevMonth]
+  );
+  const prevSalaryRecord = useMemo(
+    () => salaryRecords.find((s) => s.month === prevMonth),
+    [salaryRecords, prevMonth]
+  );
+  const prevComputedSalary = useMemo(
+    () =>
+      calculateSalaryTotals({
+        basicSalary: prevSalaryRecord ? prevSalaryRecord.basicSalary : profile.basicSalary,
+        houseRentAllowance: prevSalaryRecord
+          ? prevSalaryRecord.houseRentAllowance
+          : profile.houseRentAllowance,
+        medicalAllowance: prevSalaryRecord
+          ? prevSalaryRecord.medicalAllowance
+          : profile.medicalAllowance,
+        transportAllowance: prevSalaryRecord
+          ? prevSalaryRecord.transportAllowance
+          : profile.transportAllowance,
+        foodAllowance: prevSalaryRecord ? prevSalaryRecord.foodAllowance : profile.foodAllowance,
+        attendanceBonus: prevSalaryRecord
+          ? prevSalaryRecord.attendanceBonus
+          : profile.attendanceBonus,
+        overtimeEarnings: prevSalaryRecord
+          ? prevSalaryRecord.overtimeEarnings
+          : prevOtSummary.monthlyEarnings,
+        festivalBonus: prevSalaryRecord ? prevSalaryRecord.festivalBonus : 0,
+        otherAllowances: prevSalaryRecord ? prevSalaryRecord.otherAllowances : 0,
+        advanceDeduction: prevSalaryRecord ? prevSalaryRecord.advanceDeduction : 0,
+        absenceDeduction: prevSalaryRecord ? prevSalaryRecord.absenceDeduction : 0,
+        otherDeductions: prevSalaryRecord ? prevSalaryRecord.otherDeductions : 0,
+        adjustments: prevSalaryRecord ? prevSalaryRecord.adjustments : 0,
+      }),
+    [prevSalaryRecord, profile, prevOtSummary.monthlyEarnings]
+  );
 
-  const smartComparison = calculateSmartSalaryComparison({
-    currentMonthNet: expectedNetSalary,
-    previousMonthNet: prevSalaryRecord
-      ? prevSalaryRecord.estimatedNetPayable
-      : prevComputedSalary.estimatedNetPayable,
-    currentOtHours: otSummary.monthlyHours,
-    previousOtHours: prevSalaryRecord
-      ? prevSalaryRecord.overtimeHours
-      : prevOtSummary.monthlyHours,
-    currentOtEarnings: otSummary.monthlyEarnings,
-    previousOtEarnings: prevSalaryRecord
-      ? prevSalaryRecord.overtimeEarnings
-      : prevOtSummary.monthlyEarnings,
-    absentDays: attendanceSummary.absentDays,
-    lateDays: attendanceSummary.lateDays,
-    attendanceBonusAmount: profile.attendanceBonus,
-  });
+  const smartComparison = useMemo(
+    () =>
+      calculateSmartSalaryComparison({
+        currentMonthNet: expectedNetSalary,
+        previousMonthNet: prevSalaryRecord
+          ? prevSalaryRecord.estimatedNetPayable
+          : prevComputedSalary.estimatedNetPayable,
+        currentOtHours: otSummary.monthlyHours,
+        previousOtHours: prevSalaryRecord
+          ? prevSalaryRecord.overtimeHours
+          : prevOtSummary.monthlyHours,
+        currentOtEarnings: otSummary.monthlyEarnings,
+        previousOtEarnings: prevSalaryRecord
+          ? prevSalaryRecord.overtimeEarnings
+          : prevOtSummary.monthlyEarnings,
+        absentDays: attendanceSummary.absentDays,
+        lateDays: attendanceSummary.lateDays,
+        attendanceBonusAmount: profile.attendanceBonus,
+      }),
+    [
+      expectedNetSalary,
+      prevSalaryRecord,
+      prevComputedSalary.estimatedNetPayable,
+      otSummary.monthlyHours,
+      otSummary.monthlyEarnings,
+      prevOtSummary.monthlyHours,
+      prevOtSummary.monthlyEarnings,
+      attendanceSummary.absentDays,
+      attendanceSummary.lateDays,
+      profile.attendanceBonus,
+    ]
+  );
 
   const activeBudgetLimit = savings[0]?.monthlyBudget || 9000;
-  const budgetAlert = evaluateBudgetAlert(financeSummary.totalExpenses, activeBudgetLimit);
+  const budgetAlert = useMemo(
+    () => evaluateBudgetAlert(financeSummary.totalExpenses, activeBudgetLimit),
+    [financeSummary.totalExpenses, activeBudgetLimit]
+  );
 
   const hourlyRate = getEffectiveHourlyOtRate(profile);
   const wageBaseVal =
@@ -621,72 +718,87 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const firstDayOffset = (firstDayJsDay + 1) % 7;
 
   // Combine recent transactions (payments + expenses + overtime)
-  const recentActivity = [
-    ...overtime
-      .filter((o) => o.month === selectedMonth)
-      .map((o) => ({
-        id: `ot_${o.id}`,
-        rawId: o.id,
-        date: o.date,
-        title:
-          lang === 'bn'
-            ? `ওভারটাইম: ${formatNumber(o.approvedHours, 'bn', 1)} ঘণ্টা`
-            : `Overtime: ${o.approvedHours} hrs`,
-        subtitle: o.notes || (lang === 'bn' ? 'দৈনিক ওভারটাইম' : 'Daily overtime'),
-        amountText: `+ ${formatBDT(o.estimatedEarnings, lang)}`,
-        type: 'overtime' as const,
-      })),
-    ...monthPayments.map((p) => ({
-      id: `pay_${p.id}`,
-      rawId: p.id,
-      date: p.paymentDate,
-      title:
-        lang === 'bn'
-          ? `বেতন প্রাপ্তি (${
-              p.paymentMethod === 'bkash'
-                ? 'বিকাশ'
-                : p.paymentMethod === 'nagad'
-                ? 'নগদ'
-                : p.paymentMethod === 'rocket'
-                ? 'রকেট'
-                : p.paymentMethod === 'bank'
-                ? 'ব্যাংক'
-                : 'ক্যাশ'
-            })`
-          : `Salary Received (${p.paymentMethod.toUpperCase()})`,
-      subtitle: p.referenceNote || (lang === 'bn' ? 'বেতন জমা' : 'Salary payment'),
-      amountText: `+ ${formatBDT(p.amountReceived, lang)}`,
-      type: 'payment' as const,
-    })),
-    ...monthExpenses.map((e) => ({
-      id: `exp_${e.id}`,
-      rawId: e.id,
-      date: e.date,
-      title:
-        lang === 'bn'
-          ? `খরচ (${
-              e.category === 'food'
-                ? 'খাবার'
-                : e.category === 'rent'
-                ? 'বাসা ভাড়া'
-                : e.category === 'transport'
-                ? 'যাতায়াত'
-                : e.category === 'family'
-                ? 'পরিবার'
-                : e.category === 'medical'
-                ? 'চিকিৎসা'
-                : e.category === 'education'
-                ? 'পড়াশোনা'
-                : 'অন্যান্য'
-            })`
-          : `Expense (${e.category})`,
-      subtitle: e.description || '',
-      amountText: `- ${formatBDT(e.amount, lang)}`,
-      type: 'expense' as const,
-    })),
-  ]
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 8);
+  const recentActivity = useMemo(
+    () =>
+      [
+        ...overtime
+          .filter((o) => o.month === selectedMonth)
+          .map((o) => ({
+            id: `ot_${o.id}`,
+            rawId: o.id,
+            date: o.date,
+            title:
+              lang === 'bn'
+                ? `ওভারটাইম: ${formatNumber(o.approvedHours, 'bn', 1)} ঘণ্টা`
+                : `Overtime: ${o.approvedHours} hrs`,
+            subtitle: o.notes || (lang === 'bn' ? 'দৈনিক ওভারটাইম' : 'Daily overtime'),
+            amountText: `+ ${formatBDT(o.estimatedEarnings, lang)}`,
+            type: 'overtime' as const,
+          })),
+        ...monthPayments.map((p) => ({
+          id: `pay_${p.id}`,
+          rawId: p.id,
+          date: p.paymentDate,
+          title:
+            lang === 'bn'
+              ? `বেতন প্রাপ্তি (${
+                  p.paymentMethod === 'bkash'
+                    ? 'বিকাশ'
+                    : p.paymentMethod === 'nagad'
+                    ? 'নগদ'
+                    : p.paymentMethod === 'rocket'
+                    ? 'রকেট'
+                    : p.paymentMethod === 'bank'
+                    ? 'ব্যাংক'
+                    : 'ক্যাশ'
+                })`
+              : `Salary Received (${p.paymentMethod.toUpperCase()})`,
+          subtitle: p.referenceNote || (lang === 'bn' ? 'বেতন জমা' : 'Salary payment'),
+          amountText: `+ ${formatBDT(p.amountReceived, lang)}`,
+          type: 'payment' as const,
+        })),
+        ...monthExpenses.map((e) => ({
+          id: `exp_${e.id}`,
+          rawId: e.id,
+          date: e.date,
+          title:
+            lang === 'bn'
+              ? `খরচ (${
+                  e.category === 'food'
+                    ? 'খাবার'
+                    : e.category === 'rent'
+                    ? 'বাসা ভাড়া'
+                    : e.category === 'transport'
+                    ? 'যাতায়াত'
+                    : e.category === 'family'
+                    ? 'পরিবার'
+                    : e.category === 'medical'
+                    ? 'চিকিৎসা'
+                    : e.category === 'education'
+                    ? 'পড়াশোনা'
+                    : 'অন্যান্য'
+                })`
+              : `Expense (${e.category})`,
+          subtitle: e.description || '',
+          amountText: `- ${formatBDT(e.amount, lang)}`,
+          type: 'expense' as const,
+        })),
+      ]
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .slice(0, 8),
+    [overtime, selectedMonth, lang, monthPayments, monthExpenses]
+  );
+
+  const recentActivityPie = useMemo(
+    () =>
+      buildRecentActivityPieAnalytics({
+        selectedMonth,
+        overtime,
+        payments,
+        expenses,
+      }),
+    [selectedMonth, overtime, payments, expenses]
+  );
 
   return (
     <div data-testid="dashboard-view" className="space-y-6">
@@ -756,7 +868,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {profile.photoUrl || user?.photoURL ? (
                   <img
                     src={profile.photoUrl || user?.photoURL || ''}
-                    alt={profile.fullName || 'প্রোফাইল ছবি'}
+                    alt={workerDisplayName}
                     data-testid="dashboard-user-photo-img"
                     className="w-full h-full object-cover"
                   />
@@ -765,7 +877,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     data-testid="dashboard-user-photo-fallback"
                     className="text-sm sm:text-base font-extrabold text-emerald-800 dark:text-emerald-200"
                   >
-                    {(profile.fullName || user?.displayName || 'শ্র').trim().charAt(0)}
+                    {(workerDisplayName || 'স').trim().charAt(0)}
                   </span>
                 )}
                 <span className="absolute bottom-0.5 right-0.5 w-4 h-4 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-2xs">
@@ -774,15 +886,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             </div>
 
-            <div className="min-w-0 flex-1">
-              <h1 className="text-base sm:text-2xl font-bold text-slate-900 dark:text-white leading-tight truncate">
-                {lang === 'bn'
-                  ? profile.fullName
-                    ? `স্বাগতম, ${profile.fullName}`
-                    : 'স্বাগতম'
-                  : profile.fullName
-                  ? `Welcome, ${profile.fullName}`
-                  : 'Welcome'}
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <p
+                data-testid="dashboard-greeting-line"
+                className="text-xs sm:text-sm font-semibold text-emerald-700 dark:text-emerald-400 truncate"
+              >
+                {timeGreeting}
+              </p>
+              <h1
+                data-testid="dashboard-user-name"
+                className="text-base sm:text-2xl font-bold text-slate-900 dark:text-white leading-tight truncate"
+              >
+                {workerDisplayName}
               </h1>
             </div>
           </div>
@@ -1478,17 +1593,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </section>
 
+      {/* 2B. Earned Salary, Payable & Overtime Breakdown Pie Chart (Below 6 Summary Cards & Above Missing Records) */}
+      <EarnedSalarySummaryPieCard
+        selectedMonth={selectedMonth}
+        lang={lang}
+        totalEarnedSalary={earnedSalaryBreakdown.totalEarnedSalary}
+        earnedBasePay={earnedSalaryBreakdown.earnedBaseSalary}
+        attendedDaysCount={earnedSalaryBreakdown.attendedDaysCount}
+        dailyWageRate={earnedSalaryBreakdown.dailyWageRate}
+        receivedSalary={paymentSummary.totalReceived}
+        outstandingBalance={earnedOutstandingBalance}
+        otHours={otSummary.monthlyHours}
+        otEarnings={otSummary.monthlyEarnings}
+        bonusAndAllowances={
+          earnedSalaryBreakdown.earnedAttendanceBonus +
+          earnedSalaryBreakdown.otherAllowancesTotal
+        }
+        isAttendanceBonusEligible={attBonusEval.isEligible}
+      />
+
       {/* 3. Inline Missing Records Section */}
       <MissingRecordsSection onSelectDate={() => onNavigateTab('attendance')} />
 
-      {/* 6. Quick Access: My Garment & Contact Book Banner */}
+      {/* 4. Quick Access: My Garment & Contact Book Banner */}
       <section className="bg-gradient-to-r from-emerald-50 via-teal-50 to-slate-50 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-slate-900 border border-emerald-200/80 dark:border-emerald-800/60 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 shadow-xs">
             <Building2 className="w-5 h-5" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+            <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white leading-snug">
               {lang === 'bn' ? 'আমার গার্মেন্টস ও কন্ট্যাক্ট বুক' : 'My Garment & Contact Book'}
             </h3>
           </div>
@@ -1506,7 +1640,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </button>
       </section>
 
-      {/* 7. Priority Feature 1: Smart Salary Comparison & Monthly Financial Insights */}
+      {/* 5. Priority Feature 1: Smart Salary Comparison & Monthly Financial Insights */}
       <section
         data-testid="smart-salary-comparison"
         className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5 space-y-3.5"
@@ -1632,6 +1766,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </section>
+
+      {/* 6. Contextual Zone 1: Monthly Salary & Financial Analytics + Factory Pie & Comparison Graph */}
+      <HomeAnalyticsSection
+        zone="salary_overview"
+        selectedMonth={selectedMonth}
+        lang={lang}
+        profile={profile}
+        attendance={attendance}
+        overtime={overtime}
+        salaryRecords={salaryRecords}
+        payments={payments}
+        expenses={expenses}
+        savings={savings}
+        loans={loans}
+        workplaces={workplaces}
+        todayISO={todayISO}
+        isReadOnlyDemo={isReadOnlyDemo}
+        onSeedSampleData={() => void seedSampleDemoData()}
+        onSelectMonth={setSelectedMonth}
+        onNavigateTab={onNavigateTab}
+      />
 
       {/* Dedicated Attendance & Public Holidays Overview right inside Home (হোমের ভিতরে হাজিরা ও ছুটি ওভারভিউ) */}
       <section
@@ -2174,81 +2329,134 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </section>
 
-      {/* Bottom 2-Column Section: Recent Activity & Reminders */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Recent Transactions */}
-        <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-            <h2 className="text-base font-bold text-slate-900 dark:text-white">
-              {lang === 'bn' ? 'সাম্প্রতিক হিসাব ও লেনদেন' : 'Recent Activity & Records'}
-            </h2>
-            <button
-              type="button"
-              onClick={() => onNavigateTab('more', 'reports')}
-              className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline min-h-[36px] inline-flex items-center"
-            >
-              {lang === 'bn' ? 'সব রিপোর্ট দেখুন' : 'All Reports'}
-            </button>
-          </div>
+      {/* Contextual Zone 3: Attendance & Holiday Pie Chart + Overtime Analytics Pie Chart (Directly below Home Calendar) */}
+      <HomeAnalyticsSection
+        zone="attendance_overtime"
+        selectedMonth={selectedMonth}
+        lang={lang}
+        profile={profile}
+        attendance={attendance}
+        overtime={overtime}
+        salaryRecords={salaryRecords}
+        payments={payments}
+        expenses={expenses}
+        savings={savings}
+        loans={loans}
+        workplaces={workplaces}
+        todayISO={todayISO}
+        isReadOnlyDemo={isReadOnlyDemo}
+        onSeedSampleData={() => void seedSampleDemoData()}
+        onSelectMonth={setSelectedMonth}
+        onNavigateTab={onNavigateTab}
+      />
 
-          {recentActivity.length === 0 ? (
-            <div className="py-8 text-center text-xs text-slate-500 dark:text-slate-400">
-              {lang === 'bn'
-                ? 'এই মাসে এখনো কোনো লেনদেন বা ওভারটাইম যোগ করা হয়নি।'
-                : 'No transactions or overtime entries recorded for this month yet.'}
+      {/* Contextual Zone 4: Monthly Expenses & Rent Pie/Graph + Personal Loans Pie/Graph */}
+      <HomeAnalyticsSection
+        zone="expense_loans"
+        selectedMonth={selectedMonth}
+        lang={lang}
+        profile={profile}
+        attendance={attendance}
+        overtime={overtime}
+        salaryRecords={salaryRecords}
+        payments={payments}
+        expenses={expenses}
+        savings={savings}
+        loans={loans}
+        workplaces={workplaces}
+        todayISO={todayISO}
+        isReadOnlyDemo={isReadOnlyDemo}
+        onSeedSampleData={() => void seedSampleDemoData()}
+        onSelectMonth={setSelectedMonth}
+        onNavigateTab={onNavigateTab}
+      />
+
+      {/* Bottom 2-Column Section: Recent Activity (+ Recent Activity Pie Chart) & Reminders */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Recent Transactions + Recent Activity Pie Chart directly below */}
+        <div className="lg:col-span-7 space-y-6">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                {lang === 'bn' ? 'সাম্প্রতিক হিসাব ও লেনদেন' : 'Recent Activity & Records'}
+              </h2>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('more', 'reports')}
+                className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline min-h-[36px] inline-flex items-center"
+              >
+                {lang === 'bn' ? 'সব রিপোর্ট দেখুন' : 'All Reports'}
+              </button>
             </div>
-          ) : (
-            <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {recentActivity.map((item) => (
-                <div
-                  key={item.id}
-                  className="py-3 flex items-center justify-between gap-4 min-h-[56px]"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0">
-                      {item.type === 'overtime' ? (
-                        <Clock className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
-                      ) : item.type === 'payment' ? (
-                        <Banknote className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
-                      ) : (
-                        <Wallet className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+
+            {recentActivity.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-500 dark:text-slate-400">
+                {lang === 'bn'
+                  ? 'এই মাসে এখনো কোনো লেনদেন বা ওভারটাইম যোগ করা হয়নি।'
+                  : 'No transactions or overtime entries recorded for this month yet.'}
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {recentActivity.map((item) => (
+                  <div
+                    key={item.id}
+                    className="py-3 flex items-center justify-between gap-4 min-h-[56px]"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0">
+                        {item.type === 'overtime' ? (
+                          <Clock className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+                        ) : item.type === 'payment' ? (
+                          <Banknote className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+                        ) : (
+                          <Wallet className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                          {item.title}
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                          {formatDateReadable(item.date, lang)}
+                          {item.subtitle ? ` · ${item.subtitle}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span
+                        className={`text-sm font-bold tabular-nums ${
+                          item.type === 'expense'
+                            ? 'text-slate-800 dark:text-slate-200'
+                            : 'text-emerald-700 dark:text-emerald-400'
+                        }`}
+                      >
+                        {item.amountText}
+                      </span>
+                      {item.type === 'overtime' && (
+                        <button
+                          type="button"
+                          onClick={() => deleteOvertime(item.rawId)}
+                          title={lang === 'bn' ? 'মুছে ফেলুন' : 'Delete'}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       )}
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
-                        {item.title}
-                      </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                        {formatDateReadable(item.date, lang)}
-                        {item.subtitle ? ` · ${item.subtitle}` : ''}
-                      </p>
-                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span
-                      className={`text-sm font-bold tabular-nums ${
-                        item.type === 'expense'
-                          ? 'text-slate-800 dark:text-slate-200'
-                          : 'text-emerald-700 dark:text-emerald-400'
-                      }`}
-                    >
-                      {item.amountText}
-                    </span>
-                    {item.type === 'overtime' && (
-                      <button
-                        type="button"
-                        onClick={() => deleteOvertime(item.rawId)}
-                        title={lang === 'bn' ? 'মুছে ফেলুন' : 'Delete'}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
+
+          <RecentActivityPieChartCard
+            selectedMonth={selectedMonth}
+            lang={lang}
+            analytics={recentActivityPie}
+            onSelectMonth={setSelectedMonth}
+            onAddOvertimeClick={() => onNavigateTab('overtime')}
+            onAddExpenseClick={() => onNavigateTab('expenses')}
+          />
         </div>
 
         {/* Upcoming Reminders with Direct Quick-Add */}

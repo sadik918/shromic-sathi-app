@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Calendar,
@@ -57,6 +57,8 @@ import {
 } from '../utils/calculations';
 import { formatDateReadable, formatDateShortBn, formatDateSlashDMY, formatMonthLabel, T } from '../utils/i18n';
 import { DateInputDMY } from './DateInputDMY';
+import { ExpenseCashflowAnalyticsCard, ExpenseRentTrendChartCard } from './AnalyticsChartCards';
+import { buildExpenseRentTrend, buildHomeOverviewAnalytics } from '../utils/homeAnalytics';
 
 const EXPENSE_CATEGORIES: Array<{
   id: ExpenseCategory;
@@ -166,12 +168,15 @@ export const ExpensesView: React.FC = () => {
     profile,
     todayISO,
     selectedMonth,
+    setSelectedMonth,
     lang,
+    attendance,
     overtime,
     salaryRecords,
     payments,
     expenses,
     savings,
+    loans,
     saveExpense,
     deleteExpense,
     savePayment,
@@ -181,6 +186,34 @@ export const ExpensesView: React.FC = () => {
   } = useData();
 
   const dict = T[lang];
+
+  const expenseAnalytics = useMemo(
+    () =>
+      buildHomeOverviewAnalytics({
+        selectedMonth,
+        lang,
+        profile,
+        attendance,
+        overtime,
+        salaryRecords,
+        payments,
+        expenses,
+        savings,
+        loans,
+      }),
+    [selectedMonth, lang, profile, attendance, overtime, salaryRecords, payments, expenses, savings, loans]
+  );
+
+  const rentTrend = useMemo(
+    () =>
+      buildExpenseRentTrend({
+        selectedMonth,
+        lang,
+        expenses,
+        payments,
+      }),
+    [selectedMonth, lang, expenses, payments]
+  );
 
   const monthPayments = payments.filter((p) => p.month === selectedMonth);
   const monthExpenses = expenses
@@ -1556,6 +1589,20 @@ export const ExpensesView: React.FC = () => {
             </span>
           )}
         </div>
+      </div>
+
+      {/* Expense Category Pie & 6-Month Rent/Food/Income Graph */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ExpenseCashflowAnalyticsCard
+          selectedMonth={selectedMonth}
+          lang={lang}
+          expenseCategorySlices={expenseAnalytics.expenseCategorySlices}
+          salaryCollectionPct={expenseAnalytics.kpis.salaryCollectionPct}
+          savingsProgressPct={expenseAnalytics.kpis.savingsProgressPct}
+          latestPopulatedExpenseMonth={expenseAnalytics.latestPopulatedExpenseMonth}
+          onSelectMonth={setSelectedMonth}
+        />
+        <ExpenseRentTrendChartCard lang={lang} rentTrend={rentTrend} />
       </div>
 
       {/* Quick Category Navigation Tabs for Mobile & Desktop (Loans removed as it has its own tab) */}

@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   Building2,
   Calendar,
+  Camera,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -30,6 +31,11 @@ import {
   X,
 } from 'lucide-react';
 import { useData } from '../context/DataContext';
+import {
+  compressImageFileToContactDataUrl,
+  CONTACT_PHOTO_EVENT,
+  loadAllContactPhotosFromDevice,
+} from '../utils/deviceMediaStore';
 import {
   getGoogleContactsAccessToken,
   fetchGoogleContacts,
@@ -130,6 +136,37 @@ export const GarmentContactBookView: React.FC = () => {
   const [ctIsPinned, setCtIsPinned] = useState(false);
   const [ctIsFavorite, setCtIsFavorite] = useState(false);
   const [ctIsEmergency, setCtIsEmergency] = useState(false);
+  const [ctPhotoUrl, setCtPhotoUrl] = useState('');
+  const [ctPhotoProcessing, setCtPhotoProcessing] = useState(false);
+  const [ctPhotoError, setCtPhotoError] = useState('');
+  const [devicePhotos, setDevicePhotos] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let mounted = true;
+    loadAllContactPhotosFromDevice().then((map) => {
+      if (mounted && map) {
+        setDevicePhotos(map);
+      }
+    });
+    const handlePhotoEvent = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ contactId?: string; photoUrl?: string }>).detail;
+      if (!detail?.contactId) return;
+      setDevicePhotos((prev) => {
+        const next = { ...prev };
+        if (detail.photoUrl) {
+          next[detail.contactId!] = detail.photoUrl;
+        } else {
+          delete next[detail.contactId!];
+        }
+        return next;
+      });
+    };
+    window.addEventListener(CONTACT_PHOTO_EVENT, handlePhotoEvent);
+    return () => {
+      mounted = false;
+      window.removeEventListener(CONTACT_PHOTO_EVENT, handlePhotoEvent);
+    };
+  }, []);
 
   // Copy phone state & Duplicate merge state
   const [copiedPhoneContactId, setCopiedPhoneContactId] = useState<string | null>(null);
@@ -283,6 +320,7 @@ export const GarmentContactBookView: React.FC = () => {
                 department: merged.department,
                 lineNumber: merged.lineNumber,
                 notes: merged.notes,
+                photoUrl: merged.photoUrl,
                 isFavorite: merged.isFavorite,
                 isEmergency: merged.isEmergency,
                 source: 'google',
@@ -360,6 +398,7 @@ export const GarmentContactBookView: React.FC = () => {
               department: c.department,
               lineNumber: c.lineNumber,
               notes: c.notes,
+              photoUrl: c.photoUrl,
               isFavorite: c.isFavorite,
               isEmergency: c.isEmergency,
               source: c.source || 'google',
@@ -433,6 +472,7 @@ export const GarmentContactBookView: React.FC = () => {
             department: contact.department,
             lineNumber: contact.lineNumber,
             notes: contact.notes,
+            photoUrl: contact.photoUrl,
             isFavorite: contact.isFavorite,
             isEmergency: contact.isEmergency,
             source: contact.source || 'google',
@@ -509,6 +549,7 @@ export const GarmentContactBookView: React.FC = () => {
             department: contact.department,
             lineNumber: contact.lineNumber,
             notes: contact.notes,
+            photoUrl: contact.photoUrl,
             isFavorite: contact.isFavorite,
             isEmergency: contact.isEmergency,
             source: contact.source,
@@ -663,6 +704,8 @@ export const GarmentContactBookView: React.FC = () => {
     setCtDepartment(currentWorkplace?.department || '');
     setCtLineNumber(currentWorkplace?.lineNumber || '');
     setCtNotes('');
+    setCtPhotoUrl('');
+    setCtPhotoError('');
     setCtIsPinned(false);
     setCtIsFavorite(false);
     setCtIsEmergency(false);
@@ -680,11 +723,41 @@ export const GarmentContactBookView: React.FC = () => {
     setCtDepartment(c.department || '');
     setCtLineNumber(c.lineNumber || '');
     setCtNotes(c.notes || '');
+    setCtPhotoUrl(devicePhotos[c.id] || c.photoUrl || '');
+    setCtPhotoError('');
     setCtIsPinned(Boolean(c.isPinned));
     setCtIsFavorite(c.isFavorite);
     setCtIsEmergency(c.isEmergency);
     setSaveToGoogleAccount(Boolean(c.isSyncedToGoogle));
     setContactModalOpen(true);
+  };
+
+  const handleContactPhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setCtPhotoError(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে একটি ছবির ফাইল (JPG/PNG) নির্বাচন করুন'
+          : 'Please choose an image file (JPG/PNG)'
+      );
+      return;
+    }
+    setCtPhotoError('');
+    setCtPhotoProcessing(true);
+    try {
+      const compressed = await compressImageFileToContactDataUrl(file, 180, 0.74);
+      setCtPhotoUrl(compressed);
+    } catch {
+      setCtPhotoError(
+        lang === 'bn'
+          ? 'ছবিটি প্রসেস করা যায়নি, অনুগ্রহ করে অন্য ছবি চেষ্টা করুন'
+          : 'Failed to process photo, please try another image'
+      );
+    } finally {
+      setCtPhotoProcessing(false);
+    }
   };
 
   const handleTogglePinContact = async (contact: WorkerContact) => {
@@ -700,6 +773,7 @@ export const GarmentContactBookView: React.FC = () => {
           department: contact.department,
           lineNumber: contact.lineNumber,
           notes: contact.notes,
+          photoUrl: devicePhotos[contact.id] || contact.photoUrl,
           isPinned: nextPinned,
           isFavorite: contact.isFavorite,
           isEmergency: contact.isEmergency,
@@ -814,6 +888,7 @@ export const GarmentContactBookView: React.FC = () => {
           department: ctDepartment.trim() || undefined,
           lineNumber: ctLineNumber.trim() || undefined,
           notes: ctNotes.trim() || undefined,
+          photoUrl: ctPhotoUrl || undefined,
           isPinned: ctIsPinned,
           isFavorite: ctIsFavorite,
           isEmergency: ctIsEmergency,
@@ -1204,7 +1279,7 @@ export const GarmentContactBookView: React.FC = () => {
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
                 {pastWorkplaces.map((wp) => (
                   <div
                     key={wp.id}
@@ -1540,7 +1615,7 @@ export const GarmentContactBookView: React.FC = () => {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3.5">
               {filteredContacts.map((contact) => {
                 const meta = getCategoryMeta(contact.category, contact.customCategory);
                 const waUrl = formatWhatsAppUrl(contact.phone);
@@ -1641,9 +1716,21 @@ export const GarmentContactBookView: React.FC = () => {
 
                       {/* Contact Info */}
                       <div className="flex items-start gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-200 font-bold shrink-0 text-base">
-                          {contact.fullName.charAt(0) || <User className="w-5 h-5" />}
-                        </div>
+                        {(() => {
+                          const resolvedPhoto = devicePhotos[contact.id] || contact.photoUrl;
+                          return resolvedPhoto ? (
+                            <img
+                              src={resolvedPhoto}
+                              alt={contact.fullName}
+                              data-testid={`contact-avatar-img-${contact.id}`}
+                              className="w-11 h-11 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                            />
+                          ) : (
+                            <div className="w-11 h-11 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-200 font-bold shrink-0 text-base">
+                              {contact.fullName.charAt(0) || <User className="w-5 h-5" />}
+                            </div>
+                          );
+                        })()}
                         <div className="min-w-0 flex-1">
                           <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
                             {contact.fullName}
@@ -1844,10 +1931,25 @@ export const GarmentContactBookView: React.FC = () => {
                           {c.department || c.lineNumber || ''}
                         </span>
                       </div>
-                      <h4 className="text-base font-bold text-slate-900 dark:text-white mt-1">
-                        {c.fullName}
-                      </h4>
-                      {c.designation && <p className="text-xs text-slate-500">{c.designation}</p>}
+                      <div className="flex items-center gap-2.5 mt-2">
+                        {(devicePhotos[c.id] || c.photoUrl) ? (
+                          <img
+                            src={devicePhotos[c.id] || c.photoUrl}
+                            alt={c.fullName}
+                            className="w-10 h-10 rounded-xl object-cover border border-rose-200 dark:border-rose-800 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 flex items-center justify-center text-rose-700 dark:text-rose-300 font-bold shrink-0 text-sm">
+                            {c.fullName.charAt(0) || <User className="w-4 h-4" />}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <h4 className="text-base font-bold text-slate-900 dark:text-white truncate">
+                            {c.fullName}
+                          </h4>
+                          {c.designation && <p className="text-xs text-slate-500 truncate">{c.designation}</p>}
+                        </div>
+                      </div>
                       <div className="flex items-center justify-between gap-2 mt-2 p-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
                         <span className="text-sm font-bold text-slate-800 dark:text-slate-100 font-mono tracking-wide">
                           {toEnglishDisplayPhone(c.phone)}
@@ -2198,6 +2300,74 @@ export const GarmentContactBookView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSaveContactSubmit} className="space-y-4">
+              {/* Contact Photo Upload (Offline IndexedDB + Cloud Sync) */}
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center gap-3.5">
+                {ctPhotoUrl ? (
+                  <img
+                    src={ctPhotoUrl}
+                    alt={ctFullName || 'Contact'}
+                    data-testid="contact-modal-photo-preview"
+                    className="w-14 h-14 rounded-2xl object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                  />
+                ) : (
+                  <div className="w-14 h-14 rounded-2xl bg-white dark:bg-slate-800 border border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-center text-slate-400 shrink-0">
+                    <Camera className="w-6 h-6" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <label
+                      htmlFor="contact-photo-upload"
+                      className="min-h-[34px] px-3 py-1 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>
+                        {ctPhotoProcessing
+                          ? lang === 'bn'
+                            ? 'প্রসেস হচ্ছে...'
+                            : 'Processing...'
+                          : ctPhotoUrl
+                          ? lang === 'bn'
+                            ? 'ছবি পরিবর্তন'
+                            : 'Change Photo'
+                          : lang === 'bn'
+                          ? 'ছবি যুক্ত করুন'
+                          : 'Add Photo'}
+                      </span>
+                    </label>
+                    <input
+                      id="contact-photo-upload"
+                      data-testid="contact-photo-input"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleContactPhotoFileChange}
+                      className="sr-only"
+                    />
+                    {ctPhotoUrl && (
+                      <button
+                        type="button"
+                        data-testid="contact-photo-remove-btn"
+                        onClick={() => setCtPhotoUrl('')}
+                        className="min-h-[34px] px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>{lang === 'bn' ? 'ছবি মুছুন' : 'Remove'}</span>
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">
+                    {lang === 'bn'
+                      ? 'ছবি ফোনের ডিভাইস স্টোরেজ (অফলাইন) ও ক্লাউড অ্যাকাউন্টে নিরাপদে সেভ থাকবে।'
+                      : 'Saved offline on device storage and synced to your cloud account.'}
+                  </p>
+                  {ctPhotoError && (
+                    <p className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                      {ctPhotoError}
+                    </p>
+                  )}
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   {lang === 'bn' ? 'পূর্ণ নাম * (আবশ্যক)' : 'Full Name * (Required)'}

@@ -33,6 +33,8 @@ import {
 } from '../utils/calculations';
 import { formatDateReadable } from '../utils/i18n';
 import { DateInputDMY } from './DateInputDMY';
+import { FactoryComparisonChartsCard } from './AnalyticsChartCards';
+import { buildFactoryComparisonAnalytics } from '../utils/homeAnalytics';
 
 interface FactoryShiftCareerViewProps {
   onShowNotice?: (msg: string) => void;
@@ -164,6 +166,16 @@ export const FactoryShiftCareerView: React.FC<FactoryShiftCareerViewProps> = ({
       basicSalary: profile.basicSalary,
     },
     profile,
+    salaryRecords,
+    payments,
+    overtime,
+    attendance,
+    todayISO: todayStr,
+  });
+
+  const factoryComparisonAnalytics = buildFactoryComparisonAnalytics({
+    profile,
+    workplaces,
     salaryRecords,
     payments,
     overtime,
@@ -1178,6 +1190,12 @@ export const FactoryShiftCareerView: React.FC<FactoryShiftCareerViewProps> = ({
           </div>
         </form>
       )}
+
+      {/* Factory Salary/Attendance Pie & Previous-vs-Current Bar Graph */}
+      <FactoryComparisonChartsCard
+        lang={lang}
+        analytics={factoryComparisonAnalytics}
+      />
 
       {/* ================================================================ */}
       {/* 3. PREVIOUS GARMENTS HISTORY & ANALYTICS REPORT SECTION          */}

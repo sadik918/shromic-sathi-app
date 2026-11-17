@@ -85,17 +85,45 @@ export function loadOfflineQueue(scopeKey: string): OfflineMutation[] {
   }
 }
 
+function compactMutationForStorage(m: OfflineMutation): OfflineMutation {
+  if (!m.payload || m.action !== 'upsert') return m;
+  const payload = { ...m.payload };
+  if (typeof payload.fileData === 'string' && payload.fileData.length > 32768) {
+    payload.fileData = payload.fileData.slice(0, 32768);
+  }
+  if (typeof payload.photoUrl === 'string' && payload.photoUrl.length > 32768) {
+    payload.photoUrl = payload.photoUrl.slice(0, 32768);
+  }
+  return { ...m, payload };
+}
+
 export function saveOfflineQueue(scopeKey: string, queue: OfflineMutation[]): void {
   if (typeof window === 'undefined') return;
-  try {
-    const storageKey = `${OFFLINE_QUEUE_PREFIX}${normalizeSyncScopeKey(scopeKey)}`;
-    if (queue.length === 0) {
+  const storageKey = `${OFFLINE_QUEUE_PREFIX}${normalizeSyncScopeKey(scopeKey)}`;
+  if (queue.length === 0) {
+    try {
       localStorage.removeItem(storageKey);
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  try {
+    const serialized = JSON.stringify(queue);
+    if (serialized.length > 1_200_000) {
+      const compacted = queue.map(compactMutationForStorage);
+      localStorage.setItem(storageKey, JSON.stringify(compacted));
     } else {
-      localStorage.setItem(storageKey, JSON.stringify(queue));
+      localStorage.setItem(storageKey, serialized);
     }
   } catch {
-    // ignore storage quota errors
+    try {
+      const compacted = queue.map(compactMutationForStorage);
+      localStorage.setItem(storageKey, JSON.stringify(compacted));
+    } catch {
+      // ignore if storage is completely unavailable
+    }
   }
 }
 

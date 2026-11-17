@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   AlertTriangle,
   Banknote,
@@ -49,6 +49,8 @@ import {
 } from '../utils/calculations';
 import { formatDateReadable, formatDateSlashDMY, formatMonthLabel, T } from '../utils/i18n';
 import { DateInputDMY } from './DateInputDMY';
+import { SalaryMixPieChartCard } from './AnalyticsChartCards';
+import { buildHomeOverviewAnalytics } from '../utils/homeAnalytics';
 
 const PAYMENT_METHODS: Array<{ id: PaymentMethod; labelBn: string; labelEn: string }> = [
   { id: 'bkash', labelBn: 'বিকাশ (bKash)', labelEn: 'bKash' },
@@ -77,6 +79,23 @@ export const SalaryView: React.FC = () => {
 
   const dict = T[lang];
   const isUpcomingMonth = isFutureMonth(selectedMonth, currentMonthISO);
+
+  const salaryMixAnalytics = useMemo(
+    () =>
+      buildHomeOverviewAnalytics({
+        selectedMonth,
+        lang,
+        profile,
+        attendance,
+        overtime,
+        salaryRecords,
+        payments,
+        expenses: [],
+        savings: [],
+        loans: [],
+      }),
+    [selectedMonth, lang, profile, attendance, overtime, salaryRecords, payments]
+  );
 
   const otSummary = summarizeOvertimeRecords(overtime, selectedMonth);
   const existingSalaryRec = salaryRecords.find((s) => s.month === selectedMonth);
@@ -727,6 +746,11 @@ export const SalaryView: React.FC = () => {
           <span>{statusMessage}</span>
         </div>
       )}
+
+      {/* Salary, Allowances & Overtime Donut Pie Breakdown */}
+      <div className="no-print">
+        <SalaryMixPieChartCard lang={lang} slices={salaryMixAnalytics.salarySlices} />
+      </div>
 
       {/* Main Split: Clean Salary Statement Builder (Left) + Actual Payment Tracker (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">

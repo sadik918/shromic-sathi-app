@@ -5,8 +5,9 @@ import {
   getDocFromServer,
   getFirestore,
   initializeFirestore,
+  memoryLocalCache,
   persistentLocalCache,
-  persistentMultipleTabManager,
+  persistentSingleTabManager,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -15,19 +16,61 @@ const dbId =
   (firebaseConfig as Record<string, any>).firestoreDatabaseId ||
   'ai-studio-bcf4f937-8686-4b7f-8375-af9589cd1cf0';
 
-function initPersistentFirestore() {
+/**
+ * Purges legacy Firestore multi-tab WebStorageSharedClientState keys from localStorage
+ * (`firestore_mutations_*`, `firestore_clients_*`, etc.) that previously caused
+ * QuotaExceededError + Firestore b815 assertion failures in the 5MB localStorage budget.
+ */
+function purgeLegacyFirestoreWebStorageKeys() {
+  if (typeof window === 'undefined' || !window.localStorage) return;
   try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (
+        k &&
+        (k.startsWith('firestore_mutations_') ||
+          k.startsWith('firestore_clients_') ||
+          k.startsWith('firestore_online_state_') ||
+          k.startsWith('firestore_sequence_number_'))
+      ) {
+        keysToRemove.push(k);
+      }
+    }
+    for (const k of keysToRemove) {
+      window.localStorage.removeItem(k);
+    }
+  } catch {
+    // Ignore storage enumeration issues in restricted environments
+  }
+}
+
+function initPersistentFirestore() {
+  purgeLegacyFirestoreWebStorageKeys();
+  try {
+    // Use IndexedDB-backed single-tab persistence so pending mutations live in
+    // IndexedDB instead of 5MB localStorage (eliminating WebStorage QuotaExceededError).
     return initializeFirestore(
       app,
       {
         localCache: persistentLocalCache({
-          tabManager: persistentMultipleTabManager(),
+          tabManager: persistentSingleTabManager({ forceOwnership: true }),
         }),
       },
       dbId
     );
   } catch {
-    return getFirestore(app, dbId);
+    try {
+      return initializeFirestore(
+        app,
+        {
+          localCache: memoryLocalCache(),
+        },
+        dbId
+      );
+    } catch {
+      return getFirestore(app, dbId);
+    }
   }
 }
 

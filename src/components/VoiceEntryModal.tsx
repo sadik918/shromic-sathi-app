@@ -1,5 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Check, Mic, MicOff, RotateCcw, Sparkles, X } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowRight,
+  Banknote,
+  Bell,
+  CalendarCheck2,
+  Check,
+  Clock,
+  Mic,
+  MicOff,
+  RotateCcw,
+  Wallet,
+  X,
+} from 'lucide-react';
 import { useData } from '../context/DataContext';
 import type {
   ExpenseCategory,
@@ -28,38 +41,44 @@ interface VoiceEntryModalProps {
 
 const ENTRY_TYPE_META: Record<
   ProposedVoiceEntry['entryType'],
-  { labelBn: string; labelEn: string; targetLabelBn: string; targetTab: NavTab; targetSub?: MoreSubView }
+  {
+    labelBn: string;
+    labelEn: string;
+    targetTab: NavTab;
+    targetSub?: MoreSubView;
+    icon: React.ComponentType<{ className?: string }>;
+  }
 > = {
   overtime: {
     labelBn: 'ওভারটাইম হিসাব',
     labelEn: 'Overtime Entry',
-    targetLabelBn: 'ওভারটাইম পাতা',
     targetTab: 'overtime',
+    icon: Clock,
   },
   attendance: {
     labelBn: 'হাজিরা ও ছুটি',
     labelEn: 'Attendance Entry',
-    targetLabelBn: 'হাজিরা ক্যালেন্ডার পাতা',
     targetTab: 'attendance',
+    icon: CalendarCheck2,
   },
   expense: {
     labelBn: 'দৈনিক খরচ ও বাজার',
     labelEn: 'Daily Expense',
-    targetLabelBn: 'হিসাব ও খরচ পাতা',
     targetTab: 'expenses',
+    icon: Wallet,
   },
   payment: {
     labelBn: 'প্রাপ্ত বেতন ও জমা',
     labelEn: 'Salary Payment',
-    targetLabelBn: 'বেতন ও পে-স্লিপ পাতা',
     targetTab: 'salary',
+    icon: Banknote,
   },
   reminder: {
     labelBn: 'রিমাইন্ডার',
     labelEn: 'Reminder',
-    targetLabelBn: 'রিমাইন্ডার পাতা',
     targetTab: 'more',
     targetSub: 'reminders',
+    icon: Bell,
   },
 };
 
@@ -526,25 +545,30 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
     );
   };
 
+  const ProposalIcon = proposal ? ENTRY_TYPE_META[proposal.entryType].icon : Mic;
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       data-testid="voice-entry-modal"
-      aria-label={lang === 'bn' ? 'বাংলা কণ্ঠস্বর এন্ট্রি' : 'Bengali Voice Entry'}
+      aria-label={lang === 'bn' ? 'কণ্ঠস্বর এন্ট্রি' : 'Voice Entry'}
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-xs p-0 sm:p-4"
     >
-      <div className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-          <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white">
-              {lang === 'bn' ? 'বাংলা কণ্ঠস্বর ও দ্রুত এন্ট্রি' : 'Bengali Voice & Quick Entry'}
+      <div className="w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-5 pt-3 pb-5 sm:p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div
+          aria-hidden="true"
+          className="sm:hidden w-10 h-1 rounded-full bg-slate-200 dark:bg-slate-700 mx-auto mb-3"
+        />
+
+        <div className="flex items-center justify-between gap-3 pb-3.5 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+              <Mic className="w-4 h-4" />
+            </span>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white truncate">
+              {lang === 'bn' ? 'কণ্ঠস্বর এন্ট্রি' : 'Voice Entry'}
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {lang === 'bn'
-                ? 'কথা বলুন বা বাক্য নির্বাচন করুন — অটোমেটিক তারিখ ও হিসাব শনাক্ত হবে'
-                : 'Speak or select a phrase — date and category are detected automatically'}
-            </p>
           </div>
           <button
             type="button"
@@ -553,48 +577,28 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
               stopWebSpeech();
               onClose();
             }}
-            aria-label="বন্ধ করুন"
-            className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+            aria-label={lang === 'bn' ? 'বন্ধ করুন' : 'Close'}
+            className="min-h-[44px] min-w-[44px] -mr-1.5 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition-colors shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {!proposal ? (
-          <form onSubmit={handleAnalyzeTranscript} className="mt-4 space-y-4">
-            {!hasMicPermission && (
-              <div
-                data-testid="voice-mic-permission-banner"
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/70"
-              >
-                <div className="text-xs text-indigo-950 dark:text-indigo-200">
-                  <p className="font-bold">
-                    {lang === 'bn'
-                      ? 'কণ্ঠস্বরে এন্ট্রির জন্য মাইক্রোফোন এক্সেস প্রয়োজন'
-                      : 'Microphone access required for Voice Entry'}
-                  </p>
-                  <p className="text-[11px] text-indigo-700 dark:text-indigo-300 mt-0.5">
-                    {lang === 'bn'
-                      ? 'একবার এলাও (Allow) করলে পরবর্তীতে স্বয়ংক্রিয়ভাবে চালু থাকবে, বারবার চাইবে না।'
-                      : 'Once enabled, microphone access stays enabled automatically.'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  data-testid="voice-mic-allow-once-btn"
-                  onClick={() => void handleRequestAndAllowMicrophone()}
-                  className="shrink-0 min-h-[38px] px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
-                >
-                  <Mic className="w-3.5 h-3.5" />
-                  <span>{lang === 'bn' ? 'মাইক্রোফোন এলাও করুন' : 'Allow Microphone'}</span>
-                </button>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/70">
+          <form onSubmit={handleAnalyzeTranscript} className="mt-5 space-y-5">
+            <div className="flex flex-col items-center justify-center py-2">
               <button
                 type="button"
                 data-testid="voice-mic-toggle-btn"
+                aria-label={
+                  isListening
+                    ? lang === 'bn'
+                      ? 'শোনা বন্ধ করুন'
+                      : 'Stop listening'
+                    : lang === 'bn'
+                    ? 'মাইক্রোফোনে কথা বলুন'
+                    : 'Speak with microphone'
+                }
                 onClick={() => {
                   if (isListening) {
                     stopWebSpeech();
@@ -604,61 +608,52 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
                     startWebSpeech();
                   }
                 }}
-                className={`min-h-[44px] px-4 rounded-xl font-bold text-xs sm:text-sm inline-flex items-center gap-2 transition-colors ${
+                className={`w-16 h-16 rounded-full flex items-center justify-center transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-500/40 ${
                   isListening
-                    ? 'bg-red-600 text-white animate-pulse'
-                    : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white ring-8 ring-rose-500/15 shadow-md'
+                    : 'bg-emerald-700 hover:bg-emerald-800 text-white ring-8 ring-emerald-600/10 shadow-sm'
                 }`}
               >
-                {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                <span>
-                  {isListening
-                    ? lang === 'bn'
-                      ? 'মাইক্রোফোন চালু আছে... বলুন'
-                      : 'Listening... Speak now'
-                    : !hasMicPermission
-                    ? lang === 'bn'
-                      ? 'মাইক্রোফোন এক্সেস দিন ও কথা বলুন'
-                      : 'Enable Mic & Speak'
-                    : lang === 'bn'
-                    ? 'মাইক্রোফোন চালু করুন'
-                    : 'Start Microphone'}
-                </span>
+                {isListening ? <MicOff className="w-7 h-7" /> : <Mic className="w-7 h-7" />}
               </button>
               <span
                 data-testid="voice-auto-mic-status"
-                className="text-[11px] font-semibold text-emerald-900 dark:text-emerald-300"
+                className={`mt-3 text-xs font-medium ${
+                  isListening
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : 'text-slate-500 dark:text-slate-400'
+                }`}
               >
                 {isListening
                   ? lang === 'bn'
-                    ? 'সরাসরি বাংলা কণ্ঠস্বর শুনছে'
-                    : 'Auto-listening active'
-                  : hasMicPermission
+                    ? 'শুনছে... কথা বলুন'
+                    : 'Listening... speak now'
+                  : !hasMicPermission
                   ? lang === 'bn'
-                    ? 'মাইক্রোফোন সক্রিয় আছে — কথা বলুন বা ট্যাপ করুন'
-                    : 'Mic enabled — speak or tap below'
+                    ? 'মাইক্রোফোন চালু করতে ট্যাপ করুন'
+                    : 'Tap icon to allow & speak'
                   : lang === 'bn'
-                  ? 'কথা বলতে মাইক্রোফোন এলাও করুন'
-                  : 'Allow mic to speak'}
+                  ? 'কথা বলতে আইকনে ট্যাপ করুন'
+                  : 'Tap icon to speak'}
               </span>
             </div>
 
             {speechError && (
-              <p
+              <div
                 data-testid="voice-speech-notice"
-                className="text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3"
+                className="flex items-start gap-2 text-xs text-amber-800 dark:text-amber-300 bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/60 rounded-xl px-3 py-2.5"
               >
-                {speechError}
-              </p>
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                <span>{speechError}</span>
+              </div>
             )}
-
 
             <div>
               <label
                 htmlFor="voice-transcript-input"
-                className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+                className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5"
               >
-                {lang === 'bn' ? 'কী হিসাব যোগ করতে চান?' : 'What would you like to record?'}
+                {lang === 'bn' ? 'অথবা লিখে এন্ট্রি করুন' : 'Or type entry'}
               </label>
               <textarea
                 id="voice-transcript-input"
@@ -668,194 +663,189 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
                 onChange={(e) => setTranscript(e.target.value)}
                 placeholder={
                   lang === 'bn'
-                    ? 'উদাহরণ: আজ ৩ ঘণ্টা ওভারটাইম করেছি অথবা খাবার খরচ ২৫০ টাকা'
-                    : 'Example: 3 hours overtime today or food expense 250 taka'
+                    ? 'যেমন: আজ ৩ ঘণ্টা ওভারটাইম করেছি / বাজার ২৫০ টাকা'
+                    : 'e.g., 3 hours overtime today / food expense 250'
                 }
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/80 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-600/30 focus:border-emerald-600 transition-colors"
               />
             </div>
 
-            <div className="flex items-center justify-end gap-3 pt-1">
+            <div className="flex items-center justify-end gap-2.5 pt-1">
               <button
                 type="button"
                 onClick={onClose}
-                className="min-h-[42px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300"
+                className="min-h-[44px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
               >
-                {lang === 'bn' ? 'বাতিল করুন' : 'Cancel'}
+                {lang === 'bn' ? 'বাতিল' : 'Cancel'}
               </button>
               <button
                 type="submit"
                 data-testid="voice-analyze-btn"
                 disabled={!transcript.trim() || isParsing}
-                className="min-h-[42px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs sm:text-sm font-bold inline-flex items-center gap-2 transition-colors"
+                className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-45 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap"
               >
-                <Sparkles className="w-4 h-4" />
                 <span>
                   {isParsing
                     ? lang === 'bn'
-                      ? 'শনাক্ত করা হচ্ছে...'
-                      : 'Analyzing...'
+                      ? 'যাচাই হচ্ছে...'
+                      : 'Checking...'
                     : lang === 'bn'
-                    ? 'হিসাব যাচাই ও নিশ্চিত করুন'
-                    : 'Review Entry'}
+                    ? 'যাচাই করুন'
+                    : 'Review'}
                 </span>
+                <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </form>
         ) : (
           <div data-testid="voice-confirmation-screen" className="mt-4 space-y-4">
-            <div className="rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 p-4 space-y-3.5">
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-emerald-200/60 dark:border-emerald-800/60">
-                <div>
-                  <span className="text-xs font-extrabold text-emerald-900 dark:text-emerald-200 block">
-                    {lang === 'bn'
-                      ? 'নিশ্চিতকরণ স্ক্রিন (স্বয়ংক্রিয় শনাক্তকৃত হিসাব)'
-                      : 'Proposed Entry Confirmation'}
-                  </span>
-                  <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
-                    {lang === 'bn'
-                      ? `সংরক্ষণের পর গন্তব্য: ${ENTRY_TYPE_META[proposal.entryType].targetLabelBn}`
-                      : `Navigates to: ${ENTRY_TYPE_META[proposal.entryType].labelEn}`}
-                  </span>
-                </div>
-                <span
-                  data-testid="voice-confirmed-date-badge"
-                  className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 text-xs font-bold text-slate-800 dark:text-slate-100 tabular-nums"
-                >
-                  {formatDateSlashDMY(proposal.date, lang)}
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <ProposalIcon className="w-4 h-4" />
+                </span>
+                <span className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                  {lang === 'bn'
+                    ? ENTRY_TYPE_META[proposal.entryType].labelBn
+                    : ENTRY_TYPE_META[proposal.entryType].labelEn}
                 </span>
               </div>
+              <span
+                data-testid="voice-confirmed-date-badge"
+                className="text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums shrink-0"
+              >
+                {formatDateSlashDMY(proposal.date, lang)}
+              </span>
+            </div>
 
-              {isFutureBlockedForProposal && (
-                <div
-                  data-testid="voice-future-date-warning"
-                  className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-xs font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-2"
+            {isFutureBlockedForProposal && (
+              <div
+                data-testid="voice-future-date-warning"
+                className="px-3 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-xs font-medium text-amber-900 dark:text-amber-200 flex items-center gap-2"
+              >
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  {lang === 'bn'
+                    ? 'ভবিষ্যৎ তারিখের ওভারটাইম বা হাজিরা যোগ করা যাবে না।'
+                    : 'Future date overtime/attendance cannot be added.'}
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  {lang === 'bn' ? 'হিসাবের ধরন' : 'Entry Type'}
+                </label>
+                <select
+                  data-testid="voice-proposal-type-select"
+                  aria-label="হিসাবের ধরন"
+                  value={proposal.entryType}
+                  onChange={(e) => {
+                    const nextType = e.target.value as ProposedVoiceEntry['entryType'];
+                    const defaultCat =
+                      nextType === 'attendance'
+                        ? 'present'
+                        : nextType === 'expense'
+                        ? 'food'
+                        : nextType === 'payment'
+                        ? 'bkash'
+                        : nextType === 'overtime'
+                        ? 'overtime'
+                        : 'salary_date';
+                    setProposal({
+                      ...proposal,
+                      entryType: nextType,
+                      categoryOrStatus: defaultCat,
+                    });
+                  }}
+                  className="mt-1 w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm font-semibold text-slate-900 dark:text-white"
                 >
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>
-                    {lang === 'bn'
-                      ? 'ভবিষ্যৎ তারিখের ওভারটাইম বা হাজিরা যোগ করা যাবে না। আজ বা আগের তারিখ দিন।'
-                      : 'Future date overtime/attendance cannot be added.'}
-                  </span>
+                  <option value="overtime">{lang === 'bn' ? 'ওভারটাইম হিসাব' : 'Overtime'}</option>
+                  <option value="attendance">{lang === 'bn' ? 'হাজিরা ও ছুটি' : 'Attendance'}</option>
+                  <option value="expense">{lang === 'bn' ? 'দৈনিক খরচ ও বাজার' : 'Expense'}</option>
+                  <option value="payment">{lang === 'bn' ? 'প্রাপ্ত বেতন জমা' : 'Salary Payment'}</option>
+                  <option value="reminder">{lang === 'bn' ? 'রিমাইন্ডার' : 'Reminder'}</option>
+                </select>
+              </div>
+
+              {proposal.entryType !== 'attendance' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    {proposal.entryType === 'overtime'
+                      ? lang === 'bn'
+                        ? 'ওভারটাইম ঘণ্টা'
+                        : 'Overtime Hours'
+                      : lang === 'bn'
+                      ? 'টাকার পরিমাণ (৳)'
+                      : 'Amount (BDT)'}
+                  </label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    data-testid="voice-proposal-amount-input"
+                    aria-label="পরিমাণ বা ঘণ্টা"
+                    value={proposal.amountOrHours}
+                    onChange={(e) =>
+                      setProposal({ ...proposal, amountOrHours: Number(e.target.value) || 0 })
+                    }
+                    className="mt-1 w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm font-bold text-slate-900 dark:text-white tabular-nums"
+                  />
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                    {lang === 'bn' ? 'হিসাবের ধরন' : 'Entry Type'}
-                  </label>
-                  <select
-                    data-testid="voice-proposal-type-select"
-                    aria-label="হিসাবের ধরন"
-                    value={proposal.entryType}
-                    onChange={(e) => {
-                      const nextType = e.target.value as ProposedVoiceEntry['entryType'];
-                      const defaultCat =
-                        nextType === 'attendance'
-                          ? 'present'
-                          : nextType === 'expense'
-                          ? 'food'
-                          : nextType === 'payment'
-                          ? 'bkash'
-                          : nextType === 'overtime'
-                          ? 'overtime'
-                          : 'salary_date';
-                      setProposal({
-                        ...proposal,
-                        entryType: nextType,
-                        categoryOrStatus: defaultCat,
-                      });
-                    }}
-                    className="mt-1 w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm font-bold text-slate-900 dark:text-white"
-                  >
-                    <option value="overtime">{lang === 'bn' ? 'ওভারটাইম হিসাব' : 'Overtime'}</option>
-                    <option value="attendance">{lang === 'bn' ? 'হাজিরা ও ছুটি' : 'Attendance'}</option>
-                    <option value="expense">{lang === 'bn' ? 'দৈনিক খরচ ও বাজার' : 'Expense'}</option>
-                    <option value="payment">{lang === 'bn' ? 'প্রাপ্ত বেতন জমা' : 'Salary Payment'}</option>
-                    <option value="reminder">{lang === 'bn' ? 'রিমাইন্ডার' : 'Reminder'}</option>
-                  </select>
-                </div>
-
-                {proposal.entryType !== 'attendance' && (
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                      {proposal.entryType === 'overtime'
-                        ? lang === 'bn'
-                          ? 'ওভারটাইম ঘণ্টা'
-                          : 'Overtime Hours'
-                        : lang === 'bn'
-                        ? 'টাকার পরিমাণ (৳)'
-                        : 'Amount (BDT)'}
-                    </label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      data-testid="voice-proposal-amount-input"
-                      aria-label="পরিমাণ বা ঘণ্টা"
-                      value={proposal.amountOrHours}
-                      onChange={(e) =>
-                        setProposal({ ...proposal, amountOrHours: Number(e.target.value) || 0 })
-                      }
-                      className="mt-1 w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm font-bold text-slate-900 dark:text-white tabular-nums"
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {lang === 'bn' ? 'তারিখ (দিন/মাস/বছর)' : 'Date (DD/MM/YYYY)'}
-                  </label>
-                  <DateInputDMY
-                    dataTestId="voice-proposal-date-input"
-                    ariaLabel="প্রস্তাবিত তারিখ"
-                    value={proposal.date}
-                    max={
-                      proposal.entryType === 'overtime' || proposal.entryType === 'attendance'
-                        ? todayISO
-                        : undefined
-                    }
-                    lang={lang}
-                    onChange={(val) => setProposal({ ...proposal, date: val })}
-                    className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm font-semibold text-slate-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                    {proposal.entryType === 'attendance'
-                      ? lang === 'bn'
-                        ? 'হাজিরার অবস্থা'
-                        : 'Attendance Status'
-                      : proposal.entryType === 'payment'
-                      ? lang === 'bn'
-                        ? 'টাকা প্রাপ্তির মাধ্যম'
-                        : 'Payment Method'
-                      : lang === 'bn'
-                      ? 'বিভাগ / খাত'
-                      : 'Category'}
-                  </label>
-                  {renderCategorySelect()}
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  {lang === 'bn' ? 'তারিখ' : 'Date'}
+                </label>
+                <DateInputDMY
+                  dataTestId="voice-proposal-date-input"
+                  ariaLabel="প্রস্তাবিত তারিখ"
+                  value={proposal.date}
+                  max={
+                    proposal.entryType === 'overtime' || proposal.entryType === 'attendance'
+                      ? todayISO
+                      : undefined
+                  }
+                  lang={lang}
+                  onChange={(val) => setProposal({ ...proposal, date: val })}
+                  className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm font-semibold text-slate-900 dark:text-white"
+                />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  {lang === 'bn' ? 'বিবরণ / নোট' : 'Notes'}
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  {proposal.entryType === 'attendance'
+                    ? lang === 'bn'
+                      ? 'হাজিরার অবস্থা'
+                      : 'Attendance Status'
+                    : proposal.entryType === 'payment'
+                    ? lang === 'bn'
+                      ? 'টাকা প্রাপ্তির মাধ্যম'
+                      : 'Payment Method'
+                    : lang === 'bn'
+                    ? 'বিভাগ / খাত'
+                    : 'Category'}
                 </label>
-                <input
-                  type="text"
-                  data-testid="voice-proposal-notes-input"
-                  aria-label="বিবরণ"
-                  value={proposal.notes}
-                  onChange={(e) => setProposal({ ...proposal, notes: e.target.value })}
-                  className="mt-1 w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm text-slate-900 dark:text-white"
-                />
+                {renderCategorySelect()}
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                {lang === 'bn' ? 'বিবরণ' : 'Notes'}
+              </label>
+              <input
+                type="text"
+                data-testid="voice-proposal-notes-input"
+                aria-label="বিবরণ"
+                value={proposal.notes}
+                onChange={(e) => setProposal({ ...proposal, notes: e.target.value })}
+                className="mt-1 w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm text-slate-900 dark:text-white"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
                 data-testid="voice-back-edit-btn"
@@ -863,24 +853,20 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
                   setProposal(null);
                   startWebSpeech();
                 }}
-                className="min-h-[44px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5"
+                className="min-h-[44px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>{lang === 'bn' ? 'আবার বলুন / পরিবর্তন' : 'Speak Again'}</span>
+                <span>{lang === 'bn' ? 'আবার বলুন' : 'Speak Again'}</span>
               </button>
               <button
                 type="button"
                 data-testid="voice-confirm-save-btn"
                 disabled={Boolean(isFutureBlockedForProposal)}
                 onClick={handleConfirmSave}
-                className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs sm:text-sm font-bold inline-flex items-center gap-2 transition-colors"
+                className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-45 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 whitespace-nowrap transition-colors"
               >
                 <Check className="w-4 h-4" />
-                <span>
-                  {lang === 'bn'
-                    ? 'নিশ্চিত ও সংরক্ষণ করুন'
-                    : 'Confirm & Save'}
-                </span>
+                <span>{lang === 'bn' ? 'সংরক্ষণ করুন' : 'Save'}</span>
               </button>
             </div>
           </div>

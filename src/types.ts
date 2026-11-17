@@ -402,6 +402,7 @@ export interface WorkerContact {
   userId: string;
   fullName: string;
   phone: string;
+  photoUrl?: string;
   designation?: string;
   category: WorkerContactCategory | string;
   customCategory?: string;

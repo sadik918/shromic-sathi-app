@@ -8,8 +8,12 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  Cloud,
+  Copy,
   Download,
   Edit2,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   FolderLock,
   HelpCircle,
@@ -23,11 +27,13 @@ import {
   Menu,
   PhoneCall,
   Printer,
+  RefreshCw,
   RotateCcw,
   Scale,
   Send,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Trash2,
   Upload,
@@ -47,7 +53,10 @@ import { PersonalLoanView } from './PersonalLoanView';
 import { AdminDashboardView } from './AdminDashboardView';
 import { UserSubscriptionView } from './UserSubscriptionView';
 import { DateInputDMY } from './DateInputDMY';
+import { ReportsView } from './ReportsView';
+import { SupportFeedbackView } from './SupportFeedbackView';
 import { parseCalendarReminderMeta } from '../utils/calendarReminders';
+import { buildGroupedMoreNav } from '../utils/moreNavigation';
 import type {
   DocumentCategory,
   EmploymentType,
@@ -81,6 +90,7 @@ interface MoreHubViewProps {
 export const MoreHubView: React.FC<MoreHubViewProps> = ({
   activeSubView,
   onChangeSubView,
+  onNavigateTab,
   openDrawerTrigger = 0,
   openRenewalTrigger = 0,
 }) => {
@@ -88,6 +98,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     user,
     profile,
     lang,
+    todayISO,
     selectedMonth,
     overtime,
     salaryRecords,
@@ -114,16 +125,26 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     deleteAccountAndData,
     changeUserPassword,
     logout,
+    syncOfflineDataToCloud,
+    offlinePendingCount,
   } = useData();
 
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [isDrawerOpen, setIsDrawerOpen] = useState(() => openDrawerTrigger > 0);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(
+    () => openDrawerTrigger > 0 && typeof window !== 'undefined' && window.innerWidth < 768
+  );
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
 
-  // Password Change state & handler
+  // Password Change state & handler (Requires currentPassword verification)
   const [showChangePasswordForm, setShowChangePasswordForm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isUpdatingPass, setIsUpdatingPass] = useState(false);
   const [changePassError, setChangePassError] = useState('');
   const [changePassSuccess, setChangePassSuccess] = useState('');
@@ -132,6 +153,16 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     e.preventDefault();
     setChangePassError('');
     setChangePassSuccess('');
+
+    if (!currentPassword.trim()) {
+      setChangePassError(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে আপনার বর্তমান পাসওয়ার্ডটি লিখুন।'
+          : 'Please enter your current password.'
+      );
+      return;
+    }
+
     if (newPassword.length < 4) {
       setChangePassError(
         lang === 'bn'
@@ -140,22 +171,34 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       );
       return;
     }
-    if (newPassword !== confirmNewPassword) {
+
+    if (currentPassword.trim() === newPassword.trim()) {
       setChangePassError(
         lang === 'bn'
-          ? 'উভয় ঘরে পাসওয়ার্ড মিলছে না। অনুগ্রহ করে যাচাই করে পুনরায় লিখুন।'
-          : 'Passwords do not match. Please verify and re-enter.'
+          ? 'নতুন পাসওয়ার্ডটি বর্তমান পাসওয়ার্ড থেকে ভিন্ন হতে হবে।'
+          : 'New password must be different from current password.'
       );
       return;
     }
+
+    if (newPassword !== confirmNewPassword) {
+      setChangePassError(
+        lang === 'bn'
+          ? 'উভয় ঘরে নতুন পাসওয়ার্ড মিলছে না। অনুগ্রহ করে যাচাই করে পুনরায় লিখুন।'
+          : 'New passwords do not match. Please verify and re-enter.'
+      );
+      return;
+    }
+
     setIsUpdatingPass(true);
     try {
-      await changeUserPassword(newPassword);
+      await changeUserPassword(currentPassword, newPassword);
       setChangePassSuccess(
         lang === 'bn'
           ? 'পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে!'
           : 'Password changed successfully!'
       );
+      setCurrentPassword('');
       setNewPassword('');
       setConfirmNewPassword('');
       setTimeout(() => {
@@ -171,7 +214,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
   };
 
   useEffect(() => {
-    if (openDrawerTrigger > 0) {
+    if (openDrawerTrigger > 0 && typeof window !== 'undefined' && window.innerWidth < 768) {
       setIsDrawerOpen(true);
     }
   }, [openDrawerTrigger]);
@@ -254,10 +297,6 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
   const [advisorAnswer, setAdvisorAnswer] = useState('');
   const [advisorLoading, setAdvisorLoading] = useState(false);
 
-  // Support Feedback state
-  const [fbCategory, setFbCategory] = useState<FeedbackCategory>('calculation_help');
-  const [fbMessage, setFbMessage] = useState('');
-  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [editingSection, setEditingSection] = useState<'personal' | 'job' | 'salary' | null>(null);
 
   const getEmploymentTypeLabel = (type: EmploymentType) => {
@@ -701,8 +740,8 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     },
     {
       id: 'calculator',
-      labelBn: 'ক্যালকুলেটর',
-      labelEn: 'Calculator',
+      labelBn: 'বেতন ও সুবিধা ক্যালকুলেটর',
+      labelEn: 'Salary & Benefits Calculator',
       icon: <CalcIcon className="w-3.5 h-3.5 shrink-0" />,
     },
     {
@@ -743,7 +782,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     },
     {
       id: 'reports',
-      labelBn: 'রিপোর্ট ও ব্যাকআপ',
+      labelBn: 'রিপোর্টসমূহ',
       labelEn: 'Reports & Backup',
       icon: <Download className="w-3.5 h-3.5 shrink-0" />,
     },
@@ -779,8 +818,10 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
 
   const currentTabInfo = subTabs.find((s) => s.id === activeSubView);
 
+  const groupedDesktopSections = buildGroupedMoreNav(subTabs, isAdminUser);
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 md:space-y-0">
       {/* Mobile-Only Minimal Slide Menu Bar (Always accessible on Mobile across all More sub-views) */}
       <div className="md:hidden flex items-center justify-between gap-2 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-xl px-3 py-2 no-print">
         <button
@@ -803,43 +844,116 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
         </div>
       </div>
 
-      {/* Desktop Sub-navigation Bar — Wrapped Multi-Row Pill Grid so ALL options (Profile, Vault, Reports, Reminders, Support, etc.) are 100% visible simultaneously */}
-      <div
-        data-testid="more-desktop-subnav"
-        className="hidden md:flex flex-wrap items-center justify-between gap-2 p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl no-print shadow-2xs"
-      >
-        <div className="flex flex-wrap items-center gap-1.5 flex-1">
-          {subTabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              data-testid={`more-subtab-${t.id}`}
-              onClick={() => {
-                onChangeSubView(t.id);
-                setNotice('');
-                setErrorMsg('');
-              }}
-              className={`min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 cursor-pointer ${
-                activeSubView === t.id
-                  ? 'bg-emerald-700 text-white shadow-2xs'
-                  : 'bg-slate-50/80 dark:bg-slate-800/70 text-slate-700 dark:text-slate-200 hover:bg-emerald-50 dark:hover:bg-slate-800 border border-slate-200/70 dark:border-slate-700/70'
-              }`}
-            >
-              {t.icon}
-              <span>{lang === 'bn' ? t.labelBn : t.labelEn}</span>
-            </button>
-          ))}
-        </div>
-
-        <button
-          type="button"
-          onClick={logout}
-          className="min-h-[38px] px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 dark:bg-red-950/40 border border-red-200/80 dark:border-red-800/70 text-red-700 dark:text-red-300 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer"
+      {/* Responsive Desktop Two-Column Shell: Vertical Sidebar Left + Dynamic Workspace Right */}
+      <div className="md:flex md:items-start md:gap-5 lg:gap-6">
+        <aside
+          data-testid="more-desktop-subnav"
+          aria-label={lang === 'bn' ? 'আরও মেনু নেভিগেশন' : 'More Navigation'}
+          className="hidden md:flex md:flex-col w-60 lg:w-64 xl:w-[272px] shrink-0 md:sticky md:top-18 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-3 shadow-2xs no-print max-h-[calc(100vh-5.5rem)] overflow-y-auto [scrollbar-width:thin]"
         >
-          <LogOut className="w-3.5 h-3.5" />
-          <span>{lang === 'bn' ? 'লগআউট' : 'Logout'}</span>
-        </button>
-      </div>
+          {/* Compact Worker Identity Strip */}
+          <div className="flex items-center gap-2.5 px-2 pb-3 mb-2 border-b border-slate-100 dark:border-slate-800">
+            {profile.photoUrl || user?.photoURL ? (
+              <img
+                src={profile.photoUrl || user?.photoURL || ''}
+                alt={profile.fullName || (lang === 'bn' ? 'প্রোফাইল' : 'Profile')}
+                className="w-9 h-9 rounded-full object-cover border border-emerald-200 dark:border-emerald-800 shrink-0"
+              />
+            ) : (
+              <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 flex items-center justify-center text-xs font-bold shrink-0">
+                {(profile.fullName || user?.displayName || 'শ্র').charAt(0)}
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                {profile.fullName ||
+                  user?.displayName ||
+                  (lang === 'bn' ? 'শ্রমিক প্রোফাইল' : 'Worker Profile')}
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                {factoryName || (lang === 'bn' ? 'আরও ও সেটিংস' : 'More & Tools')}
+              </p>
+            </div>
+          </div>
+
+          {/* Vertically Stacked Grouped Navigation Items */}
+          <nav className="space-y-3.5 flex-1">
+            {groupedDesktopSections.map((section) => (
+              <div key={section.id} className="space-y-1">
+                <div className="px-2.5 text-[11px] font-bold tracking-wide text-slate-400 dark:text-slate-500">
+                  {lang === 'bn' ? section.titleBn : section.titleEn}
+                </div>
+                <div className="space-y-0.5">
+                  {section.items.map((t) => {
+                    const isActive = activeSubView === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        data-testid={`more-subtab-${t.id}`}
+                        aria-current={isActive ? 'page' : undefined}
+                        onClick={() => {
+                          if (t.id === 'admin_panel' && onNavigateTab) {
+                            onNavigateTab('admin');
+                            return;
+                          }
+                          onChangeSubView(t.id);
+                          setNotice('');
+                          setErrorMsg('');
+                        }}
+                        className={`w-full min-h-[38px] px-2.5 py-2 rounded-xl text-xs transition-colors flex items-center justify-between gap-2 text-left cursor-pointer ${
+                          isActive
+                            ? 'bg-emerald-700 text-white font-bold shadow-2xs'
+                            : 'text-slate-700 dark:text-slate-200 font-semibold hover:bg-emerald-50/90 dark:hover:bg-slate-800/80 hover:text-emerald-800 dark:hover:text-emerald-300'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <span
+                            className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
+                              isActive
+                                ? 'bg-white/15 text-white'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                            }`}
+                          >
+                            {t.icon}
+                          </span>
+                          <span className="truncate whitespace-nowrap">
+                            {lang === 'bn' ? t.labelBn : t.labelEn}
+                          </span>
+                        </span>
+                        <ChevronRight
+                          className={`w-3.5 h-3.5 shrink-0 ${
+                            isActive
+                              ? 'text-emerald-100'
+                              : 'text-slate-300 dark:text-slate-600'
+                          }`}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
+
+          {/* Sticky Bottom Logout Button */}
+          <div className="pt-3 mt-3 border-t border-slate-100 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={logout}
+              className="w-full min-h-[38px] px-3 py-2 rounded-xl bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-950/60 border border-red-200/80 dark:border-red-800/70 text-red-700 dark:text-red-300 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5 shrink-0" />
+              <span>{lang === 'bn' ? 'লগআউট' : 'Logout'}</span>
+            </button>
+          </div>
+        </aside>
+
+        {/* Right Main Content Workspace */}
+        <div
+          data-testid="more-desktop-workspace"
+          className="flex-1 min-w-0 space-y-4 sm:space-y-5"
+        >
 
       {/* Mobile-Only Compact Minimal Slide-Over Drawer (No Scrollbar, Lightweight Typography) */}
       {isDrawerOpen && (
@@ -885,8 +999,12 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                     type="button"
                     data-testid={`drawer-item-${item.id}`}
                     onClick={() => {
-                      onChangeSubView(item.id);
                       setIsDrawerOpen(false);
+                      if (item.id === 'admin_panel' && onNavigateTab) {
+                        onNavigateTab('admin');
+                        return;
+                      }
+                      onChangeSubView(item.id);
                       setNotice('');
                       setErrorMsg('');
                     }}
@@ -1213,14 +1331,14 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
             {/* ACCOUNT & PASSWORD SECURITY (পাসওয়ার্ড পরিবর্তন) */}
             <div
               data-testid="profile-password-security-section"
-              className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-3"
+              className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-3"
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-950/80 flex items-center justify-center shrink-0">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950/80 flex items-center justify-center shrink-0">
                     <KeyRound className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
                       {lang === 'bn' ? 'অ্যাকাউন্ট ও পাসওয়ার্ড নিরাপত্তা' : 'Account & Password Security'}
                     </h3>
@@ -1237,12 +1355,12 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                     setChangePassError('');
                     setChangePassSuccess('');
                   }}
-                  className="px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800/80 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-slate-700 inline-flex items-center gap-1.5 cursor-pointer shrink-0 transition-colors"
+                  className="w-full sm:w-auto min-h-[40px] sm:min-h-0 px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-800/80 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-slate-700 inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-colors"
                 >
                   <Lock className="w-3.5 h-3.5" />
                   <span>
                     {showChangePasswordForm
-                      ? lang === 'bn' ? 'বাতিল' : 'Cancel'
+                      ? lang === 'bn' ? 'বাতিল করুন' : 'Cancel'
                       : lang === 'bn' ? 'পাসওয়ার্ড পরিবর্তন করুন' : 'Change Password'}
                   </span>
                 </button>
@@ -1251,77 +1369,146 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
               {showChangePasswordForm && (
                 <form
                   onSubmit={handlePasswordChangeSubmit}
-                  className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-3"
+                  className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-3.5"
                 >
+                  <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 leading-relaxed bg-white/70 dark:bg-slate-800/50 p-2.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60">
+                    {lang === 'bn'
+                      ? 'নিরাপত্তার স্বার্থে প্রথমে আপনার আগের কারেন্ট পাসওয়ার্ড দিন। সঠিক কারেন্ট পাসওয়ার্ড ছাড়া নতুন পাসওয়ার্ড পরিবর্তন করা যাবে না।'
+                      : 'For your security, enter your current password first. You cannot set a new password without verifying your existing password.'}
+                  </p>
+
                   {changePassError && (
                     <div
                       role="alert"
-                      className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300"
+                      className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300 flex items-start gap-2"
                     >
-                      {changePassError}
+                      <span className="shrink-0 font-bold">⚠️</span>
+                      <span className="break-words">{changePassError}</span>
                     </div>
                   )}
                   {changePassSuccess && (
                     <div
                       role="alert"
-                      className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-2"
+                      className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-2"
                     >
                       <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                      <span>{changePassSuccess}</span>
+                      <span className="break-words">{changePassSuccess}</span>
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        {lang === 'bn' ? 'নতুন পাসওয়ার্ড' : 'New Password'}
-                      </label>
+                  {/* 1. CURRENT PASSWORD FIELD (কারেন্ট পাসওয়ার্ড) */}
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                      {lang === 'bn' ? 'বর্তমান পাসওয়ার্ড (কারেন্ট পাসওয়ার্ড)' : 'Current Password'}
+                      <span className="text-rose-500 ml-1">*</span>
+                    </label>
+                    <div className="relative flex items-center">
                       <input
-                        data-testid="new-password-input"
-                        type="password"
+                        data-testid="current-password-input"
+                        type={showCurrentPassword ? 'text' : 'password'}
                         required
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder={lang === 'bn' ? 'কমপক্ষে ৪ অক্ষর লিখুন' : 'At least 4 chars'}
-                        className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        placeholder={lang === 'bn' ? 'আপনার আগের কারেন্ট পাসওয়ার্ডটি দিন' : 'Enter your current password'}
+                        className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 pl-3.5 pr-11 text-xs sm:text-sm font-medium text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-600 dark:focus:ring-emerald-500 transition-all"
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        {lang === 'bn' ? 'নতুন পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm New Password'}
-                      </label>
-                      <input
-                        data-testid="confirm-new-password-input"
-                        type="password"
-                        required
-                        value={confirmNewPassword}
-                        onChange={(e) => setConfirmNewPassword(e.target.value)}
-                        placeholder={lang === 'bn' ? 'পাসওয়ার্ডটি আবার লিখুন' : 'Re-enter password'}
-                        className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                      />
+                      <button
+                        type="button"
+                        data-testid="toggle-current-password-visibility"
+                        onClick={() => setShowCurrentPassword((prev) => !prev)}
+                        aria-label={showCurrentPassword ? 'Hide current password' : 'Show current password'}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer rounded-lg transition-colors"
+                      >
+                        {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 pt-1">
+                  {/* 2 & 3. NEW PASSWORD & CONFIRM NEW PASSWORD (মোবাইল রেসপনসিভ গ্রিড) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                        {lang === 'bn' ? 'নতুন পাসওয়ার্ড' : 'New Password'}
+                        <span className="text-rose-500 ml-1">*</span>
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          data-testid="new-password-input"
+                          type={showNewPassword ? 'text' : 'password'}
+                          required
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder={lang === 'bn' ? 'কমপক্ষে ৪ অক্ষর লিখুন' : 'At least 4 chars'}
+                          className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 pl-3.5 pr-11 text-xs sm:text-sm font-medium text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-600 dark:focus:ring-emerald-500 transition-all"
+                        />
+                        <button
+                          type="button"
+                          data-testid="toggle-new-password-visibility"
+                          onClick={() => setShowNewPassword((prev) => !prev)}
+                          aria-label={showNewPassword ? 'Hide new password' : 'Show new password'}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer rounded-lg transition-colors"
+                        >
+                          {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                        {lang === 'bn' ? 'নতুন পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm New Password'}
+                        <span className="text-rose-500 ml-1">*</span>
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          data-testid="confirm-new-password-input"
+                          type={showConfirmPassword ? 'text' : 'password'}
+                          required
+                          value={confirmNewPassword}
+                          onChange={(e) => setConfirmNewPassword(e.target.value)}
+                          placeholder={lang === 'bn' ? 'নতুন পাসওয়ার্ডটি আবার লিখুন' : 'Re-enter new password'}
+                          className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 pl-3.5 pr-11 text-xs sm:text-sm font-medium text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-600 dark:focus:ring-emerald-500 transition-all"
+                        />
+                        <button
+                          type="button"
+                          data-testid="toggle-confirm-password-visibility"
+                          onClick={() => setShowConfirmPassword((prev) => !prev)}
+                          aria-label={showConfirmPassword ? 'Hide confirmed password' : 'Show confirmed password'}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer rounded-lg transition-colors"
+                        >
+                          {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ACTION BUTTONS (মোবাইলে ফুল-উইডথ ও ট্যাপ-বান্ধব) */}
+                  <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-2 pt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowChangePasswordForm(false);
+                        setCurrentPassword('');
+                        setNewPassword('');
+                        setConfirmNewPassword('');
+                        setChangePassError('');
+                        setChangePassSuccess('');
+                      }}
+                      className="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white text-center cursor-pointer transition-colors"
+                    >
+                      {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                    </button>
                     <button
                       type="submit"
                       disabled={isUpdatingPass}
                       data-testid="submit-change-password-btn"
-                      className="min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 transition-colors cursor-pointer"
+                      className="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 active:scale-[0.99] disabled:opacity-60 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
                     >
-                      <Lock className="w-4 h-4" />
+                      <Lock className="w-4 h-4 shrink-0" />
                       <span>
                         {isUpdatingPass
                           ? lang === 'bn' ? 'আপডেট হচ্ছে...' : 'Updating...'
-                          : lang === 'bn' ? 'পাসওয়ার্ড আপডেট করুন' : 'Update Password'}
+                          : lang === 'bn' ? 'পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm & Update Password'}
                       </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowChangePasswordForm(false)}
-                      className="min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-700 dark:text-slate-400 cursor-pointer"
-                    >
-                      {lang === 'bn' ? 'বাতিল' : 'Cancel'}
                     </button>
                   </div>
                 </form>
@@ -1357,7 +1544,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
 
               {editingSection === 'job' ? (
                 <form onSubmit={handleSaveJob} className="space-y-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                         {lang === 'bn' ? 'কারখানার নাম' : 'Factory Name'}
@@ -1444,7 +1631,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                         className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm"
                       />
                     </div>
-                    <div className="col-span-2 sm:col-span-1">
+                    <div>
                       <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                         {lang === 'bn' ? 'বেতন গ্রেড' : 'Salary Grade'}
                       </label>
@@ -1475,7 +1662,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                   </div>
                 </form>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-white dark:bg-slate-800/80 rounded-xl p-3.5 border border-slate-200/80 dark:border-slate-700/70">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-white dark:bg-slate-800/80 rounded-xl p-3.5 border border-slate-200/80 dark:border-slate-700/70">
                   <div>
                     <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
                       {lang === 'bn' ? 'কারখানার নাম' : 'Factory Name'}
@@ -1532,7 +1719,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                       {joiningDate ? formatDateSlashDMY(joiningDate, lang) : '—'}
                     </p>
                   </div>
-                  <div className="col-span-2 sm:col-span-1">
+                  <div>
                     <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
                       {lang === 'bn' ? 'বেতন গ্রেড' : 'Salary Grade'}
                     </span>
@@ -1591,7 +1778,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
 
               {editingSection === 'salary' ? (
                 <form onSubmit={handleSaveSalary} className="space-y-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                         {lang === 'bn' ? 'মোট বেতন' : 'Gross Salary'}
@@ -1662,7 +1849,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                         className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm tabular-nums font-medium"
                       />
                     </div>
-                    <div className="col-span-2 sm:col-span-1">
+                    <div>
                       <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                         {lang === 'bn' ? 'ওভারটাইম ঘণ্টা প্রতি হার (৳)' : 'Hourly OT Rate (৳)'}
                       </label>
@@ -1695,7 +1882,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                   </div>
                 </form>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-white dark:bg-slate-800/80 rounded-xl p-3.5 border border-emerald-200/60 dark:border-emerald-900/40">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-white dark:bg-slate-800/80 rounded-xl p-3.5 border border-emerald-200/60 dark:border-emerald-900/40">
                   <div>
                     <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
                       {lang === 'bn' ? 'মোট বেতন' : 'Gross Salary'}
@@ -1744,7 +1931,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                       {formatBDT(attendanceBonus, lang)}
                     </p>
                   </div>
-                  <div className="col-span-2 sm:col-span-1">
+                  <div>
                     <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
                       {lang === 'bn' ? 'ওভারটাইম ঘণ্টা প্রতি হার' : 'Hourly OT Rate'}
                     </span>
@@ -1760,6 +1947,136 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* ANDROID APP & LIVE CLOUD SYNC CARD (অ্যান্ড্রয়েড ও ক্লাউড সংযোগ তথ্য) */}
+            <div
+              data-testid="android-cloud-sync-info-card"
+              className="p-4 rounded-xl border border-emerald-200/90 dark:border-emerald-800/80 bg-gradient-to-br from-emerald-50/70 via-white to-slate-50 dark:from-emerald-950/30 dark:via-slate-900/60 dark:to-slate-900 space-y-3.5 shadow-2xs"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 pb-2 border-b border-emerald-100 dark:border-emerald-900/40">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <span>{lang === 'bn' ? 'অ্যান্ড্রয়েড অ্যাপ ও ক্লাউড সংযোগ' : 'Android & Live Cloud Sync'}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900/80 text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                        <span>{lang === 'bn' ? 'অটো-সিঙ্ক সক্রিয়' : 'Auto Sync Active'}</span>
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {lang === 'bn'
+                        ? 'কোনো বাটন না টিপেই যেকোরো এন্ট্রি স্বয়ংক্রিয়ভাবে অ্যান্ড্রয়েড ও ওয়েবে সাথে সাথে সিঙ্ক হয়ে যায়'
+                        : 'Real-time automatic background sync between Android & Web without clicking buttons'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsManualSyncing(true);
+                      try {
+                        await syncOfflineDataToCloud();
+                        setNotice(
+                          lang === 'bn'
+                            ? 'ক্লাউডের সাথে সকল ডাটা সফলভাবে সিঙ্ক হয়েছে!'
+                            : 'All records synced successfully with Firebase cloud!'
+                        );
+                      } catch {
+                        // handled
+                      } finally {
+                        setIsManualSyncing(false);
+                      }
+                    }}
+                    disabled={isManualSyncing}
+                    className="px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-slate-700 inline-flex items-center gap-1.5 cursor-pointer shrink-0 transition-colors"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isManualSyncing ? (lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing...') : (lang === 'bn' ? 'ডাটা সিঙ্ক করুন' : 'Sync Now')}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const liveUrl = window.location.origin;
+                      navigator.clipboard?.writeText(liveUrl);
+                      setCopiedLink(true);
+                      setTimeout(() => setCopiedLink(false), 2500);
+                      setNotice(
+                        lang === 'bn'
+                          ? 'অ্যান্ড্রয়েড অ্যাপের লাইভ লিংক কপি করা হয়েছে!'
+                          : 'Live app link copied to clipboard!'
+                      );
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 inline-flex items-center gap-1.5 cursor-pointer shrink-0 transition-colors"
+                  >
+                    {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedLink ? (lang === 'bn' ? 'কপি হয়েছে' : 'Copied') : (lang === 'bn' ? 'লিংক কপি' : 'Copy Link')}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Status Points */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                <div className="p-2.5 rounded-lg bg-white/80 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
+                  <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                    {lang === 'bn' ? 'ক্লাউড ডাটাবেজ' : 'Cloud Database'}
+                  </span>
+                  <p className="font-bold text-emerald-700 dark:text-emerald-400 mt-0.5 flex items-center gap-1 truncate">
+                    <Cloud className="w-3.5 h-3.5 shrink-0" />
+                    <span>Google Firebase লাইভ</span>
+                  </p>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-white/80 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
+                  <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                    {lang === 'bn' ? 'লগইন অ্যাকাউন্ট' : 'Active Account'}
+                  </span>
+                  <p className="font-bold text-slate-800 dark:text-slate-200 mt-0.5 truncate">
+                    {user?.email || profile.userId || (lang === 'bn' ? 'লগইন করা নেই' : 'Not Logged In')}
+                  </p>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-white/80 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
+                  <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                    {lang === 'bn' ? 'পেন্ডিং সিঙ্ক কিউ' : 'Pending Offline Writes'}
+                  </span>
+                  <p className="font-bold text-slate-800 dark:text-slate-200 mt-0.5 flex items-center gap-1">
+                    {offlinePendingCount > 0 ? (
+                      <span className="text-amber-600 dark:text-amber-400">{offlinePendingCount} টি ডাটা অপেক্ষারত</span>
+                    ) : (
+                      <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>১০০% সিঙ্ক সম্পন্ন</span>
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Step-by-step Guide on how Android gets the updates */}
+              <div className="p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 space-y-1.5 leading-relaxed">
+                <p className="font-bold text-emerald-800 dark:text-emerald-300">
+                  {lang === 'bn' ? '📌 ফোনে এই নতুন আপডেট যেভাবে পাবেন:' : '📌 How to get this update on your Android phone:'}
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-slate-600 dark:text-slate-300">
+                  <li>
+                    {lang === 'bn'
+                      ? 'অ্যান্ড্রয়েড ফোনের ব্রাউজারে অ্যাপটি ওপেন করে উপর থেকে নিচে সোয়াইপ (Pull-to-refresh) করুন, যাতে নতুন ডিজাইন ও ফিচার লোড হয়।'
+                      : 'Open the app on your Android phone and pull down to refresh to load the latest design and features.'}
+                  </li>
+                  <li>
+                    {lang === 'bn'
+                      ? 'আপনার ফোন ও এই ডিভাইসে একই জিমেইল/ইমেইল আইডি দিয়ে লগইন করুন। তাহলে সকল হাজিরা, ওভারটাইম ও জমার হিসাব সরাসরি মিলে যাবে।'
+                      : 'Sign in with the exact same Gmail/email on both devices for real-time cloud data sync.'}
+                  </li>
+                </ul>
+              </div>
             </div>
           </div>
         </div>
@@ -1788,8 +2105,8 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       )}
       {/* 2. PRIVATE DOCUMENT VAULT */}
       {activeSubView === 'documents' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 self-start">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+          <div className="xl:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 self-start">
             <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
               <FolderLock className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
               <span>
@@ -1876,7 +2193,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
             </label>
           </div>
 
-          <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+          <div className="xl:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
             <h3 className="text-base font-bold text-slate-900 dark:text-white pb-3 border-b border-slate-100 dark:border-slate-800">
               {lang === 'bn' ? 'সংরক্ষিত ব্যক্তিগত কাগজপত্র' : 'Saved Private Documents'}
             </h3>
@@ -1934,65 +2251,40 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       {/* 3. REPORTS, EXPORTS, NON-DESTRUCTIVE BACKUP & DATA EDITING HISTORY RECOVERY */}
       {activeSubView === 'reports' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
-              <h2 className="text-base font-bold text-slate-900 dark:text-white pb-2 border-b border-slate-100 dark:border-slate-800">
-                {lang === 'bn' ? 'রিপোর্ট ডাউনলোড (CSV ও প্রিন্ট PDF)' : 'Export Reports (CSV & PDF)'}
-              </h2>
-              <div className="flex flex-wrap gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleExportCSV}
-                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2"
-                >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>{lang === 'bn' ? 'CSV রিপোর্ট ডাউনলোড করুন' : 'Download CSV Report'}</span>
-                </button>
+          <ReportsView onExportCSV={handleExportCSV} />
 
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-2"
-                >
-                  <Printer className="w-4 h-4" />
-                  <span>{lang === 'bn' ? 'PDF / প্রিন্ট বিবরণী' : 'Print / Save as PDF'}</span>
-                </button>
-              </div>
-            </div>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 no-print">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white pb-2 border-b border-slate-100 dark:border-slate-800">
+              {lang === 'bn'
+                ? 'নিরাপদ ডেটা ব্যাকআপ ও পুনরুদ্ধার (Non-Destructive)'
+                : 'Safe Backup & Non-Destructive Restore'}
+            </h2>
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+              {lang === 'bn'
+                ? 'ব্যাকআপ ইমপোর্ট করার সময় আপনার বিদ্যমান কোনো রেকর্ড মুছে যাবে না বা ওভাররাইট হবে না — শুধুমাত্র নতুন অনুপস্থিত রেকর্ডগুলো যুক্ত হবে।'
+                : 'Restoring a backup never overwrites or deletes your existing records — only missing records are merged.'}
+            </p>
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
-              <h2 className="text-base font-bold text-slate-900 dark:text-white pb-2 border-b border-slate-100 dark:border-slate-800">
-                {lang === 'bn'
-                  ? 'নিরাপদ ডেটা ব্যাকআপ ও পুনরুদ্ধার (Non-Destructive)'
-                  : 'Safe Backup & Non-Destructive Restore'}
-              </h2>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                {lang === 'bn'
-                  ? 'ব্যাকআপ ইমপোর্ট করার সময় আপনার বিদ্যমান কোনো রেকর্ড মুছে যাবে না বা ওভাররাইট হবে না — শুধুমাত্র নতুন অনুপস্থিত রেকর্ডগুলো যুক্ত হবে।'
-                  : 'Restoring a backup never overwrites or deletes your existing records — only missing records are merged.'}
-              </p>
+            <div className="flex flex-wrap gap-3 pt-1">
+              <button
+                type="button"
+                onClick={handleExportBackupJSON}
+                className="min-h-[42px] px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>{lang === 'bn' ? 'ব্যাকআপ ডাউনলোড (.json)' : 'Download JSON Backup'}</span>
+              </button>
 
-              <div className="flex flex-wrap gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleExportBackupJSON}
-                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>{lang === 'bn' ? 'ব্যাকআপ ডাউনলোড (.json)' : 'Download JSON Backup'}</span>
-                </button>
-
-                <label className="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-2 cursor-pointer">
-                  <Upload className="w-4 h-4" />
-                  <span>{lang === 'bn' ? 'ব্যাকআপ ইমপোর্ট করুন' : 'Restore from JSON'}</span>
-                  <input
-                    type="file"
-                    accept="application/json"
-                    onChange={handleImportBackupJSON}
-                    className="hidden"
-                  />
-                </label>
-              </div>
+              <label className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-2 cursor-pointer">
+                <Upload className="w-4 h-4" />
+                <span>{lang === 'bn' ? 'ব্যাকআপ ইমপোর্ট করুন' : 'Restore from JSON'}</span>
+                <input
+                  type="file"
+                  accept="application/json"
+                  onChange={handleImportBackupJSON}
+                  className="hidden"
+                />
+              </label>
             </div>
           </div>
 
@@ -2089,8 +2381,8 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
 
       {/* 4. REMINDERS & LABOR LAW ADVISOR */}
       {activeSubView === 'reminders' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+          <div className="xl:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
             <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
               <Bell className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
               <span>{lang === 'bn' ? 'রিমাইন্ডার ব্যবস্থাপনা' : 'Reminders'}</span>
@@ -2216,7 +2508,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
           </div>
 
           {/* High-Thinking Labor Law & Salary Calculation Advisor */}
-          <div className="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 self-start">
+          <div className="xl:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 self-start">
             <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
               <Sparkles className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
               <span>
@@ -2339,173 +2631,16 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
 
       {/* 5. SUPPORT, PRIVACY POLICY & ACCOUNT DELETION */}
       {activeSubView === 'support' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
-            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-              <HelpCircle className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
-              <span>{lang === 'bn' ? 'সহায়তা ও মতামত পাঠান' : 'Support & Feedback'}</span>
-            </h2>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!fbMessage.trim()) return;
-                await submitFeedback(fbCategory, fbMessage.trim());
-                setFbMessage('');
-                setNotice(
-                  lang === 'bn'
-                    ? 'আপনার বার্তাটি সহায়তা টিমের কাছে পাঠানো হয়েছে।'
-                    : 'Your feedback has been submitted.'
-                );
-              }}
-              className="space-y-3"
-            >
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {lang === 'bn' ? 'বিষয় (Category)' : 'Topic'}
-                </label>
-                <select
-                  value={fbCategory}
-                  onChange={(e) => setFbCategory(e.target.value as FeedbackCategory)}
-                  className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 text-sm"
-                >
-                  <option value="calculation_help">
-                    {lang === 'bn' ? 'বেতন বা ওভারটাইম হিসাব সহায়তা' : 'Calculation Help'}
-                  </option>
-                  <option value="bug_report">
-                    {lang === 'bn' ? 'অ্যাপের কারিগরি সমস্যা' : 'Bug Report'}
-                  </option>
-                  <option value="feature_request">
-                    {lang === 'bn' ? 'নতুন সুবিধার অনুরোধ' : 'Feature Request'}
-                  </option>
-                  <option value="general">{lang === 'bn' ? 'সাধারণ মতামত' : 'General Feedback'}</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {lang === 'bn' ? 'আপনার বার্তা' : 'Message'}
-                </label>
-                <textarea
-                  rows={3}
-                  value={fbMessage}
-                  onChange={(e) => setFbMessage(e.target.value)}
-                  placeholder={
-                    lang === 'bn'
-                      ? 'আপনার সমস্যা বা পরামর্শ বিস্তারিত লিখুন...'
-                      : 'Describe your question or suggestion...'
-                  }
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 text-sm"
-                  required
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2"
-              >
-                <Send className="w-4 h-4" />
-                <span>{lang === 'bn' ? 'মতামত পাঠান' : 'Submit Feedback'}</span>
-              </button>
-            </form>
-
-            {isAdminUser && feedbackList.length > 0 && (
-              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2">
-                <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                  {lang === 'bn'
-                    ? 'সহায়তা টিকিট তালিকা (Least-Privilege Support Queue)'
-                    : 'Support Ticket Queue'}
-                </h3>
-                {feedbackList.map((f) => (
-                  <div
-                    key={f.id}
-                    className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between gap-2 text-xs"
-                  >
-                    <div>
-                      <p className="font-semibold text-slate-900 dark:text-white">
-                        {f.workerName} · {f.category}
-                      </p>
-                      <p className="text-slate-600 dark:text-slate-300 mt-0.5">{f.message}</p>
-                    </div>
-                    {f.status !== 'resolved' ? (
-                      <button
-                        type="button"
-                        onClick={() => resolveFeedback(f.id)}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white font-semibold shrink-0"
-                      >
-                        {lang === 'bn' ? 'সমাধান' : 'Resolve'}
-                      </button>
-                    ) : (
-                      <span className="text-emerald-700 font-semibold">Resolved</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 self-start">
-            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-              <ShieldAlert className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
-              <span>
-                {lang === 'bn'
-                  ? 'গোপনীয়তা নীতি ও অ্যাকাউন্ট নিয়ন্ত্রণ'
-                  : 'Privacy Policy & Account Control'}
-              </span>
-            </h2>
-
-            <div className="text-xs text-slate-600 dark:text-slate-300 space-y-2 leading-relaxed">
-              <p>
-                {lang === 'bn'
-                  ? '১. শ্রমিক সাথী অ্যাপ কখনোই আপনার জাতীয় পরিচয়পত্র (NID) নম্বর, বিকাশ/নগদ পিন বা ব্যাংক পাসওয়ার্ড সংগ্রহ করে না।'
-                  : '1. Shromik Sathi never asks for your National ID (NID) number, mobile banking PIN, or bank passwords.'}
-              </p>
-              <p>
-                {lang === 'bn'
-                  ? '২. আপনার বেতন, ওভারটাইম, হাজিরা ও ব্যক্তিগত খরচের তথ্য শুধুমাত্র আপনার নিজের ইউজার আইডিতে সংরক্ষিত থাকে। অন্য কোনো ব্যবহারকারী বা অ্যাডমিন আপনার ব্যক্তিগত ভল্ট বা আর্থিক তথ্য দেখতে পান না।'
-                  : '2. Your salary, overtime, and document vault records are strictly isolated to your user ID.'}
-              </p>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
-              {!confirmDeleteOpen ? (
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeleteOpen(true)}
-                  className="min-h-[42px] px-4 py-2 rounded-xl border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 text-xs font-semibold hover:bg-red-50 dark:hover:bg-red-950/30"
-                >
-                  {lang === 'bn'
-                    ? 'অ্যাকাউন্ট ও সকল তথ্য স্থায়ীভাবে মুছে ফেলুন'
-                    : 'Delete Account & All Personal Data'}
-                </button>
-              ) : (
-                <div className="p-4 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 space-y-3">
-                  <p className="text-xs font-semibold text-red-800 dark:text-red-300">
-                    {lang === 'bn'
-                      ? 'আপনি কি নিশ্চিত যে আপনার অ্যাকাউন্ট ও সকল সংরক্ষিত রেকর্ড মুছে ফেলতে চান?'
-                      : 'Are you sure you want to permanently delete your account and all records?'}
-                  </p>
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteOpen(false)}
-                      className="min-h-[38px] px-3 rounded-lg bg-white dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200"
-                    >
-                      {lang === 'bn' ? 'না, ফিরে যান' : 'Cancel'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={deleteAccountAndData}
-                      className="min-h-[38px] px-3 rounded-lg bg-red-600 text-white text-xs font-semibold"
-                    >
-                      {lang === 'bn' ? 'হ্যাঁ, মুছে ফেলুন' : 'Confirm Delete'}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <SupportFeedbackView
+          lang={lang}
+          todayISO={todayISO}
+          feedbackList={feedbackList}
+          isAdminUser={isAdminUser}
+          onSubmitFeedback={submitFeedback}
+          onResolveFeedback={resolveFeedback}
+          onDeleteAccount={deleteAccountAndData}
+          onSuccessToast={(msg) => setNotice(msg)}
+        />
       )}
 
       {/* 10. ALARM SUBVIEW */}
@@ -2529,6 +2664,8 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       {isAdminUser && activeSubView === 'admin_panel' && (
         <AdminDashboardView onExitAdmin={() => onChangeSubView('profile')} />
       )}
+        </div>
+      </div>
     </div>
   );
 };

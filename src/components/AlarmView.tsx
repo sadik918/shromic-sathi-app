@@ -341,7 +341,7 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
   const activeCount = alarms.filter((a) => a.isEnabled).length;
 
   return (
-    <div className="space-y-4 max-w-4xl mx-auto">
+    <div className="w-full space-y-4">
       {/* Toast Notification */}
       {toastMsg && (
         <div
@@ -356,7 +356,7 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
       <div className="bg-gradient-to-r from-emerald-700 via-emerald-800 to-teal-800 text-white rounded-2xl p-4 sm:p-5 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center shrink-0">
-            <BellRing className="w-6 h-6 text-emerald-200 animate-pulse" />
+            <BellRing className="w-6 h-6 text-emerald-200" />
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -370,7 +370,7 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
               >
                 <span
                   className={`w-1.5 h-1.5 rounded-full ${
-                    isOnlineTimeSynced ? 'bg-emerald-300 animate-pulse' : 'bg-amber-300'
+                    isOnlineTimeSynced ? 'bg-emerald-300' : 'bg-amber-300'
                   }`}
                 />
                 {isOnlineTimeSynced
@@ -443,7 +443,7 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
           {alarms.map((alarm) => {
             const toneObj = ALARM_TONE_OPTIONS.find((t) => t.id === alarm.toneId);
             const isCustom = alarm.toneId === 'custom_device';

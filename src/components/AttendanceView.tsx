@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Award,
+  BarChart3,
   Bell,
   Calendar,
   CheckCircle2,
@@ -46,9 +47,23 @@ import {
 import { CalendarDateReminderSection } from './CalendarDateReminderSection';
 import { DateInputDMY } from './DateInputDMY';
 import { MissingRecordsSection } from './MissingRecordsSection';
+import { AttendancePieChartCard } from './AnalyticsChartCards';
+import { buildHomeOverviewAnalytics } from '../utils/homeAnalytics';
+import { slicePreviewRecords } from '../utils/listPreview';
+import {
+  buildRecentAttendanceRows,
+  filterRecentAttendanceRows,
+  type RecentAttendanceFilter,
+  type RecentAttendanceRowStatus,
+} from '../utils/recentAttendanceTable';
+import {
+  TransparentSeeMoreFooter,
+  useResponsiveListLimit,
+} from './TransparentSeeMoreFooter';
 
 interface AttendanceViewProps {
   initialSelectedDate?: string;
+  onOpenReports?: () => void;
 }
 
 const STATUS_OPTIONS: Array<{
@@ -129,7 +144,10 @@ const WEEKDAY_HEADERS: Array<{ bn: string; en: string; isFriday?: boolean }> = [
   { bn: 'শুক্র', en: 'Fri', isFriday: true },
 ];
 
-export const AttendanceView: React.FC<AttendanceViewProps> = ({ initialSelectedDate }) => {
+export const AttendanceView: React.FC<AttendanceViewProps> = ({
+  initialSelectedDate,
+  onOpenReports,
+}) => {
   const {
     todayISO,
     currentMonthISO,
@@ -150,6 +168,23 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ initialSelectedD
   } = useData();
   const dict = T[lang];
 
+  const attAnalytics = useMemo(
+    () =>
+      buildHomeOverviewAnalytics({
+        selectedMonth,
+        lang,
+        profile,
+        attendance,
+        overtime,
+        salaryRecords: [],
+        payments: [],
+        expenses: [],
+        savings: [],
+        loans: [],
+      }),
+    [selectedMonth, lang, profile, attendance, overtime]
+  );
+
   const isUpcomingMonth = isFutureMonth(selectedMonth, currentMonthISO);
   const [selectedDate, setSelectedDate] = useState(() =>
     initialSelectedDate && initialSelectedDate.startsWith(selectedMonth)
@@ -168,8 +203,17 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ initialSelectedD
   const [showShiftConfig, setShowShiftConfig] = useState(false);
   const [showBonusConfig, setShowBonusConfig] = useState(false);
   const [showAllAnnualHolidays, setShowAllAnnualHolidays] = useState(false);
+  const [isRecentListExpanded, setIsRecentListExpanded] = useState(false);
+  const [recentListFilter, setRecentListFilter] = useState<RecentAttendanceFilter>('all');
+  const attendancePreviewLimit = useResponsiveListLimit('attendance');
   const editorFormRef = useRef<HTMLDivElement | null>(null);
+  const recentTableCardRef = useRef<HTMLDivElement | null>(null);
   const autoPopulatedMonthsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    setIsRecentListExpanded(false);
+    setRecentListFilter('all');
+  }, [selectedMonth]);
 
   useEffect(() => {
     if (initialSelectedDate && initialSelectedDate.startsWith(selectedMonth)) {
@@ -247,10 +291,49 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ initialSelectedD
     selectedDateOvertimeList.reduce((sum, o) => sum + (Number(o.estimatedEarnings) || 0), 0)
   );
 
-  // Recent Present Dates list for quick inspection & 1-tap Cross -> Absent
-  const recentPresentRecords = monthAttendance.filter(
-    (a) => a.status === 'present' || a.status === 'late'
+  // Unified Recent Attendance Table (recorded statuses + unrecorded missing workdays + bonus-miss flags)
+  const recentAttendanceTable = useMemo(
+    () =>
+      buildRecentAttendanceRows({
+        selectedMonth,
+        monthAttendance,
+        overtime,
+        missingEntries,
+        profile,
+      }),
+    [selectedMonth, monthAttendance, overtime, missingEntries, profile]
   );
+
+  const filteredRecentRows = useMemo(
+    () => filterRecentAttendanceRows(recentAttendanceTable.rows, recentListFilter),
+    [recentAttendanceTable.rows, recentListFilter]
+  );
+
+  const {
+    visibleItems: visibleRecentAttendanceRows,
+    hiddenCount: hiddenRecentAttendanceCount,
+    hasMore: hasMoreRecentAttendance,
+  } = useMemo(
+    () => slicePreviewRecords(filteredRecentRows, isRecentListExpanded, attendancePreviewLimit),
+    [filteredRecentRows, isRecentListExpanded, attendancePreviewLimit]
+  );
+
+  const getRecentRowStatusMeta = (rowStatus: RecentAttendanceRowStatus) => {
+    if (rowStatus === 'missing') {
+      return {
+        labelBn: 'হাজিরা মিসিং',
+        labelEn: 'Attendance Missing',
+        badgeColor:
+          'bg-rose-100 text-rose-800 dark:bg-rose-950/90 dark:text-rose-200 border border-rose-200 dark:border-rose-800/80',
+      };
+    }
+    const found = STATUS_OPTIONS.find((s) => s.id === rowStatus);
+    return {
+      labelBn: found?.shortBn || 'উপস্থিত',
+      labelEn: found?.labelEn || 'Present',
+      badgeColor: found?.badgeColor || 'bg-slate-100 text-slate-800',
+    };
+  };
 
   const showToast = (msg: string) => {
     setFeedback(msg);
@@ -884,6 +967,23 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ initialSelectedD
             >
               <Clock className="w-3.5 h-3.5" />
             </button>
+
+            {onOpenReports && (
+              <button
+                type="button"
+                data-testid="attendance-open-reports-btn"
+                onClick={onOpenReports}
+                className="h-8 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+              >
+                <BarChart3 className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">
+                  {lang === 'bn' ? 'হাজিরা রিপোর্ট' : 'Reports'}
+                </span>
+                <span className="sm:hidden">
+                  {lang === 'bn' ? 'রিপোর্ট' : 'Report'}
+                </span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -980,6 +1080,50 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ initialSelectedD
               : `Cutoff: ${activeShiftCutoffTime}`}
           </span>
         </div>
+
+        {/* Inline Bonus Miss Cause & Direct Jump to Recent Attendance Table */}
+        {((!bonusEvaluation.isEligible && bonusEvaluation.hasBonusConfigured) ||
+          recentAttendanceTable.missedSummary.bonusAffectedTotalCount > 0) && (
+          <div
+            data-testid="attendance-bonus-miss-alert"
+            className="p-2.5 rounded-xl bg-rose-50/90 dark:bg-rose-950/40 border border-rose-200/90 dark:border-rose-800/70 flex flex-wrap items-center justify-between gap-2 text-[11px]"
+          >
+            <div className="flex items-center gap-1.5 min-w-0 text-rose-800 dark:text-rose-200 font-semibold">
+              <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+              <span className="truncate">
+                {lang === 'bn'
+                  ? bonusEvaluation.reasonBn ||
+                    `মিসিং/অনুপস্থিত তারিখ: ${formatNumber(
+                      recentAttendanceTable.missedSummary.bonusAffectedTotalCount,
+                      'bn'
+                    )} দিন`
+                  : bonusEvaluation.reasonEn ||
+                    `${recentAttendanceTable.missedSummary.bonusAffectedTotalCount} missed/affected date(s)`}
+              </span>
+            </div>
+            {recentAttendanceTable.missedSummary.bonusAffectedTotalCount > 0 && (
+              <button
+                type="button"
+                data-testid="jump-to-missed-attendance-btn"
+                onClick={() => {
+                  setRecentListFilter('missed_only');
+                  recentTableCardRef.current?.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'nearest',
+                  });
+                }}
+                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 cursor-pointer transition-colors whitespace-nowrap"
+              >
+                {lang === 'bn'
+                  ? `মিস তারিখ দেখুন (${formatNumber(
+                      recentAttendanceTable.missedSummary.bonusAffectedTotalCount,
+                      'bn'
+                    )})`
+                  : `View Missed (${recentAttendanceTable.missedSummary.bonusAffectedTotalCount})`}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Editable Settings Fields */}
         {showBonusConfig && (
@@ -1804,122 +1948,401 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ initialSelectedD
             </div>
           )}
 
-          {/* 4. RECENT PRESENT DATES LIST WITH EDIT & 1-TAP CROSS (✕) TO MARK ABSENT */}
+          {/* 4. RECENT ATTENDANCE TABLE (SHOWS RECORDED STATUSES, MISSING DATES & BONUS MISS CAUSE) */}
           <div
+            ref={recentTableCardRef}
             data-testid="recent-present-dates-card"
             className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 shadow-xs space-y-3"
           >
-            <div className="flex items-center justify-between gap-2">
-              <div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                   {lang === 'bn'
-                    ? `সাম্প্রতিক উপস্থিতির তালিকা (${formatNumber(
-                        recentPresentRecords.length,
+                    ? `সাম্প্রতিক হাজিরা তালিকা (${formatNumber(
+                        recentAttendanceTable.rows.length,
                         lang
                       )} দিন)`
-                    : `Recent Present Dates (${recentPresentRecords.length})`}
+                    : `Recent Attendance (${recentAttendanceTable.rows.length})`}
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   {lang === 'bn'
-                    ? 'ভুলবশত উপস্থিত থাকলে (✕) বাটনে চাপ দিলে সাথে সাথে অনুপস্থিত হয়ে যাবে'
-                    : 'Tap (✕) to quickly switch a date from Present to Absent, or Edit'}
+                    ? 'মিসিং হাজিরা, অনুপস্থিত ও উপস্থিত তারিখের স্ট্যাটাস একসাথে দেখুন'
+                    : 'View missing dates, absences, and recorded statuses together'}
                 </p>
               </div>
+
+              {recentAttendanceTable.missedSummary.bonusAffectedTotalCount > 0 && (
+                <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 shrink-0">
+                  <button
+                    type="button"
+                    data-testid="recent-attendance-filter-all"
+                    onClick={() => {
+                      setRecentListFilter('all');
+                      setIsRecentListExpanded(false);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      recentListFilter === 'all'
+                        ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-2xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                    }`}
+                  >
+                    {lang === 'bn'
+                      ? `সব (${formatNumber(recentAttendanceTable.rows.length, lang)})`
+                      : `All (${recentAttendanceTable.rows.length})`}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="recent-attendance-filter-missed"
+                    onClick={() => {
+                      setRecentListFilter('missed_only');
+                      setIsRecentListExpanded(false);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      recentListFilter === 'missed_only'
+                        ? 'bg-rose-600 text-white shadow-2xs'
+                        : 'text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40'
+                    }`}
+                  >
+                    {lang === 'bn'
+                      ? `হাজিরা/বোনাস মিস (${formatNumber(
+                          recentAttendanceTable.missedSummary.bonusAffectedTotalCount,
+                          lang
+                        )})`
+                      : `Missed (${recentAttendanceTable.missedSummary.bonusAffectedTotalCount})`}
+                  </button>
+                </div>
+              )}
             </div>
 
-            {recentPresentRecords.length === 0 ? (
+            {recentAttendanceTable.missedSummary.bonusAffectedTotalCount > 0 && (
+              <div
+                data-testid="recent-attendance-missed-summary"
+                className="p-2.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/90 dark:border-amber-800/70 space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-amber-950 dark:text-amber-200">
+                  <span className="flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>
+                      {lang === 'bn'
+                        ? `হাজিরা মিসিং বা বোনাস মিস হওয়া তারিখ (${formatNumber(
+                            recentAttendanceTable.missedSummary.bonusAffectedTotalCount,
+                            lang
+                          )} দিন):`
+                        : `Missed Attendance / Bonus Dates (${recentAttendanceTable.missedSummary.bonusAffectedTotalCount}):`}
+                    </span>
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {recentAttendanceTable.missedSummary.bonusAffectedDates.slice(0, 6).map((dStr) => (
+                    <button
+                      key={dStr}
+                      type="button"
+                      onClick={() => {
+                        handleSelectDate(dStr);
+                        editorFormRef.current?.scrollIntoView({
+                          behavior: 'smooth',
+                          block: 'nearest',
+                        });
+                      }}
+                      className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800/80 text-[11px] font-bold text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors tabular-nums cursor-pointer"
+                    >
+                      {formatDateSlashDMY(dStr, lang)}
+                    </button>
+                  ))}
+                  {recentAttendanceTable.missedSummary.bonusAffectedDates.length > 6 && (
+                    <span className="px-2 py-0.5 text-[11px] font-bold text-amber-800 dark:text-amber-300">
+                      +{formatNumber(
+                        recentAttendanceTable.missedSummary.bonusAffectedDates.length - 6,
+                        lang
+                      )}{' '}
+                      {lang === 'bn' ? 'দিন' : 'more'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {filteredRecentRows.length === 0 ? (
               <p className="text-xs text-slate-400 py-4 text-center">
-                {lang === 'bn'
-                  ? 'এই মাসে এখনো কোনো উপস্থিত তারিখ নেই।'
-                  : 'No present dates recorded for this month.'}
+                {recentListFilter === 'missed_only'
+                  ? lang === 'bn'
+                    ? 'কোনো মিসিং বা বোনাস মিস হওয়া তারিখ নেই।'
+                    : 'No missed or bonus-affected dates found.'
+                  : lang === 'bn'
+                  ? 'এই মাসে এখনো কোনো হাজিরা রেকর্ড বা মিসিং তারিখ নেই।'
+                  : 'No attendance records found for this month.'}
               </p>
             ) : (
-              <div className="space-y-1.5">
-                {recentPresentRecords.map((rec) => {
-                  const recOtHours = roundCurrency(
-                    overtime
-                      .filter((o) => o.date === rec.date)
-                      .reduce((acc, o) => acc + (Number(o.approvedHours) || 0), 0)
-                  );
-                  return (
-                    <div
-                      key={rec.id}
-                      className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
-                        selectedDate === rec.date
-                          ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800'
-                          : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200/70 dark:border-slate-700/70'
-                      }`}
-                    >
+              <div>
+                {/* Mobile Card List (< sm) */}
+                <div className="sm:hidden space-y-1.5">
+                  {visibleRecentAttendanceRows.map((row) => {
+                    const meta = getRecentRowStatusMeta(row.status);
+                    const isMissedRow = row.kind === 'missing' || row.status === 'absent';
+                    return (
                       <div
-                        onClick={() => handleSelectDate(rec.date)}
-                        className="min-w-0 pr-2 cursor-pointer flex-1"
+                        key={row.id}
+                        data-testid={`recent-att-row-${row.date}`}
+                        data-att-status={row.status}
+                        data-bonus-affected={row.isBonusAffected ? 'true' : 'false'}
+                        className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
+                          selectedDate === row.date
+                            ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800'
+                            : isMissedRow || row.isBonusAffected
+                            ? 'bg-rose-50/70 dark:bg-rose-950/25 border-rose-200 dark:border-rose-800/70'
+                            : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200/70 dark:border-slate-700/70'
+                        }`}
                       >
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-bold text-xs text-slate-900 dark:text-white">
-                            {formatDateSlashDMY(rec.date, lang)} ({formatDateReadable(rec.date, lang)})
-                          </span>
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                            {rec.status === 'late'
-                              ? lang === 'bn'
-                                ? 'দেরি'
-                                : 'Late'
-                              : lang === 'bn'
-                              ? 'উপস্থিত'
-                              : 'Present'}
-                          </span>
-                          {recOtHours > 0 && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300">
-                              +{formatNumber(recOtHours, lang, 1)}{' '}
-                              {lang === 'bn' ? 'ঘণ্টা ওটি' : 'h OT'}
+                        <div
+                          onClick={() => handleSelectDate(row.date)}
+                          className="min-w-0 pr-2 cursor-pointer flex-1"
+                        >
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-xs text-slate-900 dark:text-white tabular-nums">
+                              {formatDateSlashDMY(row.date, lang)} ({formatDateReadable(row.date, lang)})
                             </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${meta.badgeColor}`}>
+                              {lang === 'bn' ? meta.labelBn : meta.labelEn}
+                            </span>
+                            {row.isBonusAffected && row.status !== 'missing' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                                {lang === 'bn' ? 'বোনাস মিস' : 'Bonus Miss'}
+                              </span>
+                            )}
+                            {row.otHours > 0 && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300">
+                                +{formatNumber(row.otHours, lang, 1)}{' '}
+                                {lang === 'bn' ? 'ঘণ্টা ওটি' : 'h OT'}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                            {row.kind === 'missing'
+                              ? lang === 'bn'
+                                ? 'হাজিরার এন্ট্রি পাওয়া যায়নি'
+                                : 'No attendance record logged'
+                              : row.bonusMissReasonBn && row.isBonusAffected
+                              ? lang === 'bn'
+                                ? row.bonusMissReasonBn
+                                : row.bonusMissReasonEn
+                              : row.checkIn && row.checkOut
+                              ? `${row.checkIn} - ${row.checkOut}`
+                              : lang === 'bn'
+                              ? 'নিয়মিত ডিউটি'
+                              : 'Regular shift'}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          {row.kind === 'missing' ? (
+                            <button
+                              type="button"
+                              data-testid={`fill-missing-att-btn-${row.date}`}
+                              onClick={() => {
+                                handleSelectDate(row.date);
+                                editorFormRef.current?.scrollIntoView({
+                                  behavior: 'smooth',
+                                  block: 'nearest',
+                                });
+                              }}
+                              className="px-2 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-bold whitespace-nowrap cursor-pointer"
+                            >
+                              {lang === 'bn' ? 'হাজিরা দিন' : 'Mark'}
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleSelectDate(row.date);
+                                  editorFormRef.current?.scrollIntoView({
+                                    behavior: 'smooth',
+                                    block: 'nearest',
+                                  });
+                                }}
+                                title={lang === 'bn' ? 'এডিট করুন' : 'Edit'}
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-600 hover:bg-white dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              {row.record && (row.status === 'present' || row.status === 'late') && (
+                                <button
+                                  type="button"
+                                  data-testid={`mark-absent-cross-btn-${row.date}`}
+                                  onClick={() => handleQuickMarkAbsent(row.record!)}
+                                  title={
+                                    lang === 'bn'
+                                      ? 'অনুপস্থিত হিসেবে চিহ্নিত করুন (✕)'
+                                      : 'Mark as Absent (✕)'
+                                  }
+                                  className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/70 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800/70 transition-colors cursor-pointer"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </>
                           )}
                         </div>
-                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                          {rec.checkIn && rec.checkOut
-                            ? `${rec.checkIn} - ${rec.checkOut}`
-                            : lang === 'bn'
-                            ? 'নিয়মিত ডিউটি'
-                            : 'Regular shift'}
-                        </p>
                       </div>
+                    );
+                  })}
+                </div>
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            handleSelectDate(rec.date);
-                            editorFormRef.current?.scrollIntoView({
-                              behavior: 'smooth',
-                              block: 'nearest',
-                            });
-                          }}
-                          title={lang === 'bn' ? 'এডিট করুন' : 'Edit'}
-                          className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-600 hover:bg-white dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          data-testid={`mark-absent-cross-btn-${rec.date}`}
-                          onClick={() => handleQuickMarkAbsent(rec)}
-                          title={
-                            lang === 'bn'
-                              ? 'অনুপস্থিত হিসেবে চিহ্নিত করুন (✕)'
-                              : 'Mark as Absent (✕)'
-                          }
-                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/70 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800/70 transition-colors cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                {/* Desktop Structured Table (sm+) */}
+                <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-800/80 text-[11px] font-bold text-slate-600 dark:text-slate-300 border-b border-slate-200/80 dark:border-slate-700">
+                        <th className="py-2 px-3">{lang === 'bn' ? 'তারিখ' : 'Date'}</th>
+                        <th className="py-2 px-3">{lang === 'bn' ? 'হাজিরা স্ট্যাটাস' : 'Attendance Status'}</th>
+                        <th className="py-2 px-3 text-right">{lang === 'bn' ? 'অ্যাকশন' : 'Action'}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {visibleRecentAttendanceRows.map((row) => {
+                        const meta = getRecentRowStatusMeta(row.status);
+                        const isMissedRow = row.kind === 'missing' || row.status === 'absent';
+                        return (
+                          <tr
+                            key={row.id}
+                            data-testid={`recent-att-row-desktop-${row.date}`}
+                            data-att-status={row.status}
+                            data-bonus-affected={row.isBonusAffected ? 'true' : 'false'}
+                            onClick={() => handleSelectDate(row.date)}
+                            className={`transition-colors cursor-pointer ${
+                              selectedDate === row.date
+                                ? 'bg-emerald-50/70 dark:bg-emerald-950/30'
+                                : isMissedRow || row.isBonusAffected
+                                ? 'bg-rose-50/60 hover:bg-rose-50 dark:bg-rose-950/20 dark:hover:bg-rose-950/35'
+                                : 'bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800/50'
+                            }`}
+                          >
+                            <td className="py-2.5 px-3 align-top">
+                              <div className="font-bold text-slate-900 dark:text-white tabular-nums whitespace-nowrap">
+                                {formatDateSlashDMY(row.date, lang)}
+                              </div>
+                              <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                                {formatDateReadable(row.date, lang)}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 align-top">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${meta.badgeColor}`}>
+                                  {lang === 'bn' ? meta.labelBn : meta.labelEn}
+                                </span>
+                                {row.isBonusAffected && row.status !== 'missing' && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300 whitespace-nowrap">
+                                    {lang === 'bn' ? 'বোনাস মিস' : 'Bonus Miss'}
+                                  </span>
+                                )}
+                                {row.otHours > 0 && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300 whitespace-nowrap">
+                                    +{formatNumber(row.otHours, lang, 1)} {lang === 'bn' ? 'ঘণ্টা ওটি' : 'h OT'}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                {row.kind === 'missing'
+                                  ? lang === 'bn'
+                                    ? 'হাজিরা এন্ট্রি নেই — বোনাস শর্তে প্রভাব'
+                                    : 'No entry logged'
+                                  : row.bonusMissReasonBn && row.isBonusAffected
+                                  ? lang === 'bn'
+                                    ? row.bonusMissReasonBn
+                                    : row.bonusMissReasonEn
+                                  : row.checkIn && row.checkOut
+                                  ? `${row.checkIn} - ${row.checkOut}`
+                                  : lang === 'bn'
+                                  ? 'নিয়মিত ডিউটি'
+                                  : 'Regular shift'}
+                              </div>
+                            </td>
+                            <td
+                              className="py-2.5 px-3 align-middle text-right"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="inline-flex items-center justify-end gap-1">
+                                {row.kind === 'missing' ? (
+                                  <button
+                                    type="button"
+                                    data-testid={`fill-missing-att-desktop-btn-${row.date}`}
+                                    onClick={() => {
+                                      handleSelectDate(row.date);
+                                      editorFormRef.current?.scrollIntoView({
+                                        behavior: 'smooth',
+                                        block: 'nearest',
+                                      });
+                                    }}
+                                    className="px-2 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-bold whitespace-nowrap cursor-pointer"
+                                  >
+                                    {lang === 'bn' ? 'হাজিরা দিন' : 'Mark'}
+                                  </button>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        handleSelectDate(row.date);
+                                        editorFormRef.current?.scrollIntoView({
+                                          behavior: 'smooth',
+                                          block: 'nearest',
+                                        });
+                                      }}
+                                      title={lang === 'bn' ? 'এডিট করুন' : 'Edit'}
+                                      className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                                    >
+                                      <Edit2 className="w-3.5 h-3.5" />
+                                    </button>
+                                    {row.record && (row.status === 'present' || row.status === 'late') && (
+                                      <button
+                                        type="button"
+                                        data-testid={`mark-absent-cross-desktop-btn-${row.date}`}
+                                        onClick={() => handleQuickMarkAbsent(row.record!)}
+                                        title={
+                                          lang === 'bn'
+                                            ? 'অনুপস্থিত হিসেবে চিহ্নিত করুন (✕)'
+                                            : 'Mark as Absent (✕)'
+                                        }
+                                        className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/70 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800/70 transition-colors cursor-pointer"
+                                      >
+                                        <X className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <TransparentSeeMoreFooter
+                  expanded={isRecentListExpanded}
+                  hasMore={hasMoreRecentAttendance}
+                  hiddenCount={hiddenRecentAttendanceCount}
+                  lang={lang}
+                  onToggle={() => setIsRecentListExpanded((prev) => !prev)}
+                  testId="attendance-recent-see-more-btn"
+                />
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Attendance & Absence Donut Chart */}
+      <AttendancePieChartCard
+        selectedMonth={selectedMonth}
+        lang={lang}
+        slices={attAnalytics.attendanceSlices}
+        totalTrackedDays={attAnalytics.kpis.totalTrackedDays}
+        attendanceRatePct={attAnalytics.kpis.attendanceRatePct}
+        latestPopulatedAttendanceMonth={attAnalytics.latestPopulatedAttendanceMonth}
+        onSelectMonth={setSelectedMonth}
+      />
 
       {/* 5. COLLAPSIBLE ANNUAL PUBLIC HOLIDAYS DIRECTORY (Past vs Upcoming Holidays Color-Coded) */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 shadow-xs">

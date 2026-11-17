@@ -48,6 +48,8 @@ import {
 } from '../utils/calculations';
 import { formatDateReadable, formatDateSlashDMY } from '../utils/i18n';
 import { DateInputDMY } from './DateInputDMY';
+import { LoanPortfolioChartsCard } from './AnalyticsChartCards';
+import { buildLoanPortfolioAnalytics } from '../utils/homeAnalytics';
 
 export const PersonalLoanView: React.FC = () => {
   const {
@@ -133,6 +135,10 @@ export const PersonalLoanView: React.FC = () => {
 
   // Summaries
   const metrics = useMemo(() => summarizeAllPersonalLoans(loans, todayISO), [loans, todayISO]);
+  const loanPortfolio = useMemo(
+    () => buildLoanPortfolioAnalytics(loans, todayISO),
+    [loans, todayISO]
+  );
 
   // Filtered Loans based on current tab, search, status, and archive
   const activeLoansList = useMemo(() => {
@@ -542,6 +548,9 @@ export const PersonalLoanView: React.FC = () => {
         </div>
       </div>
 
+      {/* Loan Portfolio Pie Chart & Person-Wise Bar Graph */}
+      <LoanPortfolioChartsCard lang={lang} portfolio={loanPortfolio} />
+
       {/* Due Today / Overdue Banner Warning */}
       {(metrics.dueTodayCount > 0 || metrics.overdueCount > 0) && (
         <div
@@ -693,7 +702,7 @@ export const PersonalLoanView: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               {activeLoansList.map((loan) => {
                 const origAmt = getLoanOriginalAmount(loan);
                 const repaid = getLoanRepaymentsTotal(loan);

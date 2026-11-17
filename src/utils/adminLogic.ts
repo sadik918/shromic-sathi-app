@@ -570,7 +570,7 @@ export function mapLegacyFeedbackToTickets(feedbackList: SupportFeedback[]): Sup
         : '2026-10-25';
     return {
       id: fb.id,
-      ticketNumber: `TKT-${String(1001 + idx)}`,
+      ticketNumber: `TKT-${String(2001 + idx)}`,
       userId: fb.userId,
       workerName: fb.workerName || 'শ্রমিক ব্যবহারকারী',
       category: categoryMap[fb.category] || 'other',
