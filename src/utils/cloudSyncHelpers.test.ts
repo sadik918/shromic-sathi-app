@@ -4,6 +4,7 @@ import {
   buildCoreRequiredWorkerProfilePayload,
   buildUserDirectoryCreatePayload,
   buildUserDirectoryOwnerUpdatePayload,
+  buildUserSubscriptionUpgradeMutation,
   classifyFirestoreReadError,
   extractAvailableRegistrationMonths,
   getBstTodayISO,
@@ -18,6 +19,7 @@ import {
   resolveAuthProvider,
   resolveBestUserDisplayName,
   resolveVerifiedAdminSession,
+  sanitizeFirestorePayload,
   stripUndefinedAndMetaFields,
   normalizeWorkerProfileForFirestore,
   normalizeLoanPayloadForFirestore,
@@ -448,5 +450,69 @@ test('normalizeWorkerProfileForFirestore and buildCoreRequiredWorkerProfilePaylo
   assert.equal(core.basicSalary, 10000);
   assert.equal(core.otDivisor, 208);
 });
+
+test('sanitizeFirestorePayload recursively removes undefined fields while keeping Dates and null', () => {
+  const created = new Date('2026-11-18T00:00:00Z');
+  const cleaned = sanitizeFirestorePayload({
+    planId: 'pro',
+    badgeTextBn: undefined,
+    expiresAt: null,
+    created,
+    nested: {
+      couponCode: undefined,
+      amountBdt: 99,
+      tags: ['a', undefined, { note: undefined, active: true }],
+    },
+  });
+  assert.equal('badgeTextBn' in cleaned, false);
+  assert.equal(cleaned.expiresAt, null);
+  assert.equal(cleaned.created, created);
+  const nested = cleaned.nested as Record<string, unknown>;
+  assert.equal('couponCode' in nested, false);
+  assert.equal(nested.amountBdt, 99);
+  assert.deepEqual(nested.tags, ['a', { active: true }]);
+});
+
+test('buildUserSubscriptionUpgradeMutation obeys userSubscriptions create & owner update rules', () => {
+  const pendingReq = {
+    id: 'payreq_1',
+    userId: 'uid_worker',
+    planId: 'pro',
+    couponCode: undefined,
+    notes: undefined,
+    status: 'pending',
+  };
+
+  const createMut = buildUserSubscriptionUpgradeMutation({
+    uid: 'uid_worker',
+    userEmail: 'worker@shromiksathi.app',
+    userDisplayName: 'আয়েশা বেগম',
+    pendingRequest: pendingReq,
+    nowISO: '2026-11-18T10:00:00.000Z',
+    docExists: false,
+  });
+  assert.equal(createMut.mode, 'set');
+  assert.equal(createMut.payload.userId, 'uid_worker');
+  assert.equal(createMut.payload.planId, 'starter_free');
+  assert.equal(createMut.payload.status, 'free');
+  assert.equal('couponCode' in (createMut.payload.pendingRequest as Record<string, unknown>), false);
+
+  const updateMut = buildUserSubscriptionUpgradeMutation({
+    uid: 'uid_worker',
+    userEmail: 'worker@shromiksathi.app',
+    userDisplayName: 'আয়েশা বেগম',
+    pendingRequest: pendingReq,
+    nowISO: '2026-11-18T10:05:00.000Z',
+    docExists: true,
+  });
+  assert.equal(updateMut.mode, 'update');
+  const allowedKeys = new Set(['pendingRequest', 'updatedAt', 'userEmail', 'userDisplayName']);
+  for (const k of Object.keys(updateMut.payload)) {
+    assert.ok(allowedKeys.has(k), `Unexpected owner update key: ${k}`);
+  }
+  assert.equal('planId' in updateMut.payload, false);
+  assert.equal('status' in updateMut.payload, false);
+});
+
 
 

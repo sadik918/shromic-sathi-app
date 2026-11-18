@@ -16,8 +16,46 @@ export class ErrorBoundary extends React.Component<{ children: React.ReactNode }
     return { hasError: true, errorMessage: error.message || 'Unknown error' };
   }
 
+  private async clearStaleCachesAndReload() {
+    try {
+      if (typeof window !== 'undefined' && 'caches' in window) {
+        const keys = await window.caches.keys();
+        await Promise.all(
+          keys
+            .filter((k) => k.startsWith('shromik-sathi-static-assets-') || k.includes('workbox-precache'))
+            .map((k) => window.caches.delete(k))
+        );
+      }
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.update().catch(() => {})));
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+    window.location.reload();
+  }
+
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('Shromik Sathi ErrorBoundary:', error, info);
+    const msg = error?.message || '';
+    if (
+      typeof window !== 'undefined' &&
+      (msg.includes('Minified React error #310') ||
+        msg.includes('Minified React error #300') ||
+        msg.includes('Failed to fetch dynamically imported module') ||
+        msg.includes('Importing a module script failed'))
+    ) {
+      try {
+        const recoveryKey = 'shromik_sathi_sw_auto_recovered_v3';
+        if (!sessionStorage.getItem(recoveryKey)) {
+          sessionStorage.setItem(recoveryKey, '1');
+          void this.clearStaleCachesAndReload();
+        }
+      } catch {
+        // Ignore sessionStorage errors
+      }
+    }
   }
 
   render() {
@@ -49,8 +87,10 @@ export class ErrorBoundary extends React.Component<{ children: React.ReactNode }
             </div>
             <button
               type="button"
-              onClick={() => window.location.reload()}
-              className="mt-5 w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm transition-colors"
+              onClick={() => {
+                void this.clearStaleCachesAndReload();
+              }}
+              className="mt-5 w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm transition-colors cursor-pointer"
             >
               <RefreshCw className="w-4 h-4" />
               আবার চেষ্টা করুন (Reload)

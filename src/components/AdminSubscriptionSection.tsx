@@ -95,6 +95,10 @@ export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> =
   const [editingCoupon, setEditingCoupon] = useState<CouponCode | null>(null);
   const [isSavingCoupon, setIsSavingCoupon] = useState(false);
   const [couponError, setCouponError] = useState('');
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<
+    { type: 'plan'; item: SubscriptionPlan } | { type: 'coupon'; item: CouponCode } | null
+  >(null);
+  const [isDeletingTarget, setIsDeletingTarget] = useState(false);
 
   // Plan Edit / Create Modal State
   const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
@@ -317,26 +321,12 @@ export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> =
     }
   };
 
-  const handleDeletePlan = async (plan: SubscriptionPlan) => {
+  const handleDeletePlan = (plan: SubscriptionPlan) => {
     if (['starter_free', 'pro', 'pro_vip'].includes(plan.id)) {
       showError(lang === 'bn' ? 'মূল ডিফল্ট প্ল্যানগুলো মুছে ফেলা যাবে না, আপনি এগুলো সম্পাদনা বা ড্রাফট করতে পারেন।' : 'Default core plans cannot be deleted.');
       return;
     }
-    if (!window.confirm(`আপনি কি সত্যিই "${plan.nameBn}" প্ল্যানটি মুছে ফেলতে চান?`)) {
-      return;
-    }
-    try {
-      await deleteSubscriptionPlan(plan.id);
-      recordAudit({
-        actionType: 'settings_updated',
-        targetId: plan.id,
-        targetLabel: `Deleted Plan: ${plan.nameBn}`,
-        reason: 'Plan archived/deleted by administrator',
-      });
-      showToast(lang === 'bn' ? 'প্ল্যান মুছে ফেলা হয়েছে।' : 'Plan deleted.');
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'প্ল্যান মোছা ব্যর্থ হয়েছে');
-    }
+    setConfirmDeleteTarget({ type: 'plan', item: plan });
   };
 
   // Feature Matrix Toggle & Save
@@ -525,13 +515,40 @@ export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> =
     }
   };
 
-  const handleDeleteCouponItem = async (c: CouponCode) => {
-    if (!window.confirm(`আপনি কি সত্যিই "${c.code}" কুপনটি মুছে ফেলতে চান?`)) return;
+  const handleDeleteCouponItem = (c: CouponCode) => {
+    setConfirmDeleteTarget({ type: 'coupon', item: c });
+  };
+
+  const executeConfirmedDelete = async () => {
+    if (!confirmDeleteTarget) return;
+    setIsDeletingTarget(true);
     try {
-      await deleteCoupon(c.id);
-      showToast(lang === 'bn' ? 'কুপন মুছে ফেলা হয়েছে।' : 'Coupon deleted.');
+      if (confirmDeleteTarget.type === 'plan') {
+        const plan = confirmDeleteTarget.item;
+        await deleteSubscriptionPlan(plan.id);
+        recordAudit({
+          actionType: 'settings_updated',
+          targetId: plan.id,
+          targetLabel: `Deleted Plan: ${plan.nameBn}`,
+          reason: 'Plan archived/deleted by administrator',
+        });
+        showToast(lang === 'bn' ? 'প্ল্যান মুছে ফেলা হয়েছে।' : 'Plan deleted.');
+      } else {
+        const coupon = confirmDeleteTarget.item;
+        await deleteCoupon(coupon.id);
+        showToast(lang === 'bn' ? 'কুপন মুছে ফেলা হয়েছে।' : 'Coupon deleted.');
+      }
+      setConfirmDeleteTarget(null);
     } catch (err) {
-      showError(err instanceof Error ? err.message : 'কুপন মোছা ব্যর্থ হয়েছে');
+      showError(
+        err instanceof Error
+          ? err.message
+          : confirmDeleteTarget.type === 'plan'
+          ? 'প্ল্যান মোছা ব্যর্থ হয়েছে'
+          : 'কুপন মোছা ব্যর্থ হয়েছে'
+      );
+    } finally {
+      setIsDeletingTarget(false);
     }
   };
 
@@ -2005,6 +2022,68 @@ export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> =
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="admin-sub-delete-confirm-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-300 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3
+                  id="admin-sub-delete-confirm-title"
+                  className="text-sm font-extrabold text-slate-900 dark:text-white"
+                >
+                  {confirmDeleteTarget.type === 'plan'
+                    ? lang === 'bn'
+                      ? 'প্ল্যান মুছে ফেলুন'
+                      : 'Delete Subscription Plan'
+                    : lang === 'bn'
+                    ? 'কুপন মুছে ফেলুন'
+                    : 'Delete Coupon Code'}
+                </h3>
+                <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                  {confirmDeleteTarget.type === 'plan'
+                    ? `আপনি কি সত্যিই "${confirmDeleteTarget.item.nameBn}" প্ল্যানটি মুছে ফেলতে চান?`
+                    : `আপনি কি সত্যিই "${confirmDeleteTarget.item.code}" কুপনটি মুছে ফেলতে চান?`}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={isDeletingTarget}
+                onClick={() => setConfirmDeleteTarget(null)}
+                className="flex-1 py-2.5 px-3 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
+              >
+                {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingTarget}
+                onClick={() => {
+                  void executeConfirmedDelete();
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold disabled:opacity-50"
+              >
+                {isDeletingTarget
+                  ? lang === 'bn'
+                    ? 'মুছে ফেলা হচ্ছে...'
+                    : 'Deleting...'
+                  : lang === 'bn'
+                  ? 'হ্যাঁ, মুছে ফেলুন'
+                  : 'Yes, Delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}

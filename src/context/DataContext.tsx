@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -90,6 +90,10 @@ import {
   type OfflineSyncCollection,
 } from '../utils/offlineSync';
 import {
+  areRecordListsEquivalent,
+  shouldSkipRedundantMirrorWrite,
+} from '../utils/offlineReadiness';
+import {
   deleteContactPhotoFromDevice,
   saveContactPhotoToDevice,
 } from '../utils/deviceMediaStore';
@@ -119,6 +123,7 @@ import {
 import { resolveWorkerDisplayName } from '../utils/homeAnalytics';
 import {
   buildCoreRequiredWorkerProfilePayload,
+  buildUserSubscriptionUpgradeMutation,
   getBstTodayISO,
   isGenericWorkerPlaceholderName,
   isOfflineOrTransientFirestoreError,
@@ -129,6 +134,7 @@ import {
   normalizeWorkerProfileForFirestore,
   resolveBestUserDisplayName,
   resolveVerifiedAdminSession,
+  sanitizeFirestorePayload,
   type SubcollectionName,
 } from '../utils/cloudSyncHelpers';
 import { defaultUserDirectorySyncCoordinator } from '../utils/userDirectorySync';
@@ -323,8 +329,11 @@ function reportFirestoreFailure(
         })) || [],
     },
   };
-  console.error('Firestore Error:', JSON.stringify(errInfo));
-  if (onSyncError && !isOfflineOrTransientFirestoreError(err)) {
+  const isOfflineTransient = isOfflineOrTransientFirestoreError(err);
+  if (!isOfflineTransient) {
+    console.error('Firestore Error:', JSON.stringify(errInfo));
+  }
+  if (onSyncError && !isOfflineTransient) {
     const isPerm = isPermissionDeniedError(err);
     const langStored = typeof window !== 'undefined' ? localStorage.getItem('shromik_sathi_lang') : 'bn';
     const isEn = langStored === 'en';
@@ -1061,23 +1070,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.clearTimeout(timer);
   }, [readOnlyBlockedNotice]);
 
+  const isVerifiedAdminRef = useRef(false);
+
   const updatePublicDemoConfig = useCallback((patch: Partial<PublicDemoSystemConfig>) => {
     const next = savePublicDemoConfig(patch);
     setPublicDemoConfig(next);
-    setDoc(
-      doc(db, 'demoConfig', 'global'),
-      {
-        enabled: Boolean(next.enabled),
-        demoEmail: next.demoEmail || PUBLIC_DEMO_EMAIL,
-        maintenanceMessageBn:
-          (next.maintenanceMessageBn || 'ডেমো মোড বর্তমানে বন্ধ আছে।').slice(0, 400),
-        maintenanceMessageEn:
-          (next.maintenanceMessageEn || 'Public Demo Mode is disabled.').slice(0, 400),
-        lastResetAt: (next.lastResetAt || '').slice(0, 40),
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    ).catch((err) => logFirestoreWarning(err, OperationType.WRITE, 'demoConfig/global'));
+    if (auth.currentUser && isVerifiedAdminRef.current) {
+      setDoc(
+        doc(db, 'demoConfig', 'global'),
+        {
+          enabled: Boolean(next.enabled),
+          demoEmail: next.demoEmail || PUBLIC_DEMO_EMAIL,
+          maintenanceMessageBn:
+            (next.maintenanceMessageBn || 'ডেমো মোড বর্তমানে বন্ধ আছে।').slice(0, 400),
+          maintenanceMessageEn:
+            (next.maintenanceMessageEn || 'Public Demo Mode is disabled.').slice(0, 400),
+          lastResetAt: (next.lastResetAt || '').slice(0, 40),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch((err) => logFirestoreWarning(err, OperationType.WRITE, 'demoConfig/global'));
+    }
   }, []);
 
   const clearInitialAuthMode = useCallback(() => {
@@ -1729,8 +1742,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     let cancelled = false;
     const adminDocRef = doc(db, 'admins', user.uid);
-    getDocFromServer(adminDocRef)
-      .catch(() => getDoc(adminDocRef))
+    const isCurrentlyOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    (isCurrentlyOffline
+      ? getDoc(adminDocRef)
+      : getDocFromServer(adminDocRef).catch(() => getDoc(adminDocRef))
+    )
       .then((snap) => {
         if (!cancelled) {
           setHasAdminsDoc(Boolean(snap?.exists()));
@@ -1751,6 +1767,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     isReadOnlyDemo,
     hasAdminsDoc,
   });
+  isVerifiedAdminRef.current = isVerifiedAdmin;
 
   useEffect(() => {
     refreshOfflinePendingCount();
@@ -1808,9 +1825,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
     // Safety net for slow/offline cold boots so UI never hangs indefinitely
-    const readySafetyTimer = window.setTimeout(() => {
-      if (!cancelled) setCloudDataLoaded(true);
-    }, 4500);
+    const isColdOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    const readySafetyTimer = window.setTimeout(
+      () => {
+        if (!cancelled) setCloudDataLoaded(true);
+      },
+      isColdOffline ? 600 : 4500
+    );
 
     // Ensure user appears in Admin User Management directory once per session
     if (directorySyncedRef.current !== uid) {
@@ -2075,8 +2096,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               remoteItems: isFromServer ? snapshotDocs : [],
               queue: currentQueue,
             });
-          saveUserMirror(uid, { [name]: mergedItems }, { fromRemoteSnapshot: true });
-          setter(mergedItems);
+          const skipRedundantWrite = shouldSkipRedundantMirrorWrite({
+            isFromServer,
+            localList: localMirrorList as ReadonlyArray<Record<string, unknown>>,
+            mergedList: mergedItems as ReadonlyArray<Record<string, unknown>>,
+          });
+          if (!skipRedundantWrite) {
+            saveUserMirror(uid, { [name]: mergedItems }, { fromRemoteSnapshot: true });
+            setter(mergedItems);
+          } else {
+            setter((prev) =>
+              areRecordListsEquivalent(
+                prev as ReadonlyArray<Record<string, unknown>>,
+                mergedItems as ReadonlyArray<Record<string, unknown>>
+              )
+                ? prev
+                : mergedItems
+            );
+          }
           markCollectionReady(name);
 
           if (name === 'contacts') {
@@ -2216,9 +2253,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshOfflinePendingCount,
   ]);
 
-  const rawActiveProfile: WorkerProfile = isDemoMode
-    ? demoState.profile
-    : fbProfile || defaultWorkerProfile(user?.uid || 'guest', user?.displayName);
+  const rawActiveProfile: WorkerProfile = useMemo(
+    () =>
+      isDemoMode
+        ? demoState.profile
+        : fbProfile || defaultWorkerProfile(user?.uid || 'guest', user?.displayName),
+    [isDemoMode, demoState.profile, fbProfile, user?.uid, user?.displayName]
+  );
 
   const effectiveEmail = user?.email || activeLocalEmail || '';
   const localAccountFullName = isReadOnlyDemo
@@ -2226,20 +2267,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     : lookupLocalAccountFullName(effectiveEmail);
   const resolvedLang: Language =
     langState || rawActiveProfile.language || 'bn';
-  const resolvedFullName = isReadOnlyDemo
-    ? rawActiveProfile.fullName
-    : resolveWorkerDisplayName({
-        profileFullName: rawActiveProfile.fullName,
-        authDisplayName: user?.displayName,
-        localAccountName: localAccountFullName,
-        email: effectiveEmail,
-        lang: resolvedLang,
-      });
+  const resolvedFullName = useMemo(
+    () =>
+      isReadOnlyDemo
+        ? rawActiveProfile.fullName
+        : resolveWorkerDisplayName({
+            profileFullName: rawActiveProfile.fullName,
+            authDisplayName: user?.displayName,
+            localAccountName: localAccountFullName,
+            email: effectiveEmail,
+            lang: resolvedLang,
+          }),
+    [
+      isReadOnlyDemo,
+      rawActiveProfile.fullName,
+      user?.displayName,
+      localAccountFullName,
+      effectiveEmail,
+      resolvedLang,
+    ]
+  );
 
-  const activeProfile: WorkerProfile =
-    resolvedFullName && resolvedFullName !== rawActiveProfile.fullName
-      ? { ...rawActiveProfile, fullName: resolvedFullName }
-      : rawActiveProfile;
+  const activeProfile: WorkerProfile = useMemo(
+    () =>
+      resolvedFullName && resolvedFullName !== rawActiveProfile.fullName
+        ? { ...rawActiveProfile, fullName: resolvedFullName }
+        : rawActiveProfile,
+    [rawActiveProfile, resolvedFullName]
+  );
 
   const lang: Language = resolvedLang;
 
@@ -2832,13 +2887,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem('shromik_sathi_sub_config', JSON.stringify(nextConfig));
         localStorage.setItem('shromik_sathi_sub_config_v4', JSON.stringify(nextConfig));
       }
-      try {
-        await setDoc(doc(db, 'subscriptionConfig', 'global'), nextConfig, { merge: true });
-      } catch (err) {
-        logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/global');
+      if (user && !isDemoMode && isVerifiedAdminRef.current) {
+        try {
+          await setDoc(
+            doc(db, 'subscriptionConfig', 'global'),
+            sanitizeFirestorePayload(nextConfig as unknown as Record<string, unknown>),
+            { merge: true }
+          );
+        } catch (err) {
+          logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/global');
+        }
       }
     },
-    [subscriptionConfig]
+    [subscriptionConfig, user, isDemoMode]
   );
 
   const saveSubscriptionPlan = useCallback(
@@ -2864,17 +2925,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       setSubscriptionPlans(nextPlans);
       localStorage.setItem('shromik_sathi_sub_plans', JSON.stringify(nextPlans));
-      try {
-        await setDoc(
-          doc(db, 'subscriptionConfig', 'plans_catalog'),
-          { plans: nextPlans, updatedAt: new Date().toISOString() },
-          { merge: true }
-        );
-      } catch (err) {
-        logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/plans_catalog');
+      if (user && !isDemoMode && isVerifiedAdminRef.current) {
+        try {
+          await setDoc(
+            doc(db, 'subscriptionConfig', 'plans_catalog'),
+            sanitizeFirestorePayload({ plans: nextPlans, updatedAt: new Date().toISOString() }),
+            { merge: true }
+          );
+        } catch (err) {
+          logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/plans_catalog');
+        }
       }
     },
-    [subscriptionPlans, isReadOnlyDemo, triggerReadOnlyBlock]
+    [subscriptionPlans, user, isDemoMode]
   );
 
   const deleteSubscriptionPlan = useCallback(
@@ -2886,17 +2949,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const nextPlans = subscriptionPlans.filter((p) => p.id !== planId);
       setSubscriptionPlans(nextPlans);
       localStorage.setItem('shromik_sathi_sub_plans', JSON.stringify(nextPlans));
-      try {
-        await setDoc(
-          doc(db, 'subscriptionConfig', 'plans_catalog'),
-          { plans: nextPlans, updatedAt: new Date().toISOString() },
-          { merge: true }
-        );
-      } catch (err) {
-        logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/plans_catalog');
+      if (user && !isDemoMode && isVerifiedAdminRef.current) {
+        try {
+          await setDoc(
+            doc(db, 'subscriptionConfig', 'plans_catalog'),
+            sanitizeFirestorePayload({ plans: nextPlans, updatedAt: new Date().toISOString() }),
+            { merge: true }
+          );
+        } catch (err) {
+          logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/plans_catalog');
+        }
       }
     },
-    [subscriptionPlans, isReadOnlyDemo, triggerReadOnlyBlock]
+    [subscriptionPlans, isReadOnlyDemo, triggerReadOnlyBlock, user, isDemoMode]
   );
 
   const saveCoupon = useCallback(
@@ -2920,17 +2985,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       setCoupons(nextCoupons);
       localStorage.setItem('shromik_sathi_coupons', JSON.stringify(nextCoupons));
-      try {
-        await setDoc(
-          doc(db, 'subscriptionConfig', 'coupons_catalog'),
-          { coupons: nextCoupons, updatedAt: new Date().toISOString() },
-          { merge: true }
-        );
-      } catch (err) {
-        logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/coupons_catalog');
+      if (user && !isDemoMode && isVerifiedAdminRef.current) {
+        try {
+          await setDoc(
+            doc(db, 'subscriptionConfig', 'coupons_catalog'),
+            sanitizeFirestorePayload({ coupons: nextCoupons, updatedAt: new Date().toISOString() }),
+            { merge: true }
+          );
+        } catch (err) {
+          logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/coupons_catalog');
+        }
       }
     },
-    [coupons, isReadOnlyDemo, triggerReadOnlyBlock]
+    [coupons, isReadOnlyDemo, triggerReadOnlyBlock, user, isDemoMode]
   );
 
   const deleteCoupon = useCallback(
@@ -2942,17 +3009,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const nextCoupons = coupons.filter((c) => c.id !== couponId);
       setCoupons(nextCoupons);
       localStorage.setItem('shromik_sathi_coupons', JSON.stringify(nextCoupons));
-      try {
-        await setDoc(
-          doc(db, 'subscriptionConfig', 'coupons_catalog'),
-          { coupons: nextCoupons, updatedAt: new Date().toISOString() },
-          { merge: true }
-        );
-      } catch (err) {
-        logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/coupons_catalog');
+      if (user && !isDemoMode && isVerifiedAdminRef.current) {
+        try {
+          await setDoc(
+            doc(db, 'subscriptionConfig', 'coupons_catalog'),
+            sanitizeFirestorePayload({ coupons: nextCoupons, updatedAt: new Date().toISOString() }),
+            { merge: true }
+          );
+        } catch (err) {
+          logFirestoreWarning(err, OperationType.UPDATE, 'subscriptionConfig/coupons_catalog');
+        }
       }
     },
-    [coupons, isReadOnlyDemo, triggerReadOnlyBlock]
+    [coupons, isReadOnlyDemo, triggerReadOnlyBlock, user, isDemoMode]
   );
 
   const validateCoupon = useCallback(
@@ -2988,8 +3057,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const discountAmount = req.discountAmountBdt || 0;
       const finalAmount = req.finalAmountBdt !== undefined ? req.finalAmountBdt : Math.max(0, originalAmount - discountAmount);
+      const nowISO = new Date().toISOString();
 
-      const paymentRequest: SubscriptionPaymentRequest = {
+      const rawPaymentRequest: SubscriptionPaymentRequest = {
         id: makeStableId('payreq'),
         userId: effectiveUid,
         userName: user?.displayName || activeProfile.fullName || 'শ্রমিক ব্যবহারকারী',
@@ -2999,15 +3069,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         amountBdt: originalAmount,
         discountAmountBdt: discountAmount,
         finalAmountBdt: finalAmount,
-        couponCode: req.couponCode,
+        ...(req.couponCode ? { couponCode: req.couponCode.trim() } : {}),
         isRenewal: Boolean(req.isRenewal),
         paymentMethod: req.paymentMethod,
         transactionId: req.transactionId.trim(),
         senderPhone: req.senderPhone.trim(),
-        requestedAt: new Date().toISOString(),
+        requestedAt: nowISO,
         status: 'pending',
-        notes: req.notes,
+        ...(req.notes ? { notes: req.notes.trim() } : {}),
       };
+      const paymentRequest = sanitizeFirestorePayload(
+        rawPaymentRequest as unknown as Record<string, unknown>
+      ) as unknown as SubscriptionPaymentRequest;
 
       if (req.couponCode) {
         const cleanCode = req.couponCode.trim().toUpperCase();
@@ -3026,10 +3099,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           planId: 'starter_free',
           status: 'free',
           billingCycle: 'monthly',
-          startedAt: new Date().toISOString(),
+          startedAt: nowISO,
         }),
         pendingRequest: paymentRequest,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowISO,
       };
 
       setUserSubscription(nextRecord);
@@ -3046,15 +3119,41 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // ignore
         }
       }
-      if (user) {
+      if (user && !isDemoMode) {
         try {
-          await setDoc(doc(db, 'userSubscriptions', user.uid), nextRecord, { merge: true });
+          const subRef = doc(db, 'userSubscriptions', user.uid);
+          const existingSnap = await getDoc(subRef).catch(() => null);
+          const mutation = buildUserSubscriptionUpgradeMutation({
+            uid: user.uid,
+            userEmail: user.email || '',
+            userDisplayName: user.displayName || activeProfile.fullName || '',
+            pendingRequest: paymentRequest as unknown as Record<string, unknown>,
+            nowISO,
+            docExists: Boolean(existingSnap?.exists()),
+          });
+          if (mutation.mode === 'set') {
+            await setDoc(subRef, mutation.payload);
+          } else {
+            await updateDoc(subRef, mutation.payload);
+          }
         } catch (err) {
           logFirestoreWarning(err, OperationType.UPDATE, `userSubscriptions/${user.uid}`);
         }
       }
     },
-    [isReadOnlyDemo, triggerReadOnlyBlock, user, activeLocalEmail, subscriptionPlans, userSubscription, activeProfile.fullName, activeProfile.userId, activeProfile.phone]
+    [
+      isReadOnlyDemo,
+      triggerReadOnlyBlock,
+      user,
+      isDemoMode,
+      activeLocalEmail,
+      subscriptionPlans,
+      coupons,
+      userSubscription,
+      activeProfile.fullName,
+      activeProfile.userId,
+      activeProfile.phone,
+    ]
   );
 
   const adminAssignUserPlan = useCallback(
@@ -3123,9 +3222,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         expiresAt: isFreePlan ? null : defaultExp,
         endDate: isFreePlan ? null : endDateStr,
         isComplimentary: isFreePlan ? false : (assignment.isComplimentary ?? false),
-        complimentaryReason: assignment.isComplimentary ? assignment.reason : undefined,
+        ...(assignment.isComplimentary && assignment.reason
+          ? { complimentaryReason: assignment.reason }
+          : {}),
         grantedByAdminUid: user?.uid || 'admin',
-        grantedByAdminEmail: user?.email || activeLocalEmail || undefined,
+        ...(user?.email || activeLocalEmail
+          ? { grantedByAdminEmail: user?.email || activeLocalEmail }
+          : {}),
         updatedAt: nowISO,
       };
 
@@ -3163,13 +3266,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ? user.uid
           : cleanTarget.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-      try {
-        await setDoc(doc(db, 'userSubscriptions', safeFirestoreId), nextRecord, { merge: true });
-      } catch (err) {
-        logFirestoreWarning(err, OperationType.UPDATE, `userSubscriptions/${safeFirestoreId}`);
+      if (user && !isDemoMode && isVerifiedAdminRef.current) {
+        try {
+          await setDoc(
+            doc(db, 'userSubscriptions', safeFirestoreId),
+            sanitizeFirestorePayload(nextRecord as unknown as Record<string, unknown>),
+            { merge: true }
+          );
+        } catch (err) {
+          logFirestoreWarning(err, OperationType.UPDATE, `userSubscriptions/${safeFirestoreId}`);
+        }
       }
     },
-    [subscriptionPlans, user, activeLocalEmail, activeProfile?.userId, todayISO]
+    [subscriptionPlans, user, isDemoMode, activeLocalEmail, activeProfile?.userId, todayISO]
   );
 
   const adminProcessPaymentRequest = useCallback(
@@ -3189,12 +3298,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ...data.pendingRequest,
           status: approved ? 'approved' : 'rejected',
           verifiedAt: nowISO,
-          verifiedByAdminUid: user?.uid,
-          adminNotes: note,
+          ...(user?.uid ? { verifiedByAdminUid: user.uid } : {}),
+          ...(note ? { adminNotes: note } : {}),
         };
 
         let patch: Partial<UserSubscriptionRecord> = {
-          pendingRequest: updatedPending,
+          pendingRequest: sanitizeFirestorePayload(
+            updatedPending as unknown as Record<string, unknown>
+          ) as unknown as SubscriptionPaymentRequest,
           updatedAt: nowISO,
         };
 
@@ -3221,7 +3332,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           };
         }
 
-        const mergedRecord = { ...data, ...patch } as UserSubscriptionRecord;
+        const sanitizedPatch = sanitizeFirestorePayload(patch as unknown as Record<string, unknown>);
+        const mergedRecord = { ...data, ...sanitizedPatch } as UserSubscriptionRecord;
         if (user?.uid === targetUid || userSubscription?.userId === targetUid) {
           setUserSubscription(mergedRecord);
           if (typeof window !== 'undefined') {
@@ -3236,8 +3348,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
         }
-        if (snap.exists()) {
-          await updateDoc(targetDocRef, patch);
+        if (snap.exists() && isVerifiedAdminRef.current) {
+          await updateDoc(targetDocRef, sanitizedPatch);
         }
       } catch (err) {
         logFirestoreWarning(err, OperationType.UPDATE, `userSubscriptions/${targetUid}`);
@@ -6099,9 +6211,49 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         totalSkipped++;
       }
     }
+    for (const item of bundle.salaryRecords || []) {
+      if (!fbSalaryRecords.some((x) => x.id === item.id)) {
+        await saveSalaryRecord(item, item.id);
+        totalAdded++;
+      } else {
+        totalSkipped++;
+      }
+    }
+    for (const item of bundle.payments || []) {
+      if (!fbPayments.some((x) => x.id === item.id)) {
+        await savePayment(item, item.id);
+        totalAdded++;
+      } else {
+        totalSkipped++;
+      }
+    }
+    for (const item of bundle.attendance || []) {
+      if (!fbAttendance.some((x) => x.id === item.id)) {
+        await saveAttendance(item, item.id);
+        totalAdded++;
+      } else {
+        totalSkipped++;
+      }
+    }
     for (const item of bundle.expenses || []) {
       if (!fbExpenses.some((x) => x.id === item.id)) {
         await saveExpense(item, item.id);
+        totalAdded++;
+      } else {
+        totalSkipped++;
+      }
+    }
+    for (const item of bundle.savings || []) {
+      if (!fbSavings.some((x) => x.id === item.id)) {
+        await saveSavingsGoal(item, item.id);
+        totalAdded++;
+      } else {
+        totalSkipped++;
+      }
+    }
+    for (const item of bundle.reminders || []) {
+      if (!fbReminders.some((x) => x.id === item.id)) {
+        await saveReminder(item, item.id);
         totalAdded++;
       } else {
         totalSkipped++;

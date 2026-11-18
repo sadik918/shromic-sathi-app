@@ -97,6 +97,10 @@ export const PersonalLoanView: React.FC = () => {
   const [repaymentDate, setRepaymentDate] = useState<string>(todayISO);
   const [repaymentMethod, setRepaymentMethod] = useState<LoanRepaymentMethod>('cash');
   const [repaymentNotes, setRepaymentNotes] = useState<string>('');
+  const [pendingExceedRepaymentConfirm, setPendingExceedRepaymentConfirm] = useState<{
+    remaining: number;
+    amount: number;
+  } | null>(null);
 
   // Detail Drawer state
   const [detailLoan, setDetailLoan] = useState<PersonalLoan | null>(null);
@@ -321,19 +325,8 @@ export const PersonalLoanView: React.FC = () => {
     setRepaymentNotes('');
   };
 
-  const handleSaveRepaymentSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const executeSaveRepayment = async () => {
     if (!repaymentModalLoan || repaymentAmount <= 0) return;
-
-    const rem = getLoanRemainingBalance(repaymentModalLoan);
-    if (repaymentAmount > rem) {
-      const confirmExceed = window.confirm(
-        lang === 'bn'
-          ? `অবশিষ্ট বকেয়া ৳${rem}-এর চেয়ে পরিশোধের পরিমাণ ৳${repaymentAmount} বেশি। আপনি কি অতিরিক্ত কিস্তি যোগ করতে চান?`
-          : `Amount ৳${repaymentAmount} exceeds remaining balance ৳${rem}. Do you want to proceed?`
-      );
-      if (!confirmExceed) return;
-    }
 
     const dir = getLoanDirection(repaymentModalLoan);
     const repDir = dir === 'lent' ? 'received' : 'paid';
@@ -348,6 +341,7 @@ export const PersonalLoanView: React.FC = () => {
       notes: repaymentNotes.trim(),
     });
 
+    setPendingExceedRepaymentConfirm(null);
     setRepaymentModalLoan(null);
     showToast(
       lang === 'bn'
@@ -356,6 +350,22 @@ export const PersonalLoanView: React.FC = () => {
           : 'ধার পরিশোধের কিস্তি যুক্ত হয়েছে!'
         : 'Repayment recorded!'
     );
+  };
+
+  const handleSaveRepaymentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!repaymentModalLoan || repaymentAmount <= 0) return;
+
+    const rem = getLoanRemainingBalance(repaymentModalLoan);
+    if (repaymentAmount > rem) {
+      setPendingExceedRepaymentConfirm({
+        remaining: rem,
+        amount: Number(repaymentAmount),
+      });
+      return;
+    }
+
+    await executeSaveRepayment();
   };
 
   const handleExportCSV = () => {
@@ -1645,6 +1655,54 @@ export const PersonalLoanView: React.FC = () => {
                 className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300"
               >
                 {lang === 'bn' ? 'বন্ধ করুন' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingExceedRepaymentConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="exceed-repayment-confirm-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3
+                  id="exceed-repayment-confirm-title"
+                  className="text-sm font-extrabold text-slate-900 dark:text-white"
+                >
+                  {lang === 'bn' ? 'অতিরিক্ত কিস্তি নিশ্চিত করুন' : 'Confirm Excess Repayment'}
+                </h3>
+                <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                  {lang === 'bn'
+                    ? `অবশিষ্ট বকেয়া ৳${pendingExceedRepaymentConfirm.remaining}-এর চেয়ে পরিশোধের পরিমাণ ৳${pendingExceedRepaymentConfirm.amount} বেশি। আপনি কি অতিরিক্ত কিস্তি যোগ করতে চান?`
+                    : `Amount ৳${pendingExceedRepaymentConfirm.amount} exceeds remaining balance ৳${pendingExceedRepaymentConfirm.remaining}. Do you want to proceed?`}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setPendingExceedRepaymentConfirm(null)}
+                className="flex-1 py-2.5 px-3 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void executeSaveRepayment();
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold"
+              >
+                {lang === 'bn' ? 'হ্যাঁ, যুক্ত করুন' : 'Yes, Proceed'}
               </button>
             </div>
           </div>

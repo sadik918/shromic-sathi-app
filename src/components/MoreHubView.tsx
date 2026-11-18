@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import {
   Banknote,
   Bell,
@@ -43,6 +43,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { useData } from '../context/DataContext';
+import { DateInputDMY } from './DateInputDMY';
 import { SalaryView } from './SalaryView';
 import { ExpensesView } from './ExpensesView';
 import { GarmentContactBookView } from './GarmentContactBookView';
@@ -52,7 +53,6 @@ import { CalculatorView } from './CalculatorView';
 import { PersonalLoanView } from './PersonalLoanView';
 import { AdminDashboardView } from './AdminDashboardView';
 import { UserSubscriptionView } from './UserSubscriptionView';
-import { DateInputDMY } from './DateInputDMY';
 import { ReportsView } from './ReportsView';
 import { SupportFeedbackView } from './SupportFeedbackView';
 import { parseCalendarReminderMeta } from '../utils/calendarReminders';
@@ -685,37 +685,42 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     setAdvisorLoading(true);
     setAdvisorAnswer('');
 
-    try {
-      const resp = await fetch('/api/gemini/analyze-records', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: advisorQuery.trim(),
-          contextSummary: {
-            basicSalary: profile.basicSalary,
-            grossSalary: profile.grossSalary,
-            otDivisor: profile.otDivisor,
-            otMultiplier: profile.otMultiplier,
-          },
-        }),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.answer) {
-          setAdvisorAnswer(data.answer);
-          setAdvisorLoading(false);
-          return;
+    const isOnlineNow = typeof navigator === 'undefined' ? true : navigator.onLine;
+    if (isOnlineNow) {
+      try {
+        const resp = await fetch('/api/gemini/analyze-records', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: advisorQuery.trim(),
+            contextSummary: {
+              basicSalary: profile.basicSalary,
+              grossSalary: profile.grossSalary,
+              otDivisor: profile.otDivisor,
+              otMultiplier: profile.otMultiplier,
+            },
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.answer) {
+            setAdvisorAnswer(data.answer);
+            setAdvisorLoading(false);
+            return;
+          }
         }
+      } catch {
+        // Fallback to built-in labor law calculation explanation
       }
-    } catch {
-      // Fallback to built-in labor law calculation explanation
     }
 
-    const hourlyOt = ((profile.basicSalary / profile.otDivisor) * profile.otMultiplier).toFixed(2);
+    const safeDivisor = profile.otDivisor > 0 ? profile.otDivisor : 208;
+    const safeMultiplier = profile.otMultiplier > 0 ? profile.otMultiplier : 2;
+    const hourlyOt = ((profile.basicSalary / safeDivisor) * safeMultiplier).toFixed(2);
     setAdvisorAnswer(
       lang === 'bn'
-        ? `বাংলাদেশ শ্রম আইন ২০০৬ (ধারা ১০৮) অনুযায়ী:\n• আপনার মূল বেতন (Basic): ৳ ${profile.basicSalary}\n• প্রতি ঘণ্টার ওভারটাইম হার = (মূল বেতন ÷ ২০৮) × ২ = ৳ ${hourlyOt}\n• বাৎসরিক ছুটি: নৈমিত্তিক ছুটি ১০ দিন (পূর্ণ বেতনে), অসুস্থতাজনিত ছুটি ১৪ দিন (পূর্ণ বেতনে), এবং প্রতি ১৮ দিন কাজের জন্য ১ দিন অর্জিত ছুটি।\n(বিঃদ্রঃ এটি ব্যক্তিগত হিসাবের সহায়িকা, কারখানার চূড়ান্ত পে-স্লিপের সাথে মিলিয়ে নিন।)`
-        : `Under Bangladesh Labor Act 2006 (Sec 108):\n• Your Basic Salary: ৳ ${profile.basicSalary}\n• Hourly Overtime Rate = (Basic ÷ 208) × 2 = ৳ ${hourlyOt}\n• Annual Leave Entitlements: 10 days Casual Leave, 14 days Sick Leave, and 1 day Earned Leave per 18 working days.`
+        ? `বাংলাদেশ শ্রম আইন ২০০৬ (ধারা ১০৮) অনুযায়ী:\n• আপনার মূল বেতন (Basic): ৳ ${profile.basicSalary}\n• প্রতি ঘণ্টার ওভারটাইম হার = (মূল বেতন ÷ ${safeDivisor}) × ${safeMultiplier} = ৳ ${hourlyOt}\n• বাৎসরিক ছুটি: নৈমিত্তিক ছুটি ১০ দিন (পূর্ণ বেতনে), অসুস্থতাজনিত ছুটি ১৪ দিন (পূর্ণ বেতনে), এবং প্রতি ১৮ দিন কাজের জন্য ১ দিন অর্জিত ছুটি।\n(বিঃদ্রঃ এটি ব্যক্তিগত হিসাবের সহায়িকা, কারখানার চূড়ান্ত পে-স্লিপের সাথে মিলিয়ে নিন।)`
+        : `Under Bangladesh Labor Act 2006 (Sec 108):\n• Your Basic Salary: ৳ ${profile.basicSalary}\n• Hourly Overtime Rate = (Basic ÷ ${safeDivisor}) × ${safeMultiplier} = ৳ ${hourlyOt}\n• Annual Leave Entitlements: 10 days Casual Leave, 14 days Sick Leave, and 1 day Earned Leave per 18 working days.`
     );
     setAdvisorLoading(false);
   };
@@ -2106,24 +2111,34 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       )}
 
       {/* 2. GARMENT & CONTACT BOOK SUBVIEW */}
-      {activeSubView === 'contacts' && <GarmentContactBookView />}
+      {activeSubView === 'contacts' && (
+        <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+          <GarmentContactBookView />
+        </Suspense>
+      )}
 
       {/* 3. FACTORY & SHIFT SETTINGS + PREVIOUS GARMENTS CAREER HISTORY SUBVIEW */}
       {activeSubView === 'factory' && (
-        <FactoryShiftCareerView onShowNotice={setNotice} />
+        <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+          <FactoryShiftCareerView onShowNotice={setNotice} />
+        </Suspense>
       )}
 
       {/* 3. SALARY & PAYSLIP SUBVIEW INSIDE MORE */}
       {activeSubView === 'salary' && (
         <div className="space-y-4">
-          <SalaryView />
+          <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+            <SalaryView />
+          </Suspense>
         </div>
       )}
 
       {/* 4. PERSONAL FINANCE & LOANS SUBVIEW INSIDE MORE */}
       {activeSubView === 'finance' && (
         <div className="space-y-4">
-          <ExpensesView />
+          <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+            <ExpensesView />
+          </Suspense>
         </div>
       )}
       {/* 2. PRIVATE DOCUMENT VAULT */}
@@ -2274,7 +2289,9 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       {/* 3. REPORTS, EXPORTS, NON-DESTRUCTIVE BACKUP & DATA EDITING HISTORY RECOVERY */}
       {activeSubView === 'reports' && (
         <div className="space-y-6">
-          <ReportsView onExportCSV={handleExportCSV} />
+          <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+            <ReportsView onExportCSV={handleExportCSV} />
+          </Suspense>
 
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 no-print">
             <h2 className="text-base font-bold text-slate-900 dark:text-white pb-2 border-b border-slate-100 dark:border-slate-800">
@@ -2654,38 +2671,56 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
 
       {/* 5. SUPPORT, PRIVACY POLICY & ACCOUNT DELETION */}
       {activeSubView === 'support' && (
-        <SupportFeedbackView
-          lang={lang}
-          todayISO={todayISO}
-          feedbackList={feedbackList}
-          isAdminUser={isAdminUser}
-          onSubmitFeedback={submitFeedback}
-          onResolveFeedback={resolveFeedback}
-          onDeleteAccount={deleteAccountAndData}
-          onSuccessToast={(msg) => setNotice(msg)}
-        />
+        <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+          <SupportFeedbackView
+            lang={lang}
+            todayISO={todayISO}
+            feedbackList={feedbackList}
+            isAdminUser={isAdminUser}
+            onSubmitFeedback={submitFeedback}
+            onResolveFeedback={resolveFeedback}
+            onDeleteAccount={deleteAccountAndData}
+            onSuccessToast={(msg) => setNotice(msg)}
+          />
+        </Suspense>
       )}
 
       {/* 10. ALARM SUBVIEW */}
-      {activeSubView === 'alarm' && <AlarmView />}
+      {activeSubView === 'alarm' && (
+        <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+          <AlarmView />
+        </Suspense>
+      )}
 
       {/* 11. CALCULATOR SUBVIEW */}
-      {activeSubView === 'calculator' && <CalculatorView />}
+      {activeSubView === 'calculator' && (
+        <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+          <CalculatorView />
+        </Suspense>
+      )}
 
       {/* 12. PERSONAL LOANS SUBVIEW */}
-      {activeSubView === 'personal_loans' && <PersonalLoanView />}
+      {activeSubView === 'personal_loans' && (
+        <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+          <PersonalLoanView />
+        </Suspense>
+      )}
 
       {/* 13. SUBSCRIPTION & PLANS SUBVIEW */}
       {activeSubView === 'subscriptions' && (
-        <UserSubscriptionView
-          onBack={() => onChangeSubView('profile')}
-          openRenewalTrigger={openRenewalTrigger}
-        />
+        <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+          <UserSubscriptionView
+            onBack={() => onChangeSubView('profile')}
+            openRenewalTrigger={openRenewalTrigger}
+          />
+        </Suspense>
       )}
 
       {/* 14. SUPER ADMIN DASHBOARD SUBVIEW (Strictly for sadikulislam45974@gmail.com) */}
       {isAdminUser && activeSubView === 'admin_panel' && (
-        <AdminDashboardView onExitAdmin={() => onChangeSubView('profile')} />
+        <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
+          <AdminDashboardView onExitAdmin={() => onChangeSubView('profile')} />
+        </Suspense>
       )}
         </div>
       </div>

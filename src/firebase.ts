@@ -135,7 +135,7 @@ async function testConnection() {
     return;
   }
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await getDocFromServer(doc(db, 'subscriptionConfig', 'global'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       // Offline mode active; Firestore local cache will serve reads and queue writes.

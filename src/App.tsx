@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Banknote,
@@ -22,18 +22,24 @@ import { BrandWordmark } from './components/BrandWordmark';
 import { AuthWelcomeView } from './components/AuthWelcomeView';
 import { OnboardingView } from './components/OnboardingView';
 import { DashboardView } from './components/DashboardView';
+import { AlarmRingingOverlay, loadSavedAlarms } from './components/AlarmView';
 import { OvertimeView } from './components/OvertimeView';
 import { SalaryView } from './components/SalaryView';
 import { AttendanceView } from './components/AttendanceView';
 import { ExpensesView } from './components/ExpensesView';
 import { MoreHubView } from './components/MoreHubView';
-import { AlarmRingingOverlay, loadSavedAlarms } from './components/AlarmView';
+import { AdminDashboardView } from './components/AdminDashboardView';
+import { VoiceEntryModal } from './components/VoiceEntryModal';
 
-const AdminDashboardView = lazy(() =>
-  import('./components/AdminDashboardView').then((m) => ({ default: m.AdminDashboardView }))
-);
-const VoiceEntryModal = lazy(() =>
-  import('./components/VoiceEntryModal').then((m) => ({ default: m.VoiceEntryModal }))
+const TabLoadingFallback: React.FC<{ lang: 'bn' | 'en' }> = ({ lang }) => (
+  <div
+    role="status"
+    aria-live="polite"
+    className="py-16 flex flex-col items-center justify-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400"
+  >
+    <RefreshCw className="w-5 h-5 text-emerald-600 dark:text-emerald-400 animate-spin" />
+    <span>{lang === 'bn' ? 'লোড হচ্ছে...' : 'Loading...'}</span>
+  </div>
 );
 import {
   getCustomToneFromStorage,
@@ -191,7 +197,19 @@ const WorkspaceShell: React.FC = () => {
   const [toastMsg, setToastMsg] = useState('');
   const toastTimerRef = React.useRef<number | null>(null);
   const [ringingAlarm, setRingingAlarm] = useState<AlarmItem | null>(null);
-  const [lastTriggeredKey, setLastTriggeredKey] = useState<string>('');
+  const lastTriggeredKeyRef = React.useRef<string>('');
+  const remindersRef = React.useRef(reminders);
+  const syncedAlarmsRef = React.useRef(syncedAlarms);
+  remindersRef.current = reminders;
+  syncedAlarmsRef.current = syncedAlarms;
+
+  // Ref-based pull-to-refresh tracking to avoid 60Hz React re-renders during touch scrolling
+  const pullStartYRef = React.useRef<number | null>(null);
+  const pullDistanceRef = React.useRef(0);
+  const pullIndicatorRef = React.useRef<HTMLDivElement | null>(null);
+  const pullIconRef = React.useRef<SVGSVGElement | null>(null);
+  const pullTextRef = React.useRef<HTMLSpanElement | null>(null);
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
 
   // Persist current tab and sub-view so reloading (online or offline) stays on the exact same page
   useEffect(() => {
@@ -303,7 +321,35 @@ const WorkspaceShell: React.FC = () => {
     return () => clearInterval(syncTimer);
   }, []);
 
-  // Global Alarm Interval Check (checks every 2.5s using accurate online-synced Bangladesh Standard Time)
+  // Gently preload secondary tab chunks on idle so offline/online tab switches feel instantaneous
+  useEffect(() => {
+    if (typeof window === 'undefined' || (!user && !isDemoMode) || needsOnboarding) return;
+    let cancelled = false;
+    const warmChunks = () => {
+      if (cancelled) return;
+      void import('./components/OvertimeView');
+      void import('./components/AttendanceView');
+      void import('./components/MoreHubView');
+    };
+    const idleApi = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof idleApi.requestIdleCallback === 'function') {
+      const idleId = idleApi.requestIdleCallback(warmChunks, { timeout: 2000 });
+      return () => {
+        cancelled = true;
+        idleApi.cancelIdleCallback?.(idleId);
+      };
+    }
+    const timer = window.setTimeout(warmChunks, 900);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [user, isDemoMode, needsOnboarding]);
+
+  // Global Alarm Interval Check (checks every 5s using accurate online-synced Bangladesh Standard Time)
   useEffect(() => {
     const checkAlarms = async () => {
       const bstNow = getAccurateBstNow();
@@ -311,12 +357,12 @@ const WorkspaceShell: React.FC = () => {
       const currentTimeStr = bstNow.time24;
       const triggerKey = `${bstNow.dateISO}_${currentTimeStr}`;
 
-      if (triggerKey === lastTriggeredKey) return;
+      if (triggerKey === lastTriggeredKeyRef.current) return;
 
       const alarms =
         user && !isDemoMode
           ? cloudDataLoaded
-            ? syncedAlarms
+            ? syncedAlarmsRef.current
             : loadSavedAlarms(user.uid)
           : loadSavedAlarms();
       const matching = alarms.find(
@@ -324,7 +370,7 @@ const WorkspaceShell: React.FC = () => {
       );
 
       if (matching) {
-        setLastTriggeredKey(triggerKey);
+        lastTriggeredKeyRef.current = triggerKey;
         setRingingAlarm(matching);
         void notifyAlarmRingingViaServiceWorker(matching);
         const stored = await getCustomToneFromStorage(
@@ -338,7 +384,7 @@ const WorkspaceShell: React.FC = () => {
       }
 
       // Also check Calendar Notes / Reminders with Advance Alarm enabled
-      const matchingCalRem = reminders.find((r) => {
+      const matchingCalRem = remindersRef.current.find((r) => {
         if (r.isCompleted) return false;
         const parsed = parseCalendarReminderMeta(r);
         return (
@@ -350,7 +396,7 @@ const WorkspaceShell: React.FC = () => {
 
       if (matchingCalRem) {
         const parsed = parseCalendarReminderMeta(matchingCalRem);
-        setLastTriggeredKey(triggerKey);
+        lastTriggeredKeyRef.current = triggerKey;
         const remAlarmItem: AlarmItem = {
           id: `cal_rem_${matchingCalRem.id}`,
           time: parsed.triggerTime,
@@ -368,9 +414,9 @@ const WorkspaceShell: React.FC = () => {
       }
     };
 
-    const interval = setInterval(checkAlarms, 2500);
+    const interval = setInterval(checkAlarms, 5000);
     return () => clearInterval(interval);
-  }, [lastTriggeredKey, reminders, user, isDemoMode, cloudDataLoaded, syncedAlarms]);
+  }, [user, isDemoMode, cloudDataLoaded]);
 
   const handleDismissRingingAlarm = () => {
     stopAlarmSound();
@@ -425,7 +471,9 @@ const WorkspaceShell: React.FC = () => {
     } else if (tab === 'more') {
       setMoreMenuTrigger((prev) => prev + 1);
     }
-    window.scrollTo(0, 0);
+    if (typeof window !== 'undefined' && window.scrollY > 0) {
+      window.scrollTo(0, 0);
+    }
   };
 
   const showToast = (msg: string) => {
@@ -493,9 +541,34 @@ const WorkspaceShell: React.FC = () => {
     { id: 'more', label: dict.navMore, icon: <Menu className="w-5 h-5" /> },
   ];
 
-  const pullStartYRef = React.useRef<number | null>(null);
-  const [pullDistance, setPullDistance] = useState(0);
-  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const updatePullIndicatorDom = (distance: number, refreshing: boolean) => {
+    pullDistanceRef.current = distance;
+    const el = pullIndicatorRef.current;
+    if (el) {
+      const targetHeight = Math.max(distance, refreshing ? 40 : 0);
+      el.style.height = `${targetHeight}px`;
+      el.style.opacity = targetHeight > 0 ? '1' : '0';
+      el.style.borderBottomWidth = targetHeight > 0 ? '1px' : '0px';
+    }
+    const iconEl = pullIconRef.current;
+    if (iconEl) {
+      iconEl.classList.toggle('animate-spin', refreshing || distance >= 52);
+    }
+    const textEl = pullTextRef.current;
+    if (textEl) {
+      textEl.textContent = refreshing
+        ? lang === 'bn'
+          ? 'রিফ্রেশ হচ্ছে...'
+          : 'Refreshing...'
+        : distance >= 52
+        ? lang === 'bn'
+          ? 'ছেড়ে দিলে রিফ্রেশ হবে'
+          : 'Release to refresh'
+        : lang === 'bn'
+        ? 'রিফ্রেশ করতে নিচে টানুন'
+        : 'Pull down to refresh';
+    }
+  };
 
   const handleTouchStartPull = (e: React.TouchEvent<HTMLDivElement>) => {
     if (typeof window === 'undefined' || window.scrollY > 2 || isPullRefreshing) {
@@ -512,7 +585,9 @@ const WorkspaceShell: React.FC = () => {
     if (pullStartYRef.current === null || isPullRefreshing) return;
     if (typeof window !== 'undefined' && window.scrollY > 2) {
       pullStartYRef.current = null;
-      setPullDistance(0);
+      if (pullDistanceRef.current > 0) {
+        updatePullIndicatorDom(0, false);
+      }
       return;
     }
     const touch = e.touches[0];
@@ -520,18 +595,20 @@ const WorkspaceShell: React.FC = () => {
     const deltaY = touch.clientY - pullStartYRef.current;
     if (deltaY > 12) {
       const damped = Math.min(84, Math.round((deltaY - 12) * 0.45));
-      setPullDistance(damped);
-    } else if (pullDistance > 0) {
-      setPullDistance(0);
+      if (damped !== pullDistanceRef.current) {
+        updatePullIndicatorDom(damped, false);
+      }
+    } else if (pullDistanceRef.current > 0) {
+      updatePullIndicatorDom(0, false);
     }
   };
 
   const handleTouchEndPull = async () => {
     if (pullStartYRef.current === null) return;
     pullStartYRef.current = null;
-    if (pullDistance >= 52 && !isPullRefreshing) {
+    if (pullDistanceRef.current >= 52 && !isPullRefreshing) {
       setIsPullRefreshing(true);
-      setPullDistance(48);
+      updatePullIndicatorDom(48, true);
       try {
         if (typeof navigator === 'undefined' || navigator.onLine) {
           await syncOfflineDataToCloud(true);
@@ -550,45 +627,40 @@ const WorkspaceShell: React.FC = () => {
         window.setTimeout(() => setToastMsg(''), 2200);
       } finally {
         setIsPullRefreshing(false);
-        setPullDistance(0);
+        updatePullIndicatorDom(0, false);
       }
-    } else {
-      setPullDistance(0);
+    } else if (pullDistanceRef.current > 0) {
+      updatePullIndicatorDom(0, false);
     }
   };
 
+  const renderPullIndicator = () => (
+    <div
+      ref={pullIndicatorRef}
+      data-testid="in-app-pull-refresh-indicator"
+      className="flex items-center justify-center overflow-hidden bg-emerald-50 dark:bg-emerald-950/90 border-emerald-200/70 dark:border-emerald-800/70 text-emerald-800 dark:text-emerald-200 text-xs font-bold no-print"
+      style={{ height: isPullRefreshing ? '40px' : '0px', opacity: isPullRefreshing ? 1 : 0, borderBottomWidth: isPullRefreshing ? '1px' : '0px' }}
+    >
+      <RefreshCw
+        ref={pullIconRef}
+        className={`w-3.5 h-3.5 mr-1.5 ${isPullRefreshing ? 'animate-spin' : ''}`}
+      />
+      <span ref={pullTextRef}>
+        {isPullRefreshing
+          ? lang === 'bn'
+            ? 'রিফ্রেশ হচ্ছে...'
+            : 'Refreshing...'
+          : lang === 'bn'
+          ? 'রিফ্রেশ করতে নিচে টানুন'
+          : 'Pull down to refresh'}
+      </span>
+    </div>
+  );
+
   if (isAdminUser && activeTab === 'admin') {
     return (
-      <div
-        onTouchStart={handleTouchStartPull}
-        onTouchMove={handleTouchMovePull}
-        onTouchEnd={handleTouchEndPull}
-        className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
-      >
-        {(pullDistance > 0 || isPullRefreshing) && (
-          <div
-            data-testid="in-app-pull-refresh-indicator"
-            className="flex items-center justify-center overflow-hidden bg-emerald-50/90 dark:bg-emerald-950/70 border-b border-emerald-200/70 dark:border-emerald-800/70 text-emerald-800 dark:text-emerald-200 text-xs font-bold transition-all no-print"
-            style={{ height: `${Math.max(pullDistance, isPullRefreshing ? 40 : 0)}px` }}
-          >
-            <RefreshCw
-              className={`w-3.5 h-3.5 mr-1.5 ${isPullRefreshing || pullDistance >= 52 ? 'animate-spin' : ''}`}
-            />
-            <span>
-              {isPullRefreshing
-                ? lang === 'bn'
-                  ? 'রিফ্রেশ হচ্ছে...'
-                  : 'Refreshing...'
-                : pullDistance >= 52
-                ? lang === 'bn'
-                  ? 'ছেড়ে দিলে রিফ্রেশ হবে'
-                  : 'Release to refresh'
-                : lang === 'bn'
-                ? 'রিফ্রেশ করতে নিচে টানুন'
-                : 'Pull down to refresh'}
-            </span>
-          </div>
-        )}
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+        {renderPullIndicator()}
         <Suspense
           fallback={
             <div className="min-h-screen flex items-center justify-center text-xs font-bold text-slate-500">
@@ -609,38 +681,10 @@ const WorkspaceShell: React.FC = () => {
   }
 
   return (
-    <div
-      onTouchStart={handleTouchStartPull}
-      onTouchMove={handleTouchMovePull}
-      onTouchEnd={handleTouchEndPull}
-      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col pb-20 md:pb-8"
-    >
-      {(pullDistance > 0 || isPullRefreshing) && (
-        <div
-          data-testid="in-app-pull-refresh-indicator"
-          className="flex items-center justify-center overflow-hidden bg-emerald-50/90 dark:bg-emerald-950/70 border-b border-emerald-200/70 dark:border-emerald-800/70 text-emerald-800 dark:text-emerald-200 text-xs font-bold transition-all no-print"
-          style={{ height: `${Math.max(pullDistance, isPullRefreshing ? 40 : 0)}px` }}
-        >
-          <RefreshCw
-            className={`w-3.5 h-3.5 mr-1.5 ${isPullRefreshing || pullDistance >= 52 ? 'animate-spin' : ''}`}
-          />
-          <span>
-            {isPullRefreshing
-              ? lang === 'bn'
-                ? 'রিফ্রেশ হচ্ছে...'
-                : 'Refreshing...'
-              : pullDistance >= 52
-              ? lang === 'bn'
-                ? 'ছেড়ে দিলে রিফ্রেশ হবে'
-                : 'Release to refresh'
-              : lang === 'bn'
-              ? 'রিফ্রেশ করতে নিচে টানুন'
-              : 'Pull down to refresh'}
-          </span>
-        </div>
-      )}
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col pb-20 md:pb-8">
+      {renderPullIndicator()}
       {/* Top Navigation Bar: Logo + App Title + Sync/Offline Status on Left, Desktop Nav in Center, Month + Lang Icon + Theme Icon on Right */}
-      <header className="sticky top-0 z-30 h-14 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 no-print">
+      <header className="sticky top-0 z-30 h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 no-print">
         <div className="max-w-7xl mx-auto h-full px-2.5 sm:px-6 lg:px-8 flex items-center justify-between gap-1.5 sm:gap-4 lg:gap-6">
           {/* Zone 1: Brand Emblem + Wordmark + Offline Status Badge / Sync Status Icon */}
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 shrink-0">
@@ -669,21 +713,19 @@ const WorkspaceShell: React.FC = () => {
             </a>
 
             {syncStatusUI.isOffline ? (
-              <button
-                type="button"
+              <span
+                role="status"
                 data-testid="header-offline-status-badge"
-                onClick={() => showToast(syncStatusUI.clickMessage)}
                 title={syncStatusUI.tooltip}
                 aria-label={syncStatusUI.accessibleLabel}
-                className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-full border border-amber-300/90 dark:border-amber-700/80 bg-amber-50 hover:bg-amber-100/90 dark:bg-amber-950/75 dark:hover:bg-amber-900/70 text-amber-800 dark:text-amber-200 text-[11px] sm:text-xs font-bold inline-flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0 shadow-2xs"
+                className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-full border border-amber-300/90 dark:border-amber-700/80 bg-amber-50 dark:bg-amber-950/75 text-amber-800 dark:text-amber-200 text-[11px] sm:text-xs font-bold inline-flex items-center gap-1 whitespace-nowrap shrink-0 shadow-2xs select-none"
               >
                 <WifiOff
                   className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-600 dark:text-amber-400 shrink-0"
                   aria-hidden="true"
                 />
-                <span className="sm:hidden md:inline lg:hidden">{syncStatusUI.compactLabel}</span>
-                <span className="hidden sm:inline md:hidden lg:inline">{syncStatusUI.fullLabel}</span>
-              </button>
+                <span>{syncStatusUI.label}</span>
+              </span>
             ) : (
               <button
                 type="button"
@@ -967,41 +1009,35 @@ const WorkspaceShell: React.FC = () => {
             onOpenVoiceModal={() => setVoiceModalOpen(true)}
           />
         )}
-        {activeTab === 'overtime' && <OvertimeView />}
-        {activeTab === 'salary' && <SalaryView />}
-        {activeTab === 'attendance' && (
-          <AttendanceView
-            initialSelectedDate={attendanceFocusDate}
-            onOpenReports={() => handleNavigate('more', 'reports')}
-          />
-        )}
-        {activeTab === 'expenses' && <ExpensesView />}
-        {activeTab === 'more' && (
-          <MoreHubView
-            activeSubView={moreSubView}
-            onChangeSubView={(sub) => setMoreSubView(sub)}
-            onNavigateTab={handleNavigate}
-            openDrawerTrigger={moreMenuTrigger}
-            openRenewalTrigger={renewalModalTrigger}
-          />
-        )}
-        {isAdminUser && activeTab === 'admin' && (
-          <Suspense
-            fallback={
-              <div className="py-12 text-center text-xs font-bold text-slate-500">
-                লোড হচ্ছে...
-              </div>
-            }
-          >
+        <Suspense fallback={<TabLoadingFallback lang={lang} />}>
+          {activeTab === 'overtime' && <OvertimeView />}
+          {activeTab === 'salary' && <SalaryView />}
+          {activeTab === 'attendance' && (
+            <AttendanceView
+              initialSelectedDate={attendanceFocusDate}
+              onOpenReports={() => handleNavigate('more', 'reports')}
+            />
+          )}
+          {activeTab === 'expenses' && <ExpensesView />}
+          {activeTab === 'more' && (
+            <MoreHubView
+              activeSubView={moreSubView}
+              onChangeSubView={(sub) => setMoreSubView(sub)}
+              onNavigateTab={handleNavigate}
+              openDrawerTrigger={moreMenuTrigger}
+              openRenewalTrigger={renewalModalTrigger}
+            />
+          )}
+          {isAdminUser && activeTab === 'admin' && (
             <AdminDashboardView onExitAdmin={() => handleNavigate('dashboard')} />
-          </Suspense>
-        )}
+          )}
+        </Suspense>
       </main>
 
       {/* Fixed Mobile Bottom Navigation Bar: Strictly 4 buttons (হোম, ওভারটাইম, হাজিরা, আরও) */}
       <nav
         aria-label="Mobile Bottom Navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 grid grid-cols-4 items-center px-2 no-print shadow-lg"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 grid grid-cols-4 items-center px-2 no-print shadow-lg"
       >
         {mobileNavItems.map((item) => {
           const isActive =

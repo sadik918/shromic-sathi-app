@@ -9,6 +9,25 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const NO_CACHE_EXACT_PATHS = new Set([
+  '/',
+  '/index.html',
+  '/sw.js',
+  '/alarm-sw-helper.js',
+  '/manifest.webmanifest',
+]);
+
+function resolveStaticCachePolicy(urlPath: string): 'no-cache' | 'immutable' | 'default' {
+  const cleanPath = (urlPath || '/').split('?')[0].split('#')[0].trim() || '/';
+  if (NO_CACHE_EXACT_PATHS.has(cleanPath)) {
+    return 'no-cache';
+  }
+  if (cleanPath.startsWith('/assets/')) {
+    return 'immutable';
+  }
+  return 'default';
+}
+
 // 1x1 Emerald PNG fallback buffer for PWA icons so browsers receive valid image/png
 const EMERALD_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -31,7 +50,7 @@ function getGenAIClient(): GoogleGenAI | null {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '2mb' }));
 
@@ -175,8 +194,21 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          const relPath = '/' + path.relative(distPath, filePath).replace(/\\/g, '/');
+          const policy = resolveStaticCachePolicy(relPath);
+          if (policy === 'no-cache') {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          } else if (policy === 'immutable') {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        },
+      })
+    );
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

@@ -96,6 +96,18 @@ function sanitizeNestedValue(val: unknown): unknown {
 }
 
 /**
+ * Recursively removes `undefined` properties from plain objects and arrays so Firestore SDK
+ * never throws `Unsupported field value: undefined`, while preserving Firestore sentinels
+ * (`FieldValue`, `Timestamp`, `Date`, primitives).
+ */
+export function sanitizeFirestorePayload<T extends Record<string, unknown>>(
+  obj: T
+): Record<string, unknown> {
+  const cleaned = sanitizeNestedValue(obj);
+  return isPlainObject(cleaned) ? cleaned : {};
+}
+
+/**
  * Strips `undefined` values (which throw in Firestore JS SDK) as well as document metadata
  * fields (`id`, `createdAt`, `updatedAt`, plus optional extra keys) before sending payloads to Firestore.
  * Preserves Firestore sentinel FieldValues / Timestamps / Dates cleanly.
@@ -114,6 +126,56 @@ export function stripUndefinedAndMetaFields<T extends Record<string, unknown>>(
     }
   }
   return result;
+}
+
+export interface UserSubscriptionUpgradeParams {
+  uid: string;
+  userEmail: string;
+  userDisplayName: string;
+  pendingRequest: Record<string, unknown>;
+  nowISO: string;
+  docExists: boolean;
+}
+
+/**
+ * Builds a Firestore-rule-compliant payload for `/userSubscriptions/{uid}` when an owner
+ * requests a plan upgrade or renewal:
+ * - On initial creation (`!docExists`), includes starter defaults (`planId: 'starter_free'`, `status: 'free'`).
+ * - On update (`docExists`), restricts changed keys strictly to `['pendingRequest', 'updatedAt', 'userEmail', 'userDisplayName']`.
+ */
+export function buildUserSubscriptionUpgradeMutation(
+  params: UserSubscriptionUpgradeParams
+): { mode: 'set' | 'update'; payload: Record<string, unknown> } {
+  const sanitizedPending = sanitizeFirestorePayload(params.pendingRequest);
+  const safeEmail = truncateUtf8(params.userEmail || '', 200);
+  const safeName = truncateUtf8(params.userDisplayName || '', 150);
+
+  if (!params.docExists) {
+    return {
+      mode: 'set',
+      payload: sanitizeFirestorePayload({
+        userId: params.uid,
+        userEmail: safeEmail,
+        userDisplayName: safeName,
+        planId: 'starter_free',
+        status: 'free',
+        billingCycle: 'monthly',
+        startedAt: params.nowISO,
+        pendingRequest: sanitizedPending,
+        updatedAt: params.nowISO,
+      }),
+    };
+  }
+
+  return {
+    mode: 'update',
+    payload: sanitizeFirestorePayload({
+      pendingRequest: sanitizedPending,
+      updatedAt: params.nowISO,
+      userEmail: safeEmail,
+      userDisplayName: safeName,
+    }),
+  };
 }
 
 export function getBstTodayISO(nowMs?: number): string {

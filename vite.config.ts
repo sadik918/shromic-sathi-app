@@ -57,30 +57,14 @@ export default defineConfig(() => {
           navigateFallbackDenylist: [/^\/api\//, /^\/__\//],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
+          globIgnores: ['**/Screenshot_*', '**/Glossy_Green_*', '**/WhatsApp_*'],
           runtimeCaching: [
-            {
-              urlPattern: ({ request }) =>
-                request.destination === 'script' ||
-                request.destination === 'style' ||
-                request.destination === 'worker',
-              handler: 'StaleWhileRevalidate',
-              options: {
-                cacheName: 'shromik-sathi-static-assets-v2',
-                expiration: {
-                  maxEntries: 100,
-                  maxAgeSeconds: 60 * 60 * 24 * 90,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
             {
               urlPattern: ({ request }) =>
                 request.destination === 'image' || request.destination === 'font',
               handler: 'CacheFirst',
               options: {
-                cacheName: 'shromik-sathi-media-cache-v2',
+                cacheName: 'shromik-sathi-media-cache-v3',
                 expiration: {
                   maxEntries: 80,
                   maxAgeSeconds: 60 * 60 * 24 * 365,
@@ -126,6 +110,32 @@ export default defineConfig(() => {
         },
       }),
     ],
+    build: {
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              {
+                name: 'vendor-react',
+                test: /node_modules\/(react|react-dom|scheduler)\//,
+              },
+              {
+                name: 'vendor-firebase',
+                test: /node_modules\/(firebase|@firebase)\//,
+              },
+              {
+                name: 'vendor-charts',
+                test: /node_modules\/(recharts|d3-.*|victory-vendor)\//,
+              },
+              {
+                name: 'vendor-icons',
+                test: /node_modules\/lucide-react\//,
+              },
+            ],
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

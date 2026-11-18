@@ -48,7 +48,7 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { useData } from '../context/DataContext';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { toBengaliDigits } from '../utils/calculations';
@@ -383,6 +383,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       setDirectoryReadError(null);
       return;
     }
+    if (!isOnline || !auth.currentUser) {
+      setDirectorySyncStatus('cached');
+      setDirectoryReadError(null);
+      return;
+    }
     setDirectorySyncStatus('loading');
     let latestDirectoryEntries: AdminUserDirectoryEntry[] = [];
     let latestProfileEntries: AdminUserDirectoryEntry[] = [];
@@ -414,7 +419,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
         applyCombinedUsers();
       },
       (err) => {
-        console.error('Admin userDirectory listener error:', err);
+        if (!isOfflineOrTransientFirestoreError(err)) {
+          console.error('Admin userDirectory listener error:', err);
+        }
         const classified = classifyFirestoreReadError(err);
         setDirectoryReadError(classified);
         setDirectorySyncStatus('error');
@@ -457,7 +464,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       unsubDirectory();
       unsubProfiles();
     };
-  }, [isAdminUser, user, isDemoMode, todayISO, lang]);
+  }, [isAdminUser, user, isDemoMode, isOnline, todayISO, lang]);
 
   const handleRefreshUsersFromCloud = async () => {
     if (!isAdminUser || !user || isDemoMode) return;
@@ -500,7 +507,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
           : `Refreshed ${remoteUsers.length} users from Firestore.`
       );
     } catch (err) {
-      console.error('Admin userDirectory refresh error:', err);
+      if (!isOfflineOrTransientFirestoreError(err)) {
+        console.error('Admin userDirectory refresh error:', err);
+      }
       const classified = classifyFirestoreReadError(err);
       setDirectoryReadError(classified);
       setDirectorySyncStatus('error');
@@ -1242,6 +1251,24 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       saveAdminStore(next);
       return next;
     });
+    if (user && !isDemoMode) {
+      void updateDoc(doc(db, 'announcements', ann.id), {
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      }).catch(() =>
+        setDoc(
+          doc(db, 'announcements', ann.id),
+          {
+            titleBn: ann.titleBn,
+            messageBn: ann.messageBn,
+            category: ann.category,
+            status: nextStatus,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        ).catch(() => {})
+      );
+    }
     showToast(lang === 'bn' ? 'ঘোষণার স্ট্যাটাস আপডেট করা হয়েছে।' : 'Announcement updated.');
   };
 
@@ -1262,6 +1289,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       saveAdminStore(next);
       return next;
     });
+    if (user && !isDemoMode) {
+      void updateDoc(doc(db, 'announcements', ann.id), {
+        status: 'archived',
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
     showToast(lang === 'bn' ? 'নোটিশটি তালিকা থেকে সরানো হয়েছে।' : 'Announcement removed.');
   };
 
@@ -1631,14 +1664,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
   return (
     <div
       data-testid="super-admin-dashboard"
-      className="h-[100dvh] w-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col lg:flex-row overflow-hidden"
+      className="min-h-screen w-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col lg:flex-row"
     >
       {/* ===================================================================== */}
       {/* DESKTOP FIXED LEFT SIDEBAR (FLUSH TO LEFT EDGE, NEVER SCROLLS) */}
       {/* ===================================================================== */}
       <aside
         data-testid="admin-desktop-sidebar"
-        className={`hidden lg:flex flex-col shrink-0 h-full bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-[width] duration-200 ${
+        className={`hidden lg:flex flex-col shrink-0 lg:sticky lg:top-0 lg:h-screen bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-[width] duration-200 ${
           sidebarCollapsed ? 'w-[76px]' : 'w-64'
         }`}
       >
@@ -1732,11 +1765,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       </aside>
 
       {/* ===================================================================== */}
-      {/* RIGHT MAIN WORKSPACE (ONLY INNER CONTENT SCROLLS) */}
+      {/* RIGHT MAIN WORKSPACE (NATURAL PAGE SCROLL + STICKY TOP HEADER) */}
       {/* ===================================================================== */}
-      <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Pinned Top Admin Header */}
-        <header className="shrink-0 h-14 lg:h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 flex items-center justify-between gap-2.5">
+        <header className="sticky top-0 z-20 shrink-0 h-14 lg:h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 flex items-center justify-between gap-2.5">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
@@ -1960,10 +1993,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
           </div>
         )}
 
-        {/* Independent Scrollable Section Content Container */}
+        {/* Scrollable Section Content Container */}
         <div
           data-testid="admin-scroll-container"
-          className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5 lg:p-6"
+          className="flex-1 p-3 sm:p-5 lg:p-6"
         >
           <div className="max-w-7xl mx-auto space-y-5">
           {/* ================================================================= */}

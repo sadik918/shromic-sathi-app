@@ -1,5 +1,6 @@
 // Accurate Online / Google Server-Synced Time Utility for Shromik Sathi
 // Ensures accurate Bangladesh Standard Time (UTC+6) even when the user's device clock or timezone is wrong.
+import { shouldFetchOnlineTime } from './offlineReadiness';
 
 export interface AccurateBstTimeInfo {
   hh: string;
@@ -81,15 +82,31 @@ export async function syncOnlineAccurateTime(): Promise<boolean> {
   if (typeof window === 'undefined' || typeof fetch === 'undefined') {
     return false;
   }
+  if (typeof navigator !== 'undefined' && !shouldFetchOnlineTime(navigator.onLine)) {
+    return baseServerUtcMs !== null;
+  }
   if (syncInProgress) {
     return syncInProgress;
   }
+
+  const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs = 3000) => {
+    if (typeof AbortController === 'undefined') {
+      return fetch(url, init);
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
 
   syncInProgress = (async () => {
     try {
       // 1. Primary: Fetch HEAD from same-origin server (Google Cloud Run / NTP-synced server Date header)
       const reqStartPerf = performance.now();
-      const response = await fetch(`${window.location.origin}/? _ts=${Date.now()}`, {
+      const response = await fetchWithTimeout(`${window.location.origin}/?_ts=${Date.now()}`, {
         method: 'HEAD',
         cache: 'no-store',
       });
@@ -112,7 +129,7 @@ export async function syncOnlineAccurateTime(): Promise<boolean> {
     try {
       // 2. Fallback: WorldTimeAPI / TimeAPI for Asia/Dhaka
       const reqStartPerf = performance.now();
-      const res = await fetch('https://worldtimeapi.org/api/timezone/Asia/Dhaka', {
+      const res = await fetchWithTimeout('https://worldtimeapi.org/api/timezone/Asia/Dhaka', {
         cache: 'no-store',
       });
       const reqEndPerf = performance.now();

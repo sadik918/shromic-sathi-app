@@ -6,11 +6,9 @@ export type SyncState = 'synced' | 'syncing' | 'offline';
 export interface HeaderSyncStatusPresentation {
   mode: SyncState;
   isOffline: boolean;
-  compactLabel: string;
-  fullLabel: string;
+  label: string;
   accessibleLabel: string;
   tooltip: string;
-  clickMessage: string;
   pendingCount: number;
 }
 
@@ -36,30 +34,15 @@ export function resolveHeaderSyncStatus({
   const safePending = Math.max(0, Math.floor(pendingCount || 0));
 
   if (syncState === 'offline') {
-    const countSuffixBn = safePending > 0 ? ` (${toBengaliDigits(safePending)})` : '';
-    const countSuffixEn = safePending > 0 ? ` (${safePending})` : '';
-
-    const pendingDetailBn =
-      safePending > 0
-        ? ` (${toBengaliDigits(safePending)}টি পরিবর্তন ফোনে অপেক্ষমাণ আছে)`
-        : '';
-    const pendingDetailEn =
-      safePending > 0
-        ? ` (${safePending} local ${safePending === 1 ? 'change' : 'changes'} waiting to sync)`
-        : '';
-
-    const explanationBn = `অফলাইন স্ট্যাটাস — ইন্টারনেট সংযোগ নেই। ডেটা এখন ক্লাউডে সিঙ্ক হচ্ছে না, তবে ফোনে নিরাপদভাবে সংরক্ষিত আছে${pendingDetailBn}।`;
-    const explanationEn = `Offline Status — No internet connection. Data is not currently syncing to the cloud, and your changes remain saved locally${pendingDetailEn}.`;
+    const label = lang === 'bn' ? 'অফলাইন' : 'Offline';
+    const accessibleLabel = lang === 'bn' ? 'অফলাইন স্ট্যাটাস' : 'Offline Status';
 
     return {
       mode: 'offline',
       isOffline: true,
-      compactLabel: lang === 'bn' ? `অফলাইন${countSuffixBn}` : `Offline${countSuffixEn}`,
-      fullLabel:
-        lang === 'bn' ? `অফলাইন স্ট্যাটাস${countSuffixBn}` : `Offline Status${countSuffixEn}`,
-      accessibleLabel: lang === 'bn' ? explanationBn : explanationEn,
-      tooltip: lang === 'bn' ? explanationBn : explanationEn,
-      clickMessage: lang === 'bn' ? explanationBn : explanationEn,
+      label,
+      accessibleLabel,
+      tooltip: accessibleLabel,
       pendingCount: safePending,
     };
   }
@@ -75,11 +58,9 @@ export function resolveHeaderSyncStatus({
     return {
       mode: 'syncing',
       isOffline: false,
-      compactLabel: lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing...',
-      fullLabel: lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing...',
+      label: lang === 'bn' ? 'সিঙ্ক হচ্ছে...' : 'Syncing...',
       accessibleLabel: lang === 'bn' ? labelBn : labelEn,
       tooltip: lang === 'bn' ? labelBn : labelEn,
-      clickMessage: lang === 'bn' ? labelBn : labelEn,
       pendingCount: safePending,
     };
   }
@@ -89,11 +70,9 @@ export function resolveHeaderSyncStatus({
   return {
     mode: 'synced',
     isOffline: false,
-    compactLabel: lang === 'bn' ? 'সংরক্ষিত' : 'Synced',
-    fullLabel: lang === 'bn' ? 'সংরক্ষিত' : 'Synced',
+    label: lang === 'bn' ? 'সংরক্ষিত' : 'Synced',
     accessibleLabel: lang === 'bn' ? syncedBn : syncedEn,
     tooltip: lang === 'bn' ? syncedBn : syncedEn,
-    clickMessage: lang === 'bn' ? syncedBn : syncedEn,
     pendingCount: 0,
   };
 }
