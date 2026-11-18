@@ -28,7 +28,7 @@ service cloud.firestore {
       );
     }
     function isNotDemoAccount() {
-      return isSignedIn() && request.auth.token.email != 'demo@therate.gmail.com';
+      return isSignedIn() && (!('email' in request.auth.token) || request.auth.token.email != 'demo@therate.gmail.com');
     }
     function isOwner(userId) {
       return isVerified() && isNotDemoAccount() && request.auth.uid == userId;

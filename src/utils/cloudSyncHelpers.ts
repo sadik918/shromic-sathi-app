@@ -851,6 +851,53 @@ export function normalizeWorkerProfileForFirestore(
   return out;
 }
 
+export const WORKER_PROFILE_CORE_REQUIRED_FIELDS = [
+  'fullName',
+  'photoUrl',
+  'phone',
+  'address',
+  'emergencyContact',
+  'factoryName',
+  'factoryBranch',
+  'department',
+  'designation',
+  'employeeId',
+  'employmentType',
+  'joiningDate',
+  'salaryGrade',
+  'basicSalary',
+  'houseRentAllowance',
+  'medicalAllowance',
+  'transportAllowance',
+  'foodAllowance',
+  'attendanceBonus',
+  'grossSalary',
+  'otWageBase',
+  'otDivisor',
+  'otMultiplier',
+  'effectiveFrom',
+  'language',
+  'privacyConsent',
+] as const;
+
+/**
+ * Produces a strictly minimal `/users/{uid}` payload containing only the base required fields
+ * (`WORKER_PROFILE_CORE_REQUIRED_FIELDS`) for fallback compatibility if a remote ruleset
+ * rejects newer optional fields.
+ */
+export function buildCoreRequiredWorkerProfilePayload(
+  raw: Record<string, unknown>,
+  uid: string,
+  fallbackDisplayName?: string | null
+): Record<string, unknown> {
+  const full = normalizeWorkerProfileForFirestore(raw, uid, fallbackDisplayName);
+  const minimal: Record<string, unknown> = {};
+  for (const key of WORKER_PROFILE_CORE_REQUIRED_FIELDS) {
+    minimal[key] = full[key];
+  }
+  return minimal;
+}
+
 /**
  * Ensures any PersonalLoan payload (including sample seeds and legacy cached items)
  * satisfies `/users/{uid}/loans/{loanId}` Firestore Security Rules.

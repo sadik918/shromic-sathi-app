@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { resolveSyncState, type SyncState } from '../utils/syncStatusDisplay';
 
-export type SyncState = 'synced' | 'syncing' | 'offline';
+export type { SyncState };
 
 export function useOnlineStatus(pendingWritesCount = 0): {
   isOnline: boolean;
@@ -11,24 +12,26 @@ export function useOnlineStatus(pendingWritesCount = 0): {
   );
 
   useEffect(() => {
+    const syncFromNavigator = () => {
+      if (typeof navigator !== 'undefined') {
+        setIsOnline(navigator.onLine);
+      }
+    };
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', syncFromNavigator);
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', syncFromNavigator);
     };
   }, []);
 
-  let syncState: SyncState = 'synced';
-  if (!isOnline) {
-    syncState = 'offline';
-  } else if (pendingWritesCount > 0) {
-    syncState = 'syncing';
-  }
+  const syncState = resolveSyncState(isOnline, pendingWritesCount);
 
   return { isOnline, syncState };
 }

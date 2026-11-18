@@ -52,6 +52,7 @@ import type { AlarmItem, MoreSubView, NavTab } from './types';
 import { formatShortMonthName, T } from './utils/i18n';
 import { parseCalendarReminderMeta } from './utils/calendarReminders';
 import { toBengaliDigits } from './utils/subscriptionLogic';
+import { resolveHeaderSyncStatus } from './utils/syncStatusDisplay';
 
 const VALID_NAV_TABS: NavTab[] = [
   'dashboard',
@@ -128,7 +129,13 @@ const WorkspaceShell: React.FC = () => {
     subscriptionRenewalNotice,
   } = useData();
 
-  const { syncState } = useOnlineStatus(pendingWritesCount + offlinePendingCount);
+  const totalPendingSyncCount = pendingWritesCount + offlinePendingCount;
+  const { syncState } = useOnlineStatus(totalPendingSyncCount);
+  const syncStatusUI = resolveHeaderSyncStatus({
+    syncState,
+    pendingCount: totalPendingSyncCount,
+    lang,
+  });
 
   const monthOptions = React.useMemo(() => {
     const set = new Set<string>(AVAILABLE_MONTHS);
@@ -182,6 +189,7 @@ const WorkspaceShell: React.FC = () => {
   const [attendanceFocusDate, setAttendanceFocusDate] = useState<string | undefined>(undefined);
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+  const toastTimerRef = React.useRef<number | null>(null);
   const [ringingAlarm, setRingingAlarm] = useState<AlarmItem | null>(null);
   const [lastTriggeredKey, setLastTriggeredKey] = useState<string>('');
 
@@ -422,7 +430,15 @@ const WorkspaceShell: React.FC = () => {
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 3500);
+    if (toastTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    if (typeof window !== 'undefined') {
+      toastTimerRef.current = window.setTimeout(() => {
+        setToastMsg('');
+        toastTimerRef.current = null;
+      }, 3800);
+    }
   };
 
   if ((!authReady || (Boolean(user) && !cloudDataLoaded)) && !isDemoMode) {
@@ -623,10 +639,10 @@ const WorkspaceShell: React.FC = () => {
           </span>
         </div>
       )}
-      {/* Top Navigation Bar: Logo + App Title on Left, Desktop Nav in Center, Month + Lang Icon + Theme Icon on Right */}
+      {/* Top Navigation Bar: Logo + App Title + Sync/Offline Status on Left, Desktop Nav in Center, Month + Lang Icon + Theme Icon on Right */}
       <header className="sticky top-0 z-30 h-14 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 no-print">
-        <div className="max-w-7xl mx-auto h-full px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-4 lg:gap-6">
-          {/* Zone 1: Brand Emblem + Wordmark + Subtle Sync Status Dot */}
+        <div className="max-w-7xl mx-auto h-full px-2.5 sm:px-6 lg:px-8 flex items-center justify-between gap-1.5 sm:gap-4 lg:gap-6">
+          {/* Zone 1: Brand Emblem + Wordmark + Offline Status Badge / Sync Status Icon */}
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 shrink-0">
             <a
               href="#dashboard"
@@ -636,9 +652,9 @@ const WorkspaceShell: React.FC = () => {
                 e.preventDefault();
                 handleNavigate('dashboard');
               }}
-              className="inline-flex items-center gap-1.5 sm:gap-2 text-base sm:text-lg font-bold text-slate-900 dark:text-white whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1 sm:gap-2 text-base sm:text-lg font-bold text-slate-900 dark:text-white whitespace-nowrap shrink-0"
             >
-              <span className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-emerald-50 dark:bg-emerald-950/80 p-0.5 border border-emerald-200/80 dark:border-emerald-800/80 shadow-2xs flex items-center justify-center shrink-0 overflow-hidden">
+              <span className="w-7 h-7 min-[410px]:w-8 min-[410px]:h-8 sm:w-9 sm:h-9 rounded-full bg-emerald-50 dark:bg-emerald-950/80 p-0.5 border border-emerald-200/80 dark:border-emerald-800/80 shadow-2xs flex items-center justify-center shrink-0 overflow-hidden">
                 <img
                   src="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png"
                   alt="শ্রমিক সাথী লোগো"
@@ -652,38 +668,45 @@ const WorkspaceShell: React.FC = () => {
               <BrandWordmark size="header" dataTestId="header-brand-wordmark" />
             </a>
 
-            <button
-              type="button"
-              data-testid="header-sync-status-btn"
-              onClick={() => {
-                if (typeof navigator === 'undefined' || navigator.onLine) {
-                  void syncOfflineDataToCloud(true);
-                }
-              }}
-              title={
-                syncState === 'offline'
-                  ? dict.syncOffline
-                  : syncState === 'syncing'
-                  ? dict.syncPending
-                  : dict.syncSynced
-              }
-              aria-label={
-                syncState === 'offline'
-                  ? dict.syncOffline
-                  : syncState === 'syncing'
-                  ? dict.syncPending
-                  : dict.syncSynced
-              }
-              className="inline-flex items-center justify-center shrink-0 cursor-pointer p-0.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            >
-              {syncState === 'offline' ? (
-                <WifiOff className="w-3.5 h-3.5 text-amber-500" />
-              ) : syncState === 'syncing' ? (
-                <RefreshCw className="w-3.5 h-3.5 text-sky-500 animate-spin" />
-              ) : (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              )}
-            </button>
+            {syncStatusUI.isOffline ? (
+              <button
+                type="button"
+                data-testid="header-offline-status-badge"
+                onClick={() => showToast(syncStatusUI.clickMessage)}
+                title={syncStatusUI.tooltip}
+                aria-label={syncStatusUI.accessibleLabel}
+                className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-full border border-amber-300/90 dark:border-amber-700/80 bg-amber-50 hover:bg-amber-100/90 dark:bg-amber-950/75 dark:hover:bg-amber-900/70 text-amber-800 dark:text-amber-200 text-[11px] sm:text-xs font-bold inline-flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0 shadow-2xs"
+              >
+                <WifiOff
+                  className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-600 dark:text-amber-400 shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="sm:hidden md:inline lg:hidden">{syncStatusUI.compactLabel}</span>
+                <span className="hidden sm:inline md:hidden lg:inline">{syncStatusUI.fullLabel}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                data-testid="header-sync-status-btn"
+                onClick={() => {
+                  if (typeof navigator === 'undefined' || navigator.onLine) {
+                    void syncOfflineDataToCloud(true);
+                  }
+                }}
+                title={syncStatusUI.tooltip}
+                aria-label={syncStatusUI.accessibleLabel}
+                className="inline-flex items-center justify-center shrink-0 cursor-pointer p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                {syncState === 'syncing' ? (
+                  <RefreshCw className="w-3.5 h-3.5 text-sky-500 animate-spin" aria-hidden="true" />
+                ) : (
+                  <CheckCircle2
+                    className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+            )}
           </div>
 
           {/* Zone 2: Desktop single-line navigation links */}
@@ -812,7 +835,7 @@ const WorkspaceShell: React.FC = () => {
       {toastMsg && (
         <div
           role="status"
-          className="fixed top-16 right-4 z-50 rounded-xl bg-emerald-800 text-white px-4 py-2.5 text-xs font-semibold shadow-lg no-print"
+          className="fixed top-16 left-4 right-4 sm:left-auto sm:right-4 sm:max-w-md z-50 rounded-xl bg-emerald-800 dark:bg-emerald-900 border border-emerald-700/60 text-white px-4 py-2.5 text-xs font-semibold shadow-lg no-print"
         >
           {toastMsg}
         </div>

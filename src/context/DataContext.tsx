@@ -15,7 +15,6 @@ import {
 import {
   collection,
   deleteDoc,
-  deleteField,
   doc,
   getDoc,
   getDocFromServer,
@@ -119,6 +118,7 @@ import {
 } from '../utils/subscriptionLogic';
 import { resolveWorkerDisplayName } from '../utils/homeAnalytics';
 import {
+  buildCoreRequiredWorkerProfilePayload,
   getBstTodayISO,
   isGenericWorkerPlaceholderName,
   isOfflineOrTransientFirestoreError,
@@ -1017,7 +1017,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
   const remoteKnownDocIdsRef = useRef<Record<string, Set<string>>>({});
   const inFlightSyncKeysRef = useRef<Set<string>>(new Set());
-  const ensureProfileFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const ensureProfileFlightRef = useRef<Map<string, Promise<'created' | 'already_exists' | 'skipped'>>>(new Map());
   const persistProfileFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const nonRetryableFailedMutationsRef = useRef<Map<string, string>>(new Map());
   const lastTokenRefreshAtRef = useRef<number>(0);
@@ -1282,6 +1282,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
+        const minimalRequiredPayload = buildCoreRequiredWorkerProfilePayload(
+          rawProfile as Record<string, unknown>,
+          uid,
+          fallbackDisplayName
+        );
+
         const recoverLegacyProfileWrite = async () => {
           let existingSnap;
           try {
@@ -1299,27 +1305,40 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             : null;
 
           if (!existingData) {
-            await setDoc(userDocRef, {
-              ...coreFirestorePayload,
-              userId: uid,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-            profileEnsuredRef.current = uid;
-            return;
+            try {
+              await setDoc(userDocRef, {
+                ...coreFirestorePayload,
+                userId: uid,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+              profileEnsuredRef.current = uid;
+              return;
+            } catch (createCoreErr: any) {
+              if (!isPermissionDeniedError(createCoreErr)) {
+                throw createCoreErr;
+              }
+              await setDoc(userDocRef, {
+                ...minimalRequiredPayload,
+                userId: uid,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+              profileEnsuredRef.current = uid;
+              return;
+            }
           }
 
           const allowedKeys = new Set([
-            ...Object.keys(coreFirestorePayload),
+            ...Object.keys(normalized),
+            'id',
             'userId',
             'createdAt',
             'updatedAt',
           ]);
-          const updatePayload: Record<string, unknown> = {
-            ...coreFirestorePayload,
-            userId: uid,
-            updatedAt: serverTimestamp(),
-          };
+          const hasStrayLegacyKeys = Object.keys(existingData).some(
+            (existingKey) => !allowedKeys.has(existingKey)
+          );
 
           const existingCreatedAt = existingData.createdAt;
           const hasTimestampCreatedAt = Boolean(
@@ -1327,51 +1346,61 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               typeof existingCreatedAt === 'object' &&
               typeof (existingCreatedAt as { toMillis?: unknown }).toMillis === 'function'
           );
-          if (!hasTimestampCreatedAt) {
-            updatePayload.createdAt = serverTimestamp();
-          }
 
-          // Remove any deprecated/stray legacy keys without overwriting valid Timestamp createdAt
-          for (const existingKey of Object.keys(existingData)) {
-            if (!allowedKeys.has(existingKey) && !EXTENDED_LOCAL_PROFILE_KEYS.has(existingKey)) {
-              updatePayload[existingKey] = deleteField();
-            }
-          }
-
-          try {
-            await updateDoc(userDocRef, updatePayload);
-            profileEnsuredRef.current = uid;
-          } catch (updateErr: any) {
+          // If stray legacy keys exist on server, full setDoc overwrite cleanly removes them
+          // without triggering affectedKeys().hasOnly() failures from deleteField().
+          if (hasStrayLegacyKeys) {
             try {
               await setDoc(userDocRef, {
-                ...coreFirestorePayload,
+                ...normalized,
                 userId: uid,
                 createdAt: hasTimestampCreatedAt ? existingCreatedAt : serverTimestamp(),
                 updatedAt: serverTimestamp(),
               });
               profileEnsuredRef.current = uid;
-            } catch (setErr: any) {
-              const corePayload: Record<string, unknown> = {
-                userId: uid,
-                updatedAt: serverTimestamp(),
-              };
-              for (const [k, v] of Object.entries(coreFirestorePayload)) {
-                if (k in existingData) {
-                  corePayload[k] = v;
-                }
-              }
-              if (!hasTimestampCreatedAt) {
-                corePayload.createdAt = serverTimestamp();
-              }
-              try {
-                await updateDoc(userDocRef, corePayload);
-                // Core profile fields succeeded! Treat as a completed write so optional keys never trigger permission errors.
-                profileEnsuredRef.current = uid;
-                return;
-              } catch {
-                throw setErr || updateErr;
-              }
+              return;
+            } catch {
+              // Fall through to core/minimal setDoc fallbacks below
             }
+          } else {
+            const updatePayload: Record<string, unknown> = {
+              ...coreFirestorePayload,
+              userId: uid,
+              updatedAt: serverTimestamp(),
+            };
+            if (!hasTimestampCreatedAt) {
+              updatePayload.createdAt = serverTimestamp();
+            }
+            try {
+              await updateDoc(userDocRef, updatePayload);
+              profileEnsuredRef.current = uid;
+              return;
+            } catch {
+              // Fall through to setDoc fallbacks below
+            }
+          }
+
+          try {
+            await setDoc(userDocRef, {
+              ...coreFirestorePayload,
+              userId: uid,
+              createdAt: hasTimestampCreatedAt ? existingCreatedAt : serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            profileEnsuredRef.current = uid;
+            return;
+          } catch (setCoreErr: any) {
+            if (!isPermissionDeniedError(setCoreErr)) {
+              throw setCoreErr;
+            }
+            // Final fallback: strictly minimum required fields so legacy rulesets still succeed
+            await setDoc(userDocRef, {
+              ...minimalRequiredPayload,
+              userId: uid,
+              createdAt: hasTimestampCreatedAt ? existingCreatedAt : serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            profileEnsuredRef.current = uid;
           }
         };
 
@@ -1450,17 +1479,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Ensure parent profile document exists in Firestore (and has valid `userId == uid`) before subcollection writes.
   // Always checks server first when online so an empty local cache never overwrites cloud data.
   const ensureParentProfileInFirestore = useCallback(
-    async (currentUser: User, fallbackProfile?: WorkerProfile) => {
+    async (
+      currentUser: User,
+      fallbackProfile?: WorkerProfile
+    ): Promise<'created' | 'already_exists' | 'skipped'> => {
       if (profileEnsuredRef.current === currentUser.uid) {
-        return;
+        return 'already_exists';
       }
       const existingFlight = ensureProfileFlightRef.current.get(currentUser.uid);
       if (existingFlight) {
-        await existingFlight;
-        return;
+        return await existingFlight;
       }
 
-      const runner = (async () => {
+      const runner = (async (): Promise<'created' | 'already_exists' | 'skipped'> => {
         const userDocRef = doc(db, 'users', currentUser.uid);
         try {
           let snap;
@@ -1473,15 +1504,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const hasMatchingUid = exists && snap.data()?.userId === currentUser.uid;
           if (!exists || !hasMatchingUid) {
             if (typeof navigator !== 'undefined' && !navigator.onLine) {
-              return;
+              return 'skipped';
             }
-            const base =
-              (exists ? (snap.data() as WorkerProfile) : undefined) ||
-              fallbackProfile ||
-              defaultWorkerProfile(currentUser.uid, currentUser.displayName);
+            const base = exists
+              ? ({
+                  ...(snap.data() as WorkerProfile),
+                  ...(fallbackProfile || {}),
+                } as WorkerProfile)
+              : fallbackProfile || defaultWorkerProfile(currentUser.uid, currentUser.displayName);
             await persistWorkerProfileDoc(currentUser.uid, base, currentUser.displayName, exists);
+            return 'created';
           } else {
             profileEnsuredRef.current = currentUser.uid;
+            return 'already_exists';
           }
         } catch (err) {
           reportFirestoreFailure(
@@ -1490,12 +1525,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             `users/${currentUser.uid}`,
             setCloudSyncError
           );
+          return 'skipped';
         }
       })();
 
       ensureProfileFlightRef.current.set(currentUser.uid, runner);
       try {
-        await runner;
+        return await runner;
       } finally {
         if (ensureProfileFlightRef.current.get(currentUser.uid) === runner) {
           ensureProfileFlightRef.current.delete(currentUser.uid);
@@ -3307,14 +3343,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       await withPendingTracking(async () => {
-        await ensureParentProfileInFirestore(user, merged);
+        const ensuredStatus = await ensureParentProfileInFirestore(user, merged);
         try {
-          await persistWorkerProfileDoc(
-            user.uid,
-            merged,
-            user.displayName,
-            profileEnsuredRef.current === user.uid ? true : undefined
-          );
+          if (ensuredStatus !== 'created') {
+            await persistWorkerProfileDoc(
+              user.uid,
+              merged,
+              user.displayName,
+              profileEnsuredRef.current === user.uid ? true : undefined
+            );
+          }
           clearOfflineMutation(user.uid, 'profile', 'profile');
           nonRetryableFailedMutationsRef.current.delete('profile:profile');
           setCloudSyncError('');

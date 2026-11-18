@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildCoreRequiredWorkerProfilePayload,
   buildUserDirectoryCreatePayload,
   buildUserDirectoryOwnerUpdatePayload,
   classifyFirestoreReadError,
@@ -418,4 +419,34 @@ test('resolveBestUserDisplayName and mergeUserDirectories prefer real Google/pro
   assert.equal(merged[0].email, 'aishamukta000@gmail.com');
   assert.equal(merged[0].authProvider, 'google.com');
 });
+
+test('normalizeWorkerProfileForFirestore and buildCoreRequiredWorkerProfilePayload emit exact schema-compliant keys', () => {
+  const full = normalizeWorkerProfileForFirestore(
+    {
+      fullName: 'সালমা আক্তার',
+      phone: '01887713212',
+      basicSalary: 10000,
+      grossSalary: 14500,
+      otWageBase: 'basic',
+      otDivisor: 208,
+      otMultiplier: 2,
+      language: 'bn',
+    },
+    'O0yru2fek2bHEzMTBFC3dnSlfJJ2'
+  );
+  assert.equal(full.fullName, 'সালমা আক্তার');
+  assert.equal(full.phone, '01887713212');
+  assert.equal('userId' in full, false);
+
+  const core = buildCoreRequiredWorkerProfilePayload(
+    { fullName: 'সালমা আক্তার', basicSalary: 10000, grossSalary: 14500, openingCashBalance: 500 },
+    'O0yru2fek2bHEzMTBFC3dnSlfJJ2'
+  );
+  assert.equal('openingCashBalance' in core, false);
+  assert.equal('shiftPattern' in core, false);
+  assert.equal(Object.keys(core).length, 26);
+  assert.equal(core.basicSalary, 10000);
+  assert.equal(core.otDivisor, 208);
+});
+
 
