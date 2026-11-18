@@ -20,7 +20,6 @@
     -webkit-text-size-adjust: 100%;
     text-rendering: optimizeLegibility;
     font-kerning: normal;
-    overflow-y: auto;
     scroll-behavior: smooth;
   }
 
@@ -32,8 +31,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     -webkit-tap-highlight-color: transparent;
-    overflow-x: hidden;
-    overflow-y: visible;
+    overflow-x: clip;
     min-height: 100vh;
     touch-action: pan-x pan-y;
   }

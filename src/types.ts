@@ -252,6 +252,14 @@ export interface ReminderItem {
 
 export type FeedbackCategory = 'calculation_help' | 'bug_report' | 'feature_request' | 'general';
 
+export interface SupportFeedbackReply {
+  id: string;
+  authorName: string;
+  authorRole?: string;
+  message: string;
+  createdAt: string;
+}
+
 export interface SupportFeedback {
   id: string;
   userId: string;
@@ -259,6 +267,17 @@ export interface SupportFeedback {
   category: FeedbackCategory;
   message: string;
   status: 'open' | 'resolved';
+  adminStatus?: 'new' | 'in_progress' | 'waiting_for_user' | 'resolved' | 'closed';
+  assignedTo?: string;
+  ticketNumber?: string;
+  subject?: string;
+  replies?: SupportFeedbackReply[];
+  internalNotes?: Array<{
+    id: string;
+    authorName: string;
+    note: string;
+    createdAt: string;
+  }>;
   createdAt?: unknown;
   updatedAt?: unknown;
 }

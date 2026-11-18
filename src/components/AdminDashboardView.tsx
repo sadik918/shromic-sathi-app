@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -74,7 +74,9 @@ import {
   filterAndPaginateUsers,
   loadAdminStore,
   mapLegacyFeedbackToTickets,
+  mergeFeedbackTicketsIntoStore,
   PRIMARY_SUPER_ADMIN_EMAIL,
+  reverseMapTicketCategoryToFeedbackCategory,
   ROLE_DEFAULT_PERMISSIONS,
   sanitizeAuditMetadata,
   sanitizeUserForAdminDirectory,
@@ -94,6 +96,7 @@ import {
   type SupportTicketRecord,
   type SupportTicketStatus,
 } from '../utils/adminLogic';
+import type { SupportFeedback } from '../types';
 import {
   ADMIN_QUICK_REPLIES,
   computeSupportTicketCounts,
@@ -304,6 +307,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [errorBanner, setErrorBanner] = useState('');
+  const adminScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const adminSidebarNavRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (adminScrollContainerRef.current) {
+      adminScrollContainerRef.current.scrollTo({ top: 0 });
+    }
+  }, [activeSection]);
 
   // Role simulation for RBAC verification (defaults to super_admin when authorized)
   const [simulatedRole, setSimulatedRole] = useState<AdminRole | 'ordinary_worker'>(() =>
@@ -460,9 +471,46 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       }
     );
 
+    const unsubFeedback = onSnapshot(
+      collection(db, 'feedback'),
+      (snapshot) => {
+        const liveFeedbackDocs: SupportFeedback[] = snapshot.docs.map((d) => {
+          const raw = d.data() as Record<string, any>;
+          return {
+            id: d.id,
+            userId: String(raw.userId || ''),
+            workerName: String(raw.workerName || 'শ্রমিক ব্যবহারকারী'),
+            category: raw.category || 'general',
+            message: String(raw.message || ''),
+            status: raw.status === 'resolved' ? 'resolved' : 'open',
+            adminStatus: raw.adminStatus,
+            assignedTo: raw.assignedTo,
+            ticketNumber: raw.ticketNumber,
+            subject: raw.subject,
+            replies: Array.isArray(raw.replies) ? raw.replies : [],
+            internalNotes: Array.isArray(raw.internalNotes) ? raw.internalNotes : [],
+            createdAt: raw.createdAt,
+            updatedAt: raw.updatedAt,
+          };
+        });
+        const mappedTickets = mapLegacyFeedbackToTickets(liveFeedbackDocs, todayISO);
+        setStore((prev) => {
+          const merged = mergeFeedbackTicketsIntoStore(prev.tickets, mappedTickets);
+          if (!merged.updated) return prev;
+          const nextState = { ...prev, tickets: merged.tickets };
+          saveAdminStore(nextState);
+          return nextState;
+        });
+      },
+      () => {
+        // Non-fatal if /feedback read fails transiently
+      }
+    );
+
     return () => {
       unsubDirectory();
       unsubProfiles();
+      unsubFeedback();
     };
   }, [isAdminUser, user, isDemoMode, isOnline, todayISO, lang]);
 
@@ -539,13 +587,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
         }
       }
 
-      const mappedFeedback = mapLegacyFeedbackToTickets(feedbackList);
-      let nextTickets = prev.tickets;
-      for (const ft of mappedFeedback) {
-        if (!nextTickets.some((t) => t.id === ft.id)) {
-          nextTickets = [ft, ...nextTickets];
-          updated = true;
-        }
+      const mappedFeedback = mapLegacyFeedbackToTickets(feedbackList, todayISO);
+      const mergedTicketsResult = mergeFeedbackTicketsIntoStore(prev.tickets, mappedFeedback);
+      const nextTickets = mergedTicketsResult.tickets;
+      if (mergedTicketsResult.updated) {
+        updated = true;
       }
 
       if (!updated) return prev;
@@ -978,7 +1024,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
   const [ticketSearch, setTicketSearch] = useState('');
   const [ticketStatusFilter, setTicketStatusFilter] = useState<SupportTicketStatus | 'all'>('all');
   const [ticketCategoryFilter, setTicketCategoryFilter] = useState<SupportTicketCategory | 'all'>('all');
-  const [activeTicketId, setActiveTicketId] = useState<string | null>('tkt_1001');
+  const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
   const [ticketReplyText, setTicketReplyText] = useState('');
   const [ticketInternalNoteText, setTicketInternalNoteText] = useState('');
 
@@ -1007,6 +1053,73 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     [store.tickets, activeTicketId, filteredTickets]
   );
 
+  const persistTicketToFirestore = async (targetTicket: SupportTicketRecord) => {
+    if (!user || isDemoMode) return;
+    const fbStatus: 'open' | 'resolved' =
+      targetTicket.status === 'resolved' || targetTicket.status === 'closed'
+        ? 'resolved'
+        : 'open';
+    const fbCategory = reverseMapTicketCategoryToFeedbackCategory(targetTicket.category);
+    const safeUserId = (targetTicket.userId || user.uid)
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 128);
+    const safeWorkerName =
+      (targetTicket.workerName || 'শ্রমিক ব্যবহারকারী').trim().slice(0, 120) ||
+      'শ্রমিক ব্যবহারকারী';
+    const safeMessage =
+      (targetTicket.message || 'সহায়তা অনুরোধ').trim().slice(0, 1000) ||
+      'সহায়তা অনুরোধ';
+    const cleanReplies = (targetTicket.replies || []).slice(-100).map((r) => ({
+      id: String(r.id || `rep_${Date.now()}`).slice(0, 80),
+      authorName: String(r.authorName || actorName).slice(0, 120),
+      message: String(r.message || '').slice(0, 1000),
+      createdAt: String(r.createdAt || todayISO).slice(0, 40),
+    }));
+    const cleanNotes = (targetTicket.internalNotes || []).slice(-100).map((n) => ({
+      id: String(n.id || `note_${Date.now()}`).slice(0, 80),
+      authorName: String(n.authorName || actorName).slice(0, 120),
+      note: String(n.note || '').slice(0, 1000),
+      createdAt: String(n.createdAt || todayISO).slice(0, 40),
+    }));
+    const ticketRef = doc(db, 'feedback', targetTicket.id);
+    try {
+      await updateDoc(ticketRef, {
+        status: fbStatus,
+        adminStatus: targetTicket.status,
+        assignedTo: (targetTicket.assignedTo || 'Support Team').slice(0, 120),
+        ticketNumber: (targetTicket.ticketNumber || 'TKT-2001').slice(0, 40),
+        subject: (targetTicket.subject || 'সাধারণ সহায়তা অনুরোধ').slice(0, 200),
+        replies: cleanReplies,
+        internalNotes: cleanNotes,
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      try {
+        await setDoc(
+          ticketRef,
+          {
+            userId: safeUserId,
+            workerName: safeWorkerName,
+            category: fbCategory,
+            message: safeMessage,
+            status: fbStatus,
+            adminStatus: targetTicket.status,
+            assignedTo: (targetTicket.assignedTo || 'Support Team').slice(0, 120),
+            ticketNumber: (targetTicket.ticketNumber || 'TKT-2001').slice(0, 40),
+            subject: (targetTicket.subject || 'সাধারণ সহায়তা অনুরোধ').slice(0, 200),
+            replies: cleanReplies,
+            internalNotes: cleanNotes,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch {
+        // Offline persistence or local store already holds the update
+      }
+    }
+  };
+
   const handleUpdateTicketStatus = async (ticket: SupportTicketRecord, nextStatus: SupportTicketStatus) => {
     if (!canAdminPerform(effectiveRole, 'manage_tickets')) {
       showError(lang === 'bn' ? 'টিকিট আপডেটের অনুমতি নেই।' : 'Permission denied.');
@@ -1017,6 +1130,13 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       await resolveFeedback(ticket.id).catch(() => {});
     }
 
+    const updatedTicket: SupportTicketRecord = {
+      ...ticket,
+      status: nextStatus,
+      updatedAt: todayISO,
+      resolvedAt: nextStatus === 'resolved' ? todayISO : ticket.resolvedAt,
+    };
+
     const auditEntry = recordAudit({
       actionType: 'ticket_status_updated',
       targetId: ticket.ticketNumber,
@@ -1026,20 +1146,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     });
 
     setStore((prev) => {
-      const nextTickets = prev.tickets.map((t) =>
-        t.id === ticket.id
-          ? {
-              ...t,
-              status: nextStatus,
-              updatedAt: todayISO,
-              resolvedAt: nextStatus === 'resolved' ? todayISO : t.resolvedAt,
-            }
-          : t
-      );
+      const nextTickets = prev.tickets.map((t) => (t.id === ticket.id ? updatedTicket : t));
       const next = { ...prev, tickets: nextTickets, auditLogs: [auditEntry, ...prev.auditLogs] };
       saveAdminStore(next);
       return next;
     });
+    void persistTicketToFirestore(updatedTicket);
     showToast(
       lang === 'bn'
         ? `টিকিট ${ticket.ticketNumber}-এর স্ট্যাটাস আপডেট করা হয়েছে।`
@@ -1052,6 +1164,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       showError(lang === 'bn' ? 'টিকিট অ্যাসাইন করার অনুমতি নেই।' : 'Permission denied.');
       return;
     }
+    const updatedTicket: SupportTicketRecord = {
+      ...ticket,
+      assignedTo: assignee,
+      updatedAt: todayISO,
+    };
     const auditEntry = recordAudit({
       actionType: 'ticket_assigned',
       targetId: ticket.ticketNumber,
@@ -1059,45 +1176,46 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       reason: `Support ticket assigned to ${assignee}`,
     });
     setStore((prev) => {
-      const nextTickets = prev.tickets.map((t) =>
-        t.id === ticket.id ? { ...t, assignedTo: assignee, updatedAt: todayISO } : t
-      );
+      const nextTickets = prev.tickets.map((t) => (t.id === ticket.id ? updatedTicket : t));
       const next = { ...prev, tickets: nextTickets, auditLogs: [auditEntry, ...prev.auditLogs] };
       saveAdminStore(next);
       return next;
     });
+    void persistTicketToFirestore(updatedTicket);
     showToast(lang === 'bn' ? 'টিকিট দায়িত্বপ্রাপ্ত মডারেটরকে অ্যাসাইন করা হয়েছে।' : 'Ticket assigned.');
   };
 
   const handleAddTicketReply = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTicket || !ticketReplyText.trim()) return;
+    if (!canAdminPerform(effectiveRole, 'manage_tickets')) {
+      showError(lang === 'bn' ? 'টিকিটে উত্তর দেওয়ার অনুমতি নেই।' : 'Permission denied.');
+      return;
+    }
     const msg = ticketReplyText.trim();
     const nowStamp = `${todayISO} ${new Date().toTimeString().slice(0, 5)}`;
+    const newReply = {
+      id: `rep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      authorName: actorName,
+      message: msg,
+      createdAt: nowStamp,
+    };
+    const updatedTicket: SupportTicketRecord = {
+      ...activeTicket,
+      status: activeTicket.status === 'new' ? ('in_progress' as const) : activeTicket.status,
+      updatedAt: todayISO,
+      replies: [...(activeTicket.replies || []), newReply],
+    };
 
     setStore((prev) => {
       const nextTickets = prev.tickets.map((t) =>
-        t.id === activeTicket.id
-          ? {
-              ...t,
-              status: t.status === 'new' ? ('in_progress' as const) : t.status,
-              updatedAt: todayISO,
-              replies: [
-                ...t.replies,
-                {
-                  id: `rep_${Date.now()}`,
-                  authorName: actorName,
-                  message: msg,
-                  createdAt: nowStamp,
-                },
-              ],
-            }
-          : t
+        t.id === activeTicket.id ? updatedTicket : t
       );
       const next = { ...prev, tickets: nextTickets };
       saveAdminStore(next);
       return next;
     });
+    void persistTicketToFirestore(updatedTicket);
     setTicketReplyText('');
     showToast(lang === 'bn' ? 'ব্যবহারকারীর টিকিটে উত্তর যুক্ত করা হয়েছে।' : 'Reply sent to ticket thread.');
   };
@@ -1107,28 +1225,26 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     if (!activeTicket || !ticketInternalNoteText.trim()) return;
     const note = ticketInternalNoteText.trim();
     const nowStamp = `${todayISO} ${new Date().toTimeString().slice(0, 5)}`;
+    const newNote = {
+      id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      authorName: actorName,
+      note,
+      createdAt: nowStamp,
+    };
+    const updatedTicket: SupportTicketRecord = {
+      ...activeTicket,
+      internalNotes: [...(activeTicket.internalNotes || []), newNote],
+    };
 
     setStore((prev) => {
       const nextTickets = prev.tickets.map((t) =>
-        t.id === activeTicket.id
-          ? {
-              ...t,
-              internalNotes: [
-                ...t.internalNotes,
-                {
-                  id: `note_${Date.now()}`,
-                  authorName: actorName,
-                  note,
-                  createdAt: nowStamp,
-                },
-              ],
-            }
-          : t
+        t.id === activeTicket.id ? updatedTicket : t
       );
       const next = { ...prev, tickets: nextTickets };
       saveAdminStore(next);
       return next;
     });
+    void persistTicketToFirestore(updatedTicket);
     setTicketInternalNoteText('');
     showToast(lang === 'bn' ? 'অভ্যন্তরীণ অ্যাডমিন নোট সংরক্ষিত হয়েছে।' : 'Internal note added.');
   };
@@ -1661,17 +1777,29 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
   const currentSectionMeta =
     ADMIN_MENU_SECTIONS.find((s) => s.id === activeSection) || ADMIN_MENU_SECTIONS[0];
 
+  const handleDesktopFixedChromeWheel = (e: React.WheelEvent<HTMLElement>) => {
+    if (typeof window === 'undefined' || window.innerWidth < 1024) return;
+    const navEl = adminSidebarNavRef.current;
+    if (navEl && navEl.contains(e.target as Node) && navEl.scrollHeight > navEl.clientHeight) {
+      return;
+    }
+    if (adminScrollContainerRef.current && e.deltaY !== 0) {
+      adminScrollContainerRef.current.scrollBy({ top: e.deltaY });
+    }
+  };
+
   return (
     <div
       data-testid="super-admin-dashboard"
-      className="min-h-screen w-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col lg:flex-row"
+      className="min-h-screen lg:h-screen w-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col lg:flex-row lg:overflow-hidden"
     >
       {/* ===================================================================== */}
       {/* DESKTOP FIXED LEFT SIDEBAR (FLUSH TO LEFT EDGE, NEVER SCROLLS) */}
       {/* ===================================================================== */}
       <aside
         data-testid="admin-desktop-sidebar"
-        className={`hidden lg:flex flex-col shrink-0 lg:sticky lg:top-0 lg:h-screen bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-[width] duration-200 ${
+        onWheel={handleDesktopFixedChromeWheel}
+        className={`hidden lg:flex flex-col shrink-0 lg:h-screen bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-[width] duration-200 ${
           sidebarCollapsed ? 'w-[76px]' : 'w-64'
         }`}
       >
@@ -1709,7 +1837,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
         </div>
 
         {/* 8-Item Navigation Menu (Fixed Inside Sidebar) */}
-        <nav aria-label="Admin Navigation" className="flex-1 p-3 space-y-1.5 overflow-y-auto">
+        <nav
+          ref={adminSidebarNavRef}
+          aria-label="Admin Navigation"
+          className="flex-1 p-3 space-y-1.5 overflow-y-auto"
+        >
           {ADMIN_MENU_SECTIONS.map((sec) => {
             const isActive = activeSection === sec.id;
             return (
@@ -1765,11 +1897,15 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       </aside>
 
       {/* ===================================================================== */}
-      {/* RIGHT MAIN WORKSPACE (NATURAL PAGE SCROLL + STICKY TOP HEADER) */}
+      {/* RIGHT MAIN WORKSPACE (FIXED TOP HEADER + SCROLLABLE CONTENT PANE) */}
       {/* ===================================================================== */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 lg:h-screen lg:overflow-hidden">
         {/* Pinned Top Admin Header */}
-        <header className="sticky top-0 z-20 shrink-0 h-14 lg:h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 flex items-center justify-between gap-2.5">
+        <header
+          data-testid="admin-top-header"
+          onWheel={handleDesktopFixedChromeWheel}
+          className="sticky top-0 z-20 lg:static shrink-0 h-14 lg:h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 flex items-center justify-between gap-2.5"
+        >
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
@@ -1995,8 +2131,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
 
         {/* Scrollable Section Content Container */}
         <div
+          ref={adminScrollContainerRef}
           data-testid="admin-scroll-container"
-          className="flex-1 p-3 sm:p-5 lg:p-6"
+          className="flex-1 lg:overflow-y-auto p-3 sm:p-5 lg:p-6"
         >
           <div className="max-w-7xl mx-auto space-y-5">
           {/* ================================================================= */}

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   Bug,
@@ -17,7 +17,7 @@ import {
 import type { FeedbackCategory, Language, SupportFeedback } from '../types';
 import { formatNumber, VERIFIED_WORKER_HELPLINES } from '../utils/calculations';
 import { formatDateReadable } from '../utils/i18n';
-import { loadAdminStore } from '../utils/adminLogic';
+import { formatFeedbackDateISO, loadAdminStore } from '../utils/adminLogic';
 import {
   filterWorkerFeedback,
   getFeedbackCategoryLabel,
@@ -57,7 +57,20 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
   const selectedCategoryMeta =
     SUPPORT_CATEGORIES.find((c) => c.id === fbCategory) || SUPPORT_CATEGORIES[0];
 
-  // Match any admin ticket replies from the local admin store mirror
+  const [adminStoreVersion, setAdminStoreVersion] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onStoreUpdated = () => setAdminStoreVersion((v) => v + 1);
+    window.addEventListener('storage', onStoreUpdated);
+    window.addEventListener('shromik-sathi-admin-store-updated', onStoreUpdated);
+    return () => {
+      window.removeEventListener('storage', onStoreUpdated);
+      window.removeEventListener('shromik-sathi-admin-store-updated', onStoreUpdated);
+    };
+  }, []);
+
+  // Match any admin ticket replies from the local admin store mirror as a fallback alongside live Firestore replies
   const adminTicketRepliesMap = useMemo(() => {
     const adminStore = loadAdminStore(todayISO);
     const map = new Map<
@@ -70,7 +83,7 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
       }
     }
     return map;
-  }, [todayISO, feedbackList]);
+  }, [todayISO, feedbackList, adminStoreVersion]);
 
   const filteredHistory = useMemo(
     () => filterWorkerFeedback(feedbackList, historyFilter),
@@ -293,12 +306,31 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
           ) : (
             <div className="space-y-3">
               {filteredHistory.map((item) => {
-                const replies = adminTicketRepliesMap.get(item.id) || [];
-                const createdStr =
-                  typeof item.createdAt === 'string'
-                    ? formatDateReadable(item.createdAt.slice(0, 10), lang)
-                    : formatDateReadable(todayISO, lang);
-                const isResolved = item.status === 'resolved';
+                const liveReplies = Array.isArray(item.replies) ? item.replies : [];
+                const localReplies = adminTicketRepliesMap.get(item.id) || [];
+                const combinedRepliesMap = new Map<
+                  string,
+                  { id: string; authorName: string; message: string; createdAt: string }
+                >();
+                for (const r of liveReplies) {
+                  if (r && r.id && r.message) {
+                    combinedRepliesMap.set(r.id, r);
+                  }
+                }
+                for (const r of localReplies) {
+                  if (r && r.id && r.message && !combinedRepliesMap.has(r.id)) {
+                    combinedRepliesMap.set(r.id, r);
+                  }
+                }
+                const replies = Array.from(combinedRepliesMap.values());
+                const createdStr = formatDateReadable(
+                  formatFeedbackDateISO(item.createdAt, todayISO),
+                  lang
+                );
+                const isResolved =
+                  item.status === 'resolved' ||
+                  item.adminStatus === 'resolved' ||
+                  item.adminStatus === 'closed';
 
                 return (
                   <div
@@ -322,6 +354,8 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
                           className={`inline-flex items-center gap-1 text-[11px] font-bold ${
                             isResolved
                               ? 'text-emerald-700 dark:text-emerald-400'
+                              : replies.length > 0 || item.adminStatus === 'in_progress'
+                              ? 'text-sky-700 dark:text-sky-400'
                               : 'text-amber-700 dark:text-amber-400'
                           }`}
                         >
@@ -335,6 +369,10 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
                               ? lang === 'bn'
                                 ? 'সমাধান হয়েছে'
                                 : 'Resolved'
+                              : replies.length > 0 || item.adminStatus === 'in_progress'
+                              ? lang === 'bn'
+                                ? 'উত্তর দেওয়া হয়েছে'
+                                : 'Replied'
                               : lang === 'bn'
                               ? 'অপেক্ষমাণ'
                               : 'Pending'}
@@ -362,6 +400,7 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
                         {replies.map((rep) => (
                           <div
                             key={rep.id}
+                            data-testid={`support-reply-${rep.id}`}
                             className="p-2.5 rounded-lg bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200/70 dark:border-emerald-800/60 text-xs space-y-0.5"
                           >
                             <div className="flex items-center justify-between text-[11px] font-bold text-emerald-800 dark:text-emerald-300">

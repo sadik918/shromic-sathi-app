@@ -465,6 +465,13 @@ const WorkspaceShell: React.FC = () => {
       }
       setAttendanceFocusDate(targetDateISO);
     }
+    if (sub === 'admin_panel' && isAdminUser) {
+      setActiveTab('admin');
+      if (typeof window !== 'undefined' && window.scrollY > 0) {
+        window.scrollTo(0, 0);
+      }
+      return;
+    }
     setActiveTab(tab);
     if (sub) {
       setMoreSubView(sub);
@@ -659,7 +666,7 @@ const WorkspaceShell: React.FC = () => {
 
   if (isAdminUser && activeTab === 'admin') {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+      <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
         {renderPullIndicator()}
         <Suspense
           fallback={

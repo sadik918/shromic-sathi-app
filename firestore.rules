@@ -394,9 +394,12 @@ service cloud.firestore {
           'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'userId', 'workerName', 'category', 'message', 'status',
+          'id', 'userId', 'workerName', 'category', 'message', 'status',
+          'replies', 'adminStatus', 'assignedTo', 'internalNotes',
+          'ticketNumber', 'subject',
           'createdAt', 'updatedAt'
         ]) &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
         data.userId is string && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.workerName is string && data.workerName.size() <= 120 &&
         data.category is string && data.category.size() <= 40 &&
@@ -404,7 +407,13 @@ service cloud.firestore {
         data.message is string && data.message.size() >= 1 && data.message.size() <= 1000 &&
         data.status is string && data.status.size() <= 20 &&
         data.status in ['open', 'resolved'] &&
-        data.createdAt is timestamp &&
+        (!('replies' in data) || (data.replies is list && data.replies.size() <= 100 && (data.replies.size() == 0 || data.replies[0] is map))) &&
+        (!('adminStatus' in data) || (data.adminStatus is string && data.adminStatus.size() <= 30 && data.adminStatus in ['new', 'in_progress', 'waiting_for_user', 'resolved', 'closed'])) &&
+        (!('assignedTo' in data) || (data.assignedTo is string && data.assignedTo.size() <= 120)) &&
+        (!('internalNotes' in data) || (data.internalNotes is list && data.internalNotes.size() <= 100 && (data.internalNotes.size() == 0 || data.internalNotes[0] is map))) &&
+        (!('ticketNumber' in data) || (data.ticketNumber is string && data.ticketNumber.size() <= 40)) &&
+        (!('subject' in data) || (data.subject is string && data.subject.size() <= 200)) &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         data.updatedAt is timestamp;
     }
 
@@ -867,13 +876,20 @@ service cloud.firestore {
     match /feedback/{feedbackId} {
       allow get: if isValidId(feedbackId) && (isOwner(existing().userId) || isAdmin());
       allow list: if (isVerified() && existing().userId == request.auth.uid) || isAdmin();
-      allow create: if isValidId(feedbackId) && isOwner(incoming().userId) &&
-        isValidSupportFeedback(incoming()) &&
-        incoming().status == 'open' &&
-        incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow create: if isValidId(feedbackId) && isValidSupportFeedback(incoming()) && (
+        (
+          isOwner(incoming().userId) &&
+          incoming().status == 'open' &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time
+        ) ||
+        (
+          isAdmin() &&
+          incoming().updatedAt == request.time
+        )
+      );
       allow update: if isValidSupportFeedback(incoming()) && isValidId(feedbackId) &&
         incoming().userId == existing().userId &&
-        incoming().createdAt == existing().createdAt &&
+        (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
         incoming().updatedAt == request.time && (
           isAdmin() ||
           (

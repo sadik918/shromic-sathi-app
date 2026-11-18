@@ -6,7 +6,10 @@ import {
   canAdminPerform,
   computeAdminOverviewMetrics,
   filterAndPaginateUsers,
+  mapLegacyFeedbackToTickets,
+  mergeFeedbackTicketsIntoStore,
   PRIMARY_SUPER_ADMIN_EMAIL,
+  reverseMapTicketCategoryToFeedbackCategory,
   sanitizeAuditMetadata,
   sanitizeUserForAdminDirectory,
   validateRoleChange,
@@ -266,4 +269,66 @@ test('Sample Demo Dataset contains mathematically consistent worker profile, sal
   assert.ok(borrowedLoans.length >= 2);
   assert.ok(overdueLoans.length >= 1);
 });
+
+test('Live Support Feedback mapping and merging preserves multiple Admin replies and status transitions', () => {
+  const initialFeedback = [
+    {
+      id: 'fb_live_101',
+      userId: 'usr_worker_101',
+      workerName: 'সুমাইয়া আক্তার',
+      category: 'calculation_help' as const,
+      message: 'আমার অক্টোবর মাসের ওভারটাইম হিসাব মিলছে না।',
+      status: 'open' as const,
+      adminStatus: 'in_progress' as const,
+      replies: [
+        {
+          id: 'rep_1',
+          authorName: 'সাদিকুল ইসলাম (Super Admin)',
+          message: 'আপনার মূল বেতন ও ওভারটাইম ঘণ্টা যাচাই করা হচ্ছে।',
+          createdAt: '2026-10-28 10:15',
+        },
+      ],
+      createdAt: { seconds: 1761609600 },
+      updatedAt: '2026-10-28T10:15:00.000Z',
+    },
+  ];
+
+  const mapped = mapLegacyFeedbackToTickets(initialFeedback, '2026-10-28');
+  assert.equal(mapped.length, 1);
+  assert.equal(mapped[0].id, 'fb_live_101');
+  assert.equal(mapped[0].status, 'in_progress');
+  assert.equal(mapped[0].replies.length, 1);
+  assert.equal(mapped[0].replies[0].message, 'আপনার মূল বেতন ও ওভারটাইম ঘণ্টা যাচাই করা হচ্ছে।');
+
+  // Simulate Admin sending a second reply via Firestore snapshot update
+  const updatedFeedback = [
+    {
+      ...initialFeedback[0],
+      status: 'resolved' as const,
+      adminStatus: 'resolved' as const,
+      replies: [
+        ...initialFeedback[0].replies,
+        {
+          id: 'rep_2',
+          authorName: 'সাদিকুল ইসলাম (Super Admin)',
+          message: 'আপনার হিসাব সমাধান করে দেওয়া হয়েছে। ধন্যবাদ!',
+          createdAt: '2026-10-28 10:20',
+        },
+      ],
+    },
+  ];
+  const mappedSecond = mapLegacyFeedbackToTickets(updatedFeedback, '2026-10-28');
+  const merged = mergeFeedbackTicketsIntoStore(mapped, mappedSecond);
+  assert.equal(merged.updated, true);
+  assert.equal(merged.tickets.length, 1);
+  assert.equal(merged.tickets[0].status, 'resolved');
+  assert.equal(merged.tickets[0].replies.length, 2);
+  assert.equal(merged.tickets[0].replies[1].id, 'rep_2');
+
+  assert.equal(reverseMapTicketCategoryToFeedbackCategory('salary_calculation'), 'calculation_help');
+  assert.equal(reverseMapTicketCategoryToFeedbackCategory('bug_report'), 'bug_report');
+  assert.equal(reverseMapTicketCategoryToFeedbackCategory('feature_request'), 'feature_request');
+  assert.equal(reverseMapTicketCategoryToFeedbackCategory('other'), 'general');
+});
+
 

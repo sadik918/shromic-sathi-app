@@ -330,14 +330,21 @@
     },
     "SupportFeedback": {
       "title": "SupportFeedback",
-      "description": "Worker feedback or support inquiry.",
+      "description": "Worker feedback or support inquiry with real-time administrator replies.",
       "type": "object",
       "properties": {
+        "id": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "workerName": { "type": "string", "maxLength": 120 },
         "category": { "type": "string", "enum": ["calculation_help", "bug_report", "feature_request", "general"], "maxLength": 40 },
         "message": { "type": "string", "minLength": 1, "maxLength": 1000 },
         "status": { "type": "string", "enum": ["open", "resolved"], "maxLength": 20 },
+        "adminStatus": { "type": "string", "enum": ["new", "in_progress", "waiting_for_user", "resolved", "closed"], "maxLength": 30 },
+        "assignedTo": { "type": "string", "maxLength": 120 },
+        "ticketNumber": { "type": "string", "maxLength": 40 },
+        "subject": { "type": "string", "maxLength": 200 },
+        "replies": { "type": "array" },
+        "internalNotes": { "type": "array" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

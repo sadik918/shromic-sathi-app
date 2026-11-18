@@ -2220,15 +2220,91 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       feedbackQuery,
       (snap) => {
         if (cancelled) return;
-        const remoteFb = snap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<SupportFeedback, 'id'>),
-        }));
+        const normalizeFeedbackTs = (val: unknown): string | undefined => {
+          if (typeof val === 'string' && val.trim()) return val.trim();
+          if (val && typeof val === 'object') {
+            const ts = val as { toDate?: () => Date; seconds?: number };
+            if (typeof ts.toDate === 'function') {
+              try {
+                return ts.toDate().toISOString();
+              } catch {
+                return undefined;
+              }
+            }
+            if (typeof ts.seconds === 'number') {
+              try {
+                return new Date(ts.seconds * 1000).toISOString();
+              } catch {
+                return undefined;
+              }
+            }
+          }
+          return undefined;
+        };
+
+        const remoteFb: SupportFeedback[] = snap.docs.map((d) => {
+          const raw = d.data() as Record<string, any>;
+          return {
+            id: d.id,
+            userId: String(raw.userId || uid),
+            workerName: String(raw.workerName || 'শ্রমিক ব্যবহারকারী'),
+            category: (raw.category as FeedbackCategory) || 'general',
+            message: String(raw.message || ''),
+            status: raw.status === 'resolved' ? 'resolved' : 'open',
+            ...(raw.adminStatus ? { adminStatus: raw.adminStatus } : {}),
+            ...(raw.assignedTo ? { assignedTo: String(raw.assignedTo) } : {}),
+            ...(raw.ticketNumber ? { ticketNumber: String(raw.ticketNumber) } : {}),
+            ...(raw.subject ? { subject: String(raw.subject) } : {}),
+            replies: Array.isArray(raw.replies) ? raw.replies : [],
+            internalNotes: Array.isArray(raw.internalNotes) ? raw.internalNotes : [],
+            createdAt: normalizeFeedbackTs(raw.createdAt) || new Date().toISOString(),
+            updatedAt: normalizeFeedbackTs(raw.updatedAt) || new Date().toISOString(),
+          };
+        });
+
         setFbFeedback((prev) => {
           const merged = remoteFb.length > 0 ? mergeById(prev, remoteFb) : prev;
           saveUserMirror(uid, { feedback: merged }, { fromRemoteSnapshot: true });
           return merged;
         });
+
+        // If online and snapshot is from server, backfill any local-only feedback owned by this user to Firestore
+        if (!snap.metadata.fromCache && (typeof navigator === 'undefined' || navigator.onLine)) {
+          const remoteIds = new Set(snap.docs.map((d) => d.id));
+          const mirrorFb = loadUserMirror(uid).feedback || [];
+          for (const localItem of mirrorFb) {
+            if (
+              localItem &&
+              localItem.id &&
+              localItem.userId === uid &&
+              !remoteIds.has(localItem.id)
+            ) {
+              const safeWorkerName =
+                (
+                  localItem.workerName ||
+                  fbProfileNameRef.current ||
+                  user.displayName ||
+                  user.email?.split('@')[0] ||
+                  'শ্রমিক ব্যবহারকারী'
+                )
+                  .trim()
+                  .slice(0, 120) || 'শ্রমিক ব্যবহারকারী';
+              void setDoc(doc(db, 'feedback', localItem.id), {
+                userId: uid,
+                workerName: safeWorkerName,
+                category: localItem.category || 'general',
+                message: (localItem.message || '').slice(0, 1000) || 'সহায়তা অনুরোধ',
+                status: localItem.status === 'resolved' ? 'resolved' : 'open',
+                adminStatus:
+                  localItem.adminStatus ||
+                  (localItem.status === 'resolved' ? 'resolved' : 'new'),
+                replies: Array.isArray(localItem.replies) ? localItem.replies : [],
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              }).catch(() => {});
+            }
+          }
+        }
       },
       (err) => reportFirestoreFailure(err, OperationType.LIST, 'feedback')
     );
@@ -6061,11 +6137,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     const id = makeStableId('fb');
+    const safeWorkerName =
+      (
+        activeProfile.fullName ||
+        user?.displayName ||
+        user?.email?.split('@')[0] ||
+        'শ্রমিক ব্যবহারকারী'
+      )
+        .trim()
+        .slice(0, 120) || 'শ্রমিক ব্যবহারকারী';
     const sanitized = {
-      workerName: activeProfile.fullName.slice(0, 120),
+      workerName: safeWorkerName,
       category,
       message: message.slice(0, 1000),
       status: 'open' as const,
+      adminStatus: 'new' as const,
+      replies: [] as NonNullable<SupportFeedback['replies']>,
     };
 
     if (isDemoMode || !user) {
@@ -6095,6 +6182,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return next;
     });
 
+    if (
+      (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      !auth.currentUser ||
+      auth.currentUser.uid !== user.uid
+    ) {
+      return;
+    }
+
     await withPendingTracking(async () => {
       const ref = doc(db, 'feedback', id);
       try {
@@ -6120,7 +6215,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const next = {
           ...prev,
           feedback: (prev.feedback || []).map((f) =>
-            f.id === id ? { ...f, status: 'resolved' as const } : f
+            f.id === id ? { ...f, status: 'resolved' as const, adminStatus: 'resolved' as const } : f
           ),
         };
         saveDemoState(next);
@@ -6129,14 +6224,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     setFbFeedback((prev) => {
-      const next = prev.map((f) => (f.id === id ? { ...f, status: 'resolved' as const } : f));
+      const next = prev.map((f) =>
+        f.id === id ? { ...f, status: 'resolved' as const, adminStatus: 'resolved' as const } : f
+      );
       saveUserMirror(user.uid, { feedback: next });
       return next;
     });
+    if (
+      (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      !auth.currentUser ||
+      auth.currentUser.uid !== user.uid
+    ) {
+      return;
+    }
     await withPendingTracking(async () => {
       try {
         await updateDoc(doc(db, 'feedback', id), {
           status: 'resolved',
+          adminStatus: 'resolved',
           updatedAt: serverTimestamp(),
         });
       } catch (err) {

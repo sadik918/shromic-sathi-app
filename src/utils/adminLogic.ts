@@ -1,4 +1,4 @@
-import type { SupportFeedback, WorkerProfile } from '../types';
+import type { FeedbackCategory, SupportFeedback, WorkerProfile } from '../types';
 
 export type AdminRole = 'super_admin' | 'admin' | 'support_moderator';
 
@@ -584,7 +584,56 @@ export function filterAndPaginateUsers(params: {
 /**
  * Converts legacy SupportFeedback items into structured SupportTicketRecords without losing data.
  */
-export function mapLegacyFeedbackToTickets(feedbackList: SupportFeedback[]): SupportTicketRecord[] {
+export function formatFeedbackDateISO(raw: unknown, fallbackDate = '2026-10-28'): string {
+  if (typeof raw === 'string' && raw.trim()) {
+    return raw.trim().slice(0, 10);
+  }
+  if (raw && typeof raw === 'object') {
+    const maybeTs = raw as { toDate?: () => Date; seconds?: number };
+    if (typeof maybeTs.toDate === 'function') {
+      try {
+        return maybeTs.toDate().toISOString().slice(0, 10);
+      } catch {
+        // fall through
+      }
+    }
+    if (typeof maybeTs.seconds === 'number') {
+      try {
+        return new Date(maybeTs.seconds * 1000).toISOString().slice(0, 10);
+      } catch {
+        // fall through
+      }
+    }
+  }
+  return fallbackDate;
+}
+
+export function reverseMapTicketCategoryToFeedbackCategory(
+  category: SupportTicketCategory | string
+): FeedbackCategory {
+  if (
+    category === 'salary_calculation' ||
+    category === 'overtime_attendance' ||
+    category === 'loan_debt'
+  ) {
+    return 'calculation_help';
+  }
+  if (category === 'bug_report' || category === 'offline_sync') {
+    return 'bug_report';
+  }
+  if (category === 'feature_request') {
+    return 'feature_request';
+  }
+  return 'general';
+}
+
+/**
+ * Converts SupportFeedback items (including live Firestore replies/status) into SupportTicketRecords without losing data.
+ */
+export function mapLegacyFeedbackToTickets(
+  feedbackList: SupportFeedback[],
+  todayISO = '2026-10-28'
+): SupportTicketRecord[] {
   return feedbackList.map((fb, idx) => {
     const categoryMap: Record<string, SupportTicketCategory> = {
       calculation_help: 'salary_calculation',
@@ -592,34 +641,166 @@ export function mapLegacyFeedbackToTickets(feedbackList: SupportFeedback[]): Sup
       feature_request: 'feature_request',
       general: 'other',
     };
-    const createdStr =
-      typeof fb.createdAt === 'string'
-        ? fb.createdAt.slice(0, 10)
-        : '2026-10-25';
+    const createdStr = formatFeedbackDateISO(fb.createdAt, todayISO);
+    const updatedStr = formatFeedbackDateISO(fb.updatedAt, createdStr);
+    const replies = Array.isArray(fb.replies)
+      ? fb.replies
+          .filter((r) => r && typeof r.message === 'string' && r.message.trim().length > 0)
+          .map((r, rIdx) => ({
+            id: typeof r.id === 'string' && r.id ? r.id : `rep_${fb.id}_${rIdx}`,
+            authorName:
+              typeof r.authorName === 'string' && r.authorName ? r.authorName : 'Support Team',
+            message: r.message,
+            createdAt: typeof r.createdAt === 'string' && r.createdAt ? r.createdAt : updatedStr,
+          }))
+      : [];
+    const internalNotes = Array.isArray(fb.internalNotes)
+      ? fb.internalNotes
+          .filter((n) => n && typeof n.note === 'string' && n.note.trim().length > 0)
+          .map((n, nIdx) => ({
+            id: typeof n.id === 'string' && n.id ? n.id : `note_${fb.id}_${nIdx}`,
+            authorName:
+              typeof n.authorName === 'string' && n.authorName ? n.authorName : 'Support Team',
+            note: n.note,
+            createdAt: typeof n.createdAt === 'string' && n.createdAt ? n.createdAt : updatedStr,
+          }))
+      : [];
+    const validAdminStatuses = new Set<SupportTicketStatus>([
+      'new',
+      'in_progress',
+      'waiting_for_user',
+      'resolved',
+      'closed',
+    ]);
+    let status: SupportTicketStatus = 'new';
+    if (fb.status === 'resolved') {
+      status = fb.adminStatus === 'closed' ? 'closed' : 'resolved';
+    } else if (fb.adminStatus && validAdminStatuses.has(fb.adminStatus)) {
+      status = fb.adminStatus;
+    } else if (replies.length > 0) {
+      status = 'in_progress';
+    }
+
     return {
       id: fb.id,
-      ticketNumber: `TKT-${String(2001 + idx)}`,
+      ticketNumber: fb.ticketNumber || `TKT-${String(2001 + idx)}`,
       userId: fb.userId,
       workerName: fb.workerName || 'শ্রমিক ব্যবহারকারী',
       category: categoryMap[fb.category] || 'other',
-      status: fb.status === 'resolved' ? 'resolved' : 'new',
+      status,
       subject:
-        fb.category === 'calculation_help'
+        fb.subject ||
+        (fb.category === 'calculation_help'
           ? 'বেতন ও ওভারটাইম হিসাব সংক্রান্ত প্রশ্ন'
           : fb.category === 'bug_report'
           ? 'অ্যাপ কারিগরি সমস্যা রিপোর্ট'
           : fb.category === 'feature_request'
           ? 'নতুন ফিচার যুক্ত করার অনুরোধ'
-          : 'সাধারণ সহায়তা অনুরোধ',
+          : 'সাধারণ সহায়তা অনুরোধ'),
       message: fb.message,
-      assignedTo: 'Support Team',
-      internalNotes: [],
-      replies: [],
+      assignedTo: fb.assignedTo || 'Support Team',
+      internalNotes,
+      replies,
       createdAt: createdStr,
-      updatedAt: createdStr,
-      resolvedAt: fb.status === 'resolved' ? createdStr : undefined,
+      updatedAt: updatedStr,
+      resolvedAt: status === 'resolved' || status === 'closed' ? updatedStr : undefined,
     };
   });
+}
+
+/**
+ * Merges live Firestore SupportTicketRecords into existing AdminStoreState tickets,
+ * preserving and deduplicating replies, internalNotes, and status transitions.
+ */
+export function mergeFeedbackTicketsIntoStore(
+  existingTickets: SupportTicketRecord[],
+  incomingFeedbackTickets: SupportTicketRecord[]
+): { tickets: SupportTicketRecord[]; updated: boolean } {
+  if (incomingFeedbackTickets.length === 0) {
+    return { tickets: existingTickets, updated: false };
+  }
+  let updated = false;
+  const existingMap = new Map(existingTickets.map((t) => [t.id, t]));
+  const nextTickets = [...existingTickets];
+
+  for (const incoming of incomingFeedbackTickets) {
+    const existing = existingMap.get(incoming.id);
+    if (!existing) {
+      nextTickets.unshift(incoming);
+      existingMap.set(incoming.id, incoming);
+      updated = true;
+      continue;
+    }
+
+    // Merge replies deduplicated by id
+    const replyMap = new Map<
+      string,
+      { id: string; authorName: string; message: string; createdAt: string }
+    >();
+    for (const r of existing.replies || []) {
+      if (r && r.id) replyMap.set(r.id, r);
+    }
+    for (const r of incoming.replies || []) {
+      if (r && r.id) replyMap.set(r.id, r);
+    }
+    const mergedReplies = Array.from(replyMap.values());
+
+    // Merge internalNotes deduplicated by id
+    const noteMap = new Map<
+      string,
+      { id: string; authorName: string; note: string; createdAt: string }
+    >();
+    for (const n of existing.internalNotes || []) {
+      if (n && n.id) noteMap.set(n.id, n);
+    }
+    for (const n of incoming.internalNotes || []) {
+      if (n && n.id) noteMap.set(n.id, n);
+    }
+    const mergedNotes = Array.from(noteMap.values());
+
+    const mergedStatus: SupportTicketStatus =
+      incoming.status !== 'new'
+        ? incoming.status
+        : existing.status !== 'new' && mergedReplies.length > 0
+        ? existing.status
+        : incoming.status;
+
+    const mergedAssignedTo =
+      incoming.assignedTo && incoming.assignedTo !== 'Support Team'
+        ? incoming.assignedTo
+        : existing.assignedTo || 'Support Team';
+
+    const hasDiff =
+      mergedReplies.length !== (existing.replies || []).length ||
+      mergedNotes.length !== (existing.internalNotes || []).length ||
+      mergedStatus !== existing.status ||
+      mergedAssignedTo !== existing.assignedTo ||
+      incoming.message !== existing.message ||
+      incoming.workerName !== existing.workerName;
+
+    if (hasDiff) {
+      const idx = nextTickets.findIndex((t) => t.id === incoming.id);
+      if (idx >= 0) {
+        nextTickets[idx] = {
+          ...existing,
+          workerName: incoming.workerName || existing.workerName,
+          message: incoming.message || existing.message,
+          status: mergedStatus,
+          assignedTo: mergedAssignedTo,
+          replies: mergedReplies,
+          internalNotes: mergedNotes,
+          updatedAt: incoming.updatedAt || existing.updatedAt,
+          resolvedAt:
+            mergedStatus === 'resolved' || mergedStatus === 'closed'
+              ? incoming.resolvedAt || existing.resolvedAt || incoming.updatedAt
+              : existing.resolvedAt,
+        };
+        updated = true;
+      }
+    }
+  }
+
+  return { tickets: nextTickets, updated };
 }
 
 export interface AdminStoreState {
@@ -1113,6 +1294,9 @@ export function loadAdminStore(todayISO = '2026-10-28'): AdminStoreState {
 export function saveAdminStore(state: AdminStoreState): void {
   try {
     localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(state));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('shromik-sathi-admin-store-updated'));
+    }
   } catch {
     // ignore storage errors
   }
