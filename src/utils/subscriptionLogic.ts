@@ -1060,6 +1060,140 @@ export function createDefaultExpiringSubscription(
   };
 }
 
+export type CheckoutPaymentMethod = 'bkash' | 'nagad';
+
+export interface SubscriptionCheckoutSummary {
+  originalAmountBdt: number;
+  discountAmountBdt: number;
+  finalAmountBdt: number;
+  appliedCouponCode: string | null;
+  couponErrorBn?: string;
+}
+
+/**
+ * Pure calculation for Step 1 (Order + Coupon) & Step 2 (Payment Gateway).
+ * Ensures switching billing cycles cleanly re-evaluates any applied coupon code.
+ */
+export function calculateSubscriptionCheckoutSummary(params: {
+  plan: SubscriptionPlan;
+  billingCycle: 'monthly' | 'yearly';
+  couponCode?: string;
+  coupons: CouponCode[];
+}): SubscriptionCheckoutSummary {
+  const { plan, billingCycle, couponCode, coupons } = params;
+  const originalAmountBdt =
+    billingCycle === 'yearly'
+      ? Math.max(0, Number(plan.pricing?.yearlyPriceBdt ?? (plan.priceBDT || 0) * 10))
+      : Math.max(0, Number(plan.pricing?.monthlyPriceBdt ?? plan.priceBDT ?? 0));
+
+  const cleanCoupon = (couponCode || '').trim().toUpperCase();
+  if (!cleanCoupon) {
+    return {
+      originalAmountBdt,
+      discountAmountBdt: 0,
+      finalAmountBdt: originalAmountBdt,
+      appliedCouponCode: null,
+    };
+  }
+
+  const couponCheck = validateCouponCode(cleanCoupon, plan.id, originalAmountBdt, coupons);
+  if (!couponCheck.valid) {
+    return {
+      originalAmountBdt,
+      discountAmountBdt: 0,
+      finalAmountBdt: originalAmountBdt,
+      appliedCouponCode: null,
+      couponErrorBn: couponCheck.errorBn,
+    };
+  }
+
+  return {
+    originalAmountBdt,
+    discountAmountBdt: couponCheck.discountAmountBdt,
+    finalAmountBdt: couponCheck.finalAmountBdt,
+    appliedCouponCode: cleanCoupon,
+  };
+}
+
+export interface PaymentGatewayMeta {
+  method: CheckoutPaymentMethod;
+  labelBn: string;
+  ussdCode: string;
+  sendStepSubtextBn: string;
+  headerPillBn: string;
+  senderInputLabelBn: string;
+  merchantNumber: string;
+  accentHex: string;
+  accentDarkHex: string;
+}
+
+/**
+ * Normalizes a Bangladeshi mobile wallet number entered in Admin or Checkout forms.
+ */
+export function normalizeGatewayPhoneNumber(raw: string | undefined | null): string {
+  const cleaned = String(raw || '').replace(/[^\d+]/g, '').trim();
+  if (!cleaned) return '';
+  return cleaned.slice(0, 15);
+}
+
+/**
+ * Resolves active merchant wallet number and branding metadata for bKash or Nagad checkout.
+ */
+export function getPaymentGatewayMeta(params: {
+  method: CheckoutPaymentMethod;
+  config?: Partial<GlobalSubscriptionConfig> | null;
+}): PaymentGatewayMeta {
+  const { method, config } = params;
+  const rawBkash = (config?.paymentNumberBkash || '').trim();
+  const rawNagad = (config?.paymentNumberNagad || '').trim();
+
+  if (method === 'nagad') {
+    return {
+      method: 'nagad',
+      labelBn: 'নগদ',
+      ussdCode: '*167#',
+      sendStepSubtextBn: 'নগদ অ্যাপ অথবা *167# ডায়াল করে',
+      headerPillBn: 'নগদ অ্যাপে Send Money বেছে নিন',
+      senderInputLabelBn: 'আপনার নগদ নাম্বার দিন',
+      merchantNumber:
+        rawNagad && rawNagad !== '01XXXXXXXXX'
+          ? rawNagad
+          : rawNagad || DEFAULT_GLOBAL_SUBSCRIPTION_CONFIG.paymentNumberNagad,
+      accentHex: '#F76D1B',
+      accentDarkHex: '#E52D27',
+    };
+  }
+
+  return {
+    method: 'bkash',
+    labelBn: 'বিকাশ',
+    ussdCode: '*247#',
+    sendStepSubtextBn: 'বিকাশ অ্যাপ অথবা *247# ডায়াল করে',
+    headerPillBn: 'বিকাশ অ্যাপে Send Money বেছে নিন',
+    senderInputLabelBn: 'আপনার বিকাশ নাম্বার দিন',
+    merchantNumber:
+      rawBkash && rawBkash !== '01XXXXXXXXX'
+        ? rawBkash
+        : rawBkash || DEFAULT_GLOBAL_SUBSCRIPTION_CONFIG.paymentNumberBkash,
+    accentHex: '#E2136E',
+    accentDarkHex: '#B80B56',
+  };
+}
+
+/**
+ * Deterministic short numeric order reference for display in checkout banner (e.g. #279).
+ */
+export function generateSubscriptionOrderNumber(planId: string, cycle: 'monthly' | 'yearly', seed = 279): string {
+  let hash = seed;
+  const key = `${planId}:${cycle}`;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) % 900;
+  }
+  const num = 100 + hash;
+  return `#${toBengaliDigits(num)}`;
+}
+
+
 /**
  * Main Rule for Subscription Banner & Renewal Notice:
  * 1. If Admin Master Switch is DISABLED (`!isSystemEnabled`):

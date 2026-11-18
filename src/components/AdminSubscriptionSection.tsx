@@ -33,6 +33,7 @@ import {
   DEFAULT_SUBSCRIPTION_PLANS,
   formatBdtPrice,
   getBengaliPlanName,
+  normalizeGatewayPhoneNumber,
   toBengaliDigits,
   validatePlanInput,
   type CouponCode,
@@ -119,9 +120,69 @@ export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> =
     subscriptionConfig.renewalWarningDays ?? 5
   );
 
+  // Admin-configurable bKash & Nagad payment numbers state
+  const [bkashNumberInput, setBkashNumberInput] = useState<string>(
+    subscriptionConfig.paymentNumberBkash || '01XXXXXXXXX'
+  );
+  const [nagadNumberInput, setNagadNumberInput] = useState<string>(
+    subscriptionConfig.paymentNumberNagad || '01XXXXXXXXX'
+  );
+  const [isSavingPaymentNumbers, setIsSavingPaymentNumbers] = useState(false);
+
   React.useEffect(() => {
     setWarningDaysInput(subscriptionConfig.renewalWarningDays ?? 5);
   }, [subscriptionConfig.renewalWarningDays]);
+
+  React.useEffect(() => {
+    setBkashNumberInput(subscriptionConfig.paymentNumberBkash || '01XXXXXXXXX');
+    setNagadNumberInput(subscriptionConfig.paymentNumberNagad || '01XXXXXXXXX');
+  }, [subscriptionConfig.paymentNumberBkash, subscriptionConfig.paymentNumberNagad]);
+
+  const handleSavePaymentNumbers = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) {
+      showError(lang === 'bn' ? 'অনুমতি নেই: শুধুমাত্র অ্যাডমিন নম্বর পরিবর্তন করতে পারেন।' : 'Permission denied.');
+      return;
+    }
+    const cleanBkash = normalizeGatewayPhoneNumber(bkashNumberInput);
+    const cleanNagad = normalizeGatewayPhoneNumber(nagadNumberInput);
+    if (!cleanBkash || cleanBkash.length < 11) {
+      showError(lang === 'bn' ? 'অনুগ্রহ করে সঠিক ১১ ডিজিটের বিকাশ নম্বর দিন।' : 'Please enter a valid 11-digit bKash number.');
+      return;
+    }
+    if (!cleanNagad || cleanNagad.length < 11) {
+      showError(lang === 'bn' ? 'অনুগ্রহ করে সঠিক ১১ ডিজিটের নগদ নম্বর দিন।' : 'Please enter a valid 11-digit Nagad number.');
+      return;
+    }
+    setIsSavingPaymentNumbers(true);
+    try {
+      await updateGlobalSubscriptionConfig({
+        paymentNumberBkash: cleanBkash,
+        paymentNumberNagad: cleanNagad,
+      });
+      setBkashNumberInput(cleanBkash);
+      setNagadNumberInput(cleanNagad);
+      recordAudit({
+        actionType: 'settings_updated',
+        targetId: 'subscription_payment_numbers',
+        targetLabel: 'bKash & Nagad Payment Numbers',
+        reason: `Updated gateway numbers (bKash: ${cleanBkash}, Nagad: ${cleanNagad})`,
+        metadata: {
+          paymentNumberBkash: cleanBkash,
+          paymentNumberNagad: cleanNagad,
+        },
+      });
+      showToast(
+        lang === 'bn'
+          ? 'বিকাশ ও নগদ পেমেন্ট নম্বর সফলভাবে আপডেট করা হয়েছে।'
+          : 'bKash & Nagad payment numbers updated.'
+      );
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'পেমেন্ট নম্বর সংরক্ষণ ব্যর্থ হয়েছে');
+    } finally {
+      setIsSavingPaymentNumbers(false);
+    }
+  };
 
   const handleSaveWarningDays = async (daysVal: number) => {
     const cleanDays = Math.max(1, Math.min(365, Math.round(Number(daysVal) || 5)));
@@ -590,6 +651,76 @@ export const AdminSubscriptionSection: React.FC<AdminSubscriptionSectionProps> =
           </div>
         </div>
       </div>
+
+      {/* ===================================================================== */}
+      {/* ADMIN PAYMENT GATEWAY NUMBERS (বিকাশ ও নগদ নম্বর ম্যানেজমেন্ট) */}
+      {/* ===================================================================== */}
+      <form
+        data-testid="admin-payment-numbers-card"
+        onSubmit={handleSavePaymentNumbers}
+        className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h4 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-[#E2136E]" />
+              <span>পেমেন্ট নম্বর সেটিংস (বিকাশ ও নগদ)</span>
+            </h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              সাবস্ক্রিপশন কেনা ও রিনিউ করার সময় ব্যবহারকারীরা এই নম্বরগুলোতে Send Money করবে
+            </p>
+          </div>
+          <button
+            type="submit"
+            data-testid="admin-save-payment-numbers-btn"
+            disabled={isSavingPaymentNumbers}
+            className="min-h-[40px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer shrink-0"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>{isSavingPaymentNumbers ? 'সংরক্ষণ হচ্ছে...' : 'নম্বর সংরক্ষণ করুন'}</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div className="p-3 rounded-xl bg-pink-50/60 dark:bg-pink-950/20 border border-pink-200/80 dark:border-pink-800/60 space-y-1.5">
+            <label
+              htmlFor="admin-bkash-number-input"
+              className="font-extrabold text-[#D12053] dark:text-[#FF5DA2] flex items-center justify-between"
+            >
+              <span>বিকাশ পার্সোনাল নম্বর (bKash)</span>
+              <span className="text-[10px] font-semibold opacity-80">*247#</span>
+            </label>
+            <input
+              id="admin-bkash-number-input"
+              data-testid="admin-bkash-number-input"
+              type="tel"
+              placeholder="01XXXXXXXXX"
+              value={bkashNumberInput}
+              onChange={(e) => setBkashNumberInput(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-pink-300/80 dark:border-pink-800 bg-white dark:bg-slate-900 font-mono text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#E2136E]"
+            />
+          </div>
+
+          <div className="p-3 rounded-xl bg-orange-50/60 dark:bg-orange-950/20 border border-orange-200/80 dark:border-orange-800/60 space-y-1.5">
+            <label
+              htmlFor="admin-nagad-number-input"
+              className="font-extrabold text-[#E52D27] dark:text-[#FF8A3D] flex items-center justify-between"
+            >
+              <span>নগদ পার্সোনাল নম্বর (Nagad)</span>
+              <span className="text-[10px] font-semibold opacity-80">*167#</span>
+            </label>
+            <input
+              id="admin-nagad-number-input"
+              data-testid="admin-nagad-number-input"
+              type="tel"
+              placeholder="01XXXXXXXXX"
+              value={nagadNumberInput}
+              onChange={(e) => setNagadNumberInput(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-orange-300/80 dark:border-orange-800 bg-white dark:bg-slate-900 font-mono text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#F76D1B]"
+            />
+          </div>
+        </div>
+      </form>
 
       {/* Sub-Tabs Navigation */}
       <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs font-semibold overflow-x-auto">

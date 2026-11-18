@@ -8,6 +8,10 @@ import {
   filterPublishedPlans,
   computeSubscriptionRenewalNotice,
   createDefaultExpiringSubscription,
+  calculateSubscriptionCheckoutSummary,
+  getPaymentGatewayMeta,
+  normalizeGatewayPhoneNumber,
+  DEFAULT_COUPON_CODES,
   DEFAULT_GLOBAL_SUBSCRIPTION_CONFIG,
   DEFAULT_SUBSCRIPTION_PLANS,
   type UserSubscriptionRecord,
@@ -81,6 +85,7 @@ test('4. Starter Free plan restricts reports export, while Pro plan permits it',
     plans: DEFAULT_SUBSCRIPTION_PLANS,
     feature: 'reports',
     requireExport: true,
+    todayISO: '2026-10-15',
   });
   assert.equal(freeExport.allowed, false, 'Free plan must block export');
 
@@ -98,6 +103,7 @@ test('4. Starter Free plan restricts reports export, while Pro plan permits it',
     plans: DEFAULT_SUBSCRIPTION_PLANS,
     feature: 'reports',
     requireExport: true,
+    todayISO: '2026-10-15',
   });
   assert.equal(proExport.allowed, true, 'Pro plan must permit export');
 });
@@ -119,6 +125,7 @@ test('5. Pro VIP plan has unlimited quotas and all capabilities', () => {
     currentCount: 500, // Large number
     requireAdvanced: true,
     requireExport: true,
+    todayISO: '2026-10-15',
   });
   assert.equal(vipVault.allowed, true);
 });
@@ -330,5 +337,59 @@ test('15. MAIN RULE — Admin custom warningThresholdDays (e.g., 10 days) contro
   assert.equal(with10DayRule.bannerMode, 'expiring_soon');
   assert.equal(with10DayRule.daysRemaining, 8);
 });
+
+test('16. calculateSubscriptionCheckoutSummary recalculates coupon discount accurately when switching monthly and yearly billing cycles', () => {
+  const proPlan = DEFAULT_SUBSCRIPTION_PLANS[1]; // monthly: 49, yearly: 490
+  const monthlyWithCoupon = calculateSubscriptionCheckoutSummary({
+    plan: proPlan,
+    billingCycle: 'monthly',
+    couponCode: 'SHROMIK50',
+    coupons: DEFAULT_COUPON_CODES,
+  });
+  assert.equal(monthlyWithCoupon.originalAmountBdt, 49);
+  assert.equal(monthlyWithCoupon.discountAmountBdt, 25); // 50% rounded
+  assert.equal(monthlyWithCoupon.finalAmountBdt, 24);
+  assert.equal(monthlyWithCoupon.appliedCouponCode, 'SHROMIK50');
+
+  const yearlyWithCoupon = calculateSubscriptionCheckoutSummary({
+    plan: proPlan,
+    billingCycle: 'yearly',
+    couponCode: 'SHROMIK50',
+    coupons: DEFAULT_COUPON_CODES,
+  });
+  assert.equal(yearlyWithCoupon.originalAmountBdt, 490);
+  assert.equal(yearlyWithCoupon.discountAmountBdt, 245);
+  assert.equal(yearlyWithCoupon.finalAmountBdt, 245);
+  assert.equal(yearlyWithCoupon.appliedCouponCode, 'SHROMIK50');
+});
+
+test('17. getPaymentGatewayMeta returns Admin configured bKash/Nagad numbers and method-specific USSD hints', () => {
+  const customConfig = {
+    ...DEFAULT_GLOBAL_SUBSCRIPTION_CONFIG,
+    paymentNumberBkash: '01711223344',
+    paymentNumberNagad: '01855667788',
+  };
+
+  const bkashMeta = getPaymentGatewayMeta({ method: 'bkash', config: customConfig });
+  assert.equal(bkashMeta.labelBn, 'বিকাশ');
+  assert.equal(bkashMeta.merchantNumber, '01711223344');
+  assert.equal(bkashMeta.ussdCode, '*247#');
+  assert.match(bkashMeta.sendStepSubtextBn, /\*247#/);
+  assert.equal(bkashMeta.senderInputLabelBn, 'আপনার বিকাশ নাম্বার দিন');
+
+  const nagadMeta = getPaymentGatewayMeta({ method: 'nagad', config: customConfig });
+  assert.equal(nagadMeta.labelBn, 'নগদ');
+  assert.equal(nagadMeta.merchantNumber, '01855667788');
+  assert.equal(nagadMeta.ussdCode, '*167#');
+  assert.match(nagadMeta.sendStepSubtextBn, /\*167#/);
+  assert.equal(nagadMeta.senderInputLabelBn, 'আপনার নগদ নাম্বার দিন');
+});
+
+test('18. normalizeGatewayPhoneNumber strips spaces/dashes cleanly without losing digits', () => {
+  assert.equal(normalizeGatewayPhoneNumber(' 01402-173832 '), '01402173832');
+  assert.equal(normalizeGatewayPhoneNumber('+880 1711 223344'), '+8801711223344');
+  assert.equal(normalizeGatewayPhoneNumber(''), '');
+});
+
 
 

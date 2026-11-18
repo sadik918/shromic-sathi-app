@@ -238,6 +238,73 @@ export interface AuthUserSummaryForDirectory {
   metadata?: { creationTime?: string | null };
 }
 
+const GENERIC_PLACEHOLDER_NAMES = new Set([
+  'শ্রমিক ব্যবহারকারী',
+  'শ্রমিক বন্ধু',
+  'শ্রমিক',
+  'নতুন শ্রমিক',
+  'garment worker',
+  'worker',
+  'worker user',
+  'user',
+  'guest',
+  'unknown',
+]);
+
+export function isGenericWorkerPlaceholderName(name?: string | null): boolean {
+  const trimmed = (name || '').trim().toLowerCase();
+  if (!trimmed) return true;
+  return GENERIC_PLACEHOLDER_NAMES.has(trimmed);
+}
+
+export function resolveBestUserDisplayName(
+  candidates: Array<string | null | undefined>,
+  email?: string | null
+): string {
+  const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const emailPrefix =
+    cleanEmail && cleanEmail.includes('@')
+      ? cleanEmail.split('@')[0].trim().toLowerCase()
+      : '';
+  const strippedEmailPrefix = emailPrefix
+    .replace(/[._-]+/g, ' ')
+    .replace(/\d+$/g, '')
+    .trim();
+
+  // Pass 1: Real human name (not empty, not a generic placeholder, and not just the raw/stripped email local-part)
+  for (const raw of candidates) {
+    const c = (raw || '').trim();
+    if (!c || isGenericWorkerPlaceholderName(c)) continue;
+    const lowerC = c.toLowerCase();
+    if (cleanEmail && lowerC === cleanEmail) continue;
+    if (emailPrefix && lowerC === emailPrefix) continue;
+    const strippedC = lowerC.replace(/[._-]+/g, ' ').replace(/\d+$/g, '').trim();
+    if (strippedEmailPrefix && strippedC === strippedEmailPrefix && !c.includes(' ')) continue;
+    return c;
+  }
+
+  // Pass 2: Non-placeholder candidate (such as email prefix if no full name is set)
+  for (const raw of candidates) {
+    const c = (raw || '').trim();
+    if (!c || isGenericWorkerPlaceholderName(c)) continue;
+    return c;
+  }
+
+  // Pass 3: Derive from email prefix if available
+  if (typeof email === 'string' && email.includes('@')) {
+    const prefix = email.split('@')[0].trim();
+    if (prefix) return prefix;
+  }
+
+  // Pass 4: Any non-empty candidate or fallback
+  for (const raw of candidates) {
+    const c = (raw || '').trim();
+    if (c) return c;
+  }
+
+  return 'Garment Worker';
+}
+
 /**
  * Builds rule-compliant create or update payloads for `/userDirectory/{uid}`.
  * Keeps financial fields strictly excluded and never injects forbidden keys (`suspensionReason` on create,
@@ -251,11 +318,7 @@ export function buildUserDirectoryCreatePayload(params: {
   offlineSyncState?: 'synced' | 'pending' | 'error';
 }): Record<string, unknown> {
   const { user, displayName, language, todayISO, offlineSyncState = 'synced' } = params;
-  const fallbackName =
-    (displayName || '').trim() ||
-    (user.displayName || '').trim() ||
-    (user.email ? user.email.split('@')[0] : '') ||
-    'Garment Worker';
+  const fallbackName = resolveBestUserDisplayName([displayName, user.displayName], user.email);
   const safeDisplayName = truncateUtf8(fallbackName, 120) || 'Garment Worker';
   const safeEmail = truncateUtf8((user.email || '').trim(), 150);
   const registeredAt = truncateUtf8(
@@ -295,12 +358,10 @@ export function buildUserDirectoryOwnerUpdatePayload(params: {
     todayISO,
     offlineSyncState = 'synced',
   } = params;
-  const fallbackName =
-    (displayName || '').trim() ||
-    (user.displayName || '').trim() ||
-    (existingDisplayName || '').trim() ||
-    (user.email ? user.email.split('@')[0] : '') ||
-    'Garment Worker';
+  const fallbackName = resolveBestUserDisplayName(
+    [displayName, user.displayName, existingDisplayName],
+    user.email
+  );
 
   return {
     displayName: truncateUtf8(fallbackName, 120) || 'Garment Worker',
@@ -329,12 +390,11 @@ export function mapFirestoreUserDirectoryDoc(
     data.lastSeenDate ?? data.updatedAt,
     registeredAt
   );
-  const displayName =
-    typeof data.displayName === 'string' && data.displayName.trim().length > 0
-      ? data.displayName.trim()
-      : typeof data.email === 'string' && data.email.includes('@')
-      ? data.email.split('@')[0]
-      : 'Garment Worker';
+  const email = typeof data.email === 'string' ? data.email.trim() : '';
+  const displayName = resolveBestUserDisplayName(
+    [typeof data.displayName === 'string' ? data.displayName : undefined],
+    email
+  );
 
   const accountStatus: 'active' | 'suspended' =
     data.accountStatus === 'suspended' ? 'suspended' : 'active';
@@ -355,7 +415,7 @@ export function mapFirestoreUserDirectoryDoc(
   return {
     uid,
     displayName,
-    email: typeof data.email === 'string' ? data.email : '',
+    email,
     accountStatus,
     emailVerified: Boolean(data.emailVerified),
     registeredAt,
@@ -374,6 +434,55 @@ export function mapFirestoreUserDirectoryDoc(
     ...(createdAtMs !== undefined ? { createdAtMs } : {}),
     suspensionReason,
     statusHistory: Array.isArray(data.statusHistory) ? data.statusHistory : [],
+  };
+}
+
+/**
+ * Maps a `/users/{uid}` WorkerProfile document into a non-financial `AdminUserDirectoryEntry`
+ * so users whose `/userDirectory/{uid}` entry was delayed or had a placeholder name still
+ * appear in Admin User Management with their real `fullName`.
+ */
+export function mapWorkerProfileDocToDirectoryEntry(
+  docId: string,
+  data: Record<string, unknown>,
+  fallbackDateISO: string
+): AdminUserDirectoryEntry {
+  const uid =
+    typeof data.userId === 'string' && data.userId.trim().length > 0
+      ? data.userId.trim()
+      : docId;
+  const registeredAt = mapFirestoreTimestampOrStringToDateISO(
+    data.createdAt ?? data.joiningDate,
+    fallbackDateISO
+  );
+  const lastSeenDate = mapFirestoreTimestampOrStringToDateISO(
+    data.updatedAt ?? data.createdAt,
+    registeredAt
+  );
+  const email = typeof data.email === 'string' ? data.email.trim() : '';
+  const displayName = resolveBestUserDisplayName(
+    [
+      typeof data.fullName === 'string' ? data.fullName : undefined,
+      typeof data.displayName === 'string' ? data.displayName : undefined,
+    ],
+    email
+  );
+  const createdAtMs = extractTimestampMillis(data.createdAt) ?? extractTimestampMillis(data.updatedAt);
+
+  return {
+    uid,
+    displayName,
+    email,
+    accountStatus: 'active',
+    emailVerified: Boolean(data.emailVerified),
+    registeredAt,
+    lastSeenDate,
+    authProvider: data.authProvider === 'google.com' ? 'google.com' : 'password',
+    language: data.language === 'en' ? 'en' : 'bn',
+    offlineSyncState: 'synced',
+    appVersion: SHROMIK_SATHI_APP_VERSION,
+    ...(createdAtMs !== undefined ? { createdAtMs } : {}),
+    statusHistory: [],
   };
 }
 
@@ -400,10 +509,43 @@ export function mergeUserDirectories(
   for (const remote of firestoreUsers) {
     if (!remote?.uid) continue;
     const prev = map.get(remote.uid);
+    const mergedEmail = (remote.email || prev?.email || '').trim();
+    const mergedDisplayName = resolveBestUserDisplayName(
+      [remote.displayName, prev?.displayName],
+      mergedEmail
+    );
+    const mergedRegisteredAt =
+      prev?.registeredAt && remote.registeredAt
+        ? prev.registeredAt < remote.registeredAt
+          ? prev.registeredAt
+          : remote.registeredAt
+        : remote.registeredAt || prev?.registeredAt || '';
+    const mergedLastSeenDate =
+      prev?.lastSeenDate && remote.lastSeenDate
+        ? prev.lastSeenDate > remote.lastSeenDate
+          ? prev.lastSeenDate
+          : remote.lastSeenDate
+        : remote.lastSeenDate || prev?.lastSeenDate || mergedRegisteredAt;
+
     map.set(remote.uid, {
+      ...prev,
       ...remote,
+      displayName: mergedDisplayName,
+      email: mergedEmail,
+      registeredAt: mergedRegisteredAt,
+      lastSeenDate: mergedLastSeenDate,
+      accountStatus:
+        remote.accountStatus === 'suspended' || prev?.accountStatus === 'suspended'
+          ? 'suspended'
+          : 'active',
+      emailVerified: Boolean(remote.emailVerified || prev?.emailVerified),
+      authProvider:
+        remote.authProvider === 'google.com' || prev?.authProvider === 'google.com'
+          ? 'google.com'
+          : remote.authProvider || prev?.authProvider || 'password',
       role: remote.role ?? prev?.role,
       createdAtMs: remote.createdAtMs ?? prev?.createdAtMs,
+      suspensionReason: remote.suspensionReason ?? prev?.suspensionReason,
       statusHistory:
         remote.statusHistory && remote.statusHistory.length > 0
           ? remote.statusHistory
@@ -615,7 +757,11 @@ export function normalizeWorkerProfileForFirestore(
 ): Record<string, unknown> {
   const cleaned = stripUndefinedAndMetaFields(raw, ['userId']);
   const todayISO = getBstTodayISO();
-  const fullNameRaw = String(cleaned.fullName || fallbackDisplayName || 'শ্রমিক ব্যবহারকারী').trim();
+  const fullNameRaw = resolveBestUserDisplayName([
+    typeof cleaned.fullName === 'string' ? cleaned.fullName : undefined,
+    fallbackDisplayName,
+    'শ্রমিক ব্যবহারকারী',
+  ]);
   const fullName = truncateUtf8(fullNameRaw || 'শ্রমিক ব্যবহারকারী', 120) || 'Worker';
 
   const empTypeRaw = String(cleaned.employmentType || 'permanent');

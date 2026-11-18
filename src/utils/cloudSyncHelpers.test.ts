@@ -11,9 +11,11 @@ import {
   mapFirebaseAuthError,
   mapFirestoreTimestampOrStringToDateISO,
   mapFirestoreUserDirectoryDoc,
+  mapWorkerProfileDocToDirectoryEntry,
   mergeUserDirectories,
   PRIMARY_SUPER_ADMIN_EMAIL,
   resolveAuthProvider,
+  resolveBestUserDisplayName,
   resolveVerifiedAdminSession,
   stripUndefinedAndMetaFields,
   normalizeWorkerProfileForFirestore,
@@ -374,3 +376,46 @@ test('normalizeSubcollectionPayloadForFirestore sanitizes legacy records and lon
   assert.equal(exp.amount, 0);
   assert.ok(utf8ByteLength(String(exp.description)) <= 250);
 });
+
+test('resolveBestUserDisplayName and mergeUserDirectories prefer real Google/profile names over শ্রমিক ব্যবহারকারী and email prefixes', () => {
+  // When fbProfile had default placeholder 'শ্রমিক ব্যবহারকারী', real Google displayName wins
+  assert.equal(
+    resolveBestUserDisplayName(
+      ['শ্রমিক ব্যবহারকারী', 'Aisha Mukta', 'aishamukta000'],
+      'aishamukta000@gmail.com'
+    ),
+    'Aisha Mukta'
+  );
+
+  // When directory has email prefix 'aishamukta000' and /users profile has 'আয়েশা মুক্তা', merging picks the real name
+  const dirEntry = mapFirestoreUserDirectoryDoc(
+    'uid_aisha',
+    {
+      uid: 'uid_aisha',
+      displayName: 'aishamukta000',
+      email: 'aishamukta000@gmail.com',
+      authProvider: 'google.com',
+      emailVerified: true,
+      registeredAt: '2026-11-17',
+      lastSeenDate: '2026-11-17',
+    },
+    '2026-11-17'
+  );
+  const profileEntry = mapWorkerProfileDocToDirectoryEntry(
+    'uid_aisha',
+    {
+      userId: 'uid_aisha',
+      fullName: 'আয়েশা মুক্তা',
+      joiningDate: '2026-11-17',
+    },
+    '2026-11-17'
+  );
+
+  const merged = mergeUserDirectories([dirEntry], [profileEntry], { firestoreConnected: true });
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].uid, 'uid_aisha');
+  assert.equal(merged[0].displayName, 'আয়েশা মুক্তা');
+  assert.equal(merged[0].email, 'aishamukta000@gmail.com');
+  assert.equal(merged[0].authProvider, 'google.com');
+});
+

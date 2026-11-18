@@ -4,8 +4,124 @@
  * Imported into the Workbox Service Worker via workbox.importScripts: ['/alarm-sw-helper.js']
  */
 
+const APP_SHELL_CACHE = 'shromik-sathi-app-shell-v1';
 const SW_ALARM_DB_NAME = 'ShromikSathiSWAlarmsDB';
 const SW_ALARM_STORE = 'alarms_state';
+
+async function cacheAppShellHtml() {
+  try {
+    const cache = await caches.open(APP_SHELL_CACHE);
+    const urls = ['/', '/index.html'];
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { cache: 'no-cache' });
+        if (res && res.ok) {
+          await cache.put(url, res.clone());
+        }
+      } catch {
+        // ignore if already offline during install
+      }
+    }
+  } catch {
+    // ignore cache errors
+  }
+}
+
+async function resolveCachedAppShell() {
+  try {
+    const shellCache = await caches.open(APP_SHELL_CACHE);
+    const directIndex = await shellCache.match('/index.html', { ignoreSearch: true });
+    if (directIndex) return directIndex;
+    const directRoot = await shellCache.match('/', { ignoreSearch: true });
+    if (directRoot) return directRoot;
+  } catch {
+    // ignore
+  }
+  try {
+    const anyIndex = await caches.match('/index.html', { ignoreSearch: true });
+    if (anyIndex) return anyIndex;
+    const anyRoot = await caches.match('/', { ignoreSearch: true });
+    if (anyRoot) return anyRoot;
+    const allCacheNames = await caches.keys();
+    for (const name of allCacheNames) {
+      const c = await caches.open(name);
+      const keys = await c.keys();
+      for (const req of keys) {
+        if (req.url.endsWith('/index.html') || req.url.endsWith('/')) {
+          const matched = await c.match(req);
+          if (matched) return matched;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+  event.waitUntil(cacheAppShellHtml());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    (async () => {
+      if (self.clients && self.clients.claim) {
+        await self.clients.claim();
+      }
+      await cacheAppShellHtml();
+    })()
+  );
+});
+
+// Intercept top-level HTML navigation / reload requests BEFORE Workbox so offline reloads or pull-to-refresh
+// NEVER fall through to the browser's native "You are offline" error page.
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  const acceptHeader = req.headers ? req.headers.get('accept') || '' : '';
+  const isHtmlNavigation =
+    req.mode === 'navigate' ||
+    (req.destination === 'document' && acceptHeader.includes('text/html'));
+
+  if (!isHtmlNavigation) return;
+
+  event.respondWith(
+    (async () => {
+      // If browser already knows it's offline, serve cached app shell immediately
+      if (typeof self.navigator !== 'undefined' && self.navigator.onLine === false) {
+        const cachedOffline = await resolveCachedAppShell();
+        if (cachedOffline) return cachedOffline;
+      }
+
+      try {
+        const networkResponse = await fetch(req);
+        if (networkResponse && networkResponse.ok) {
+          try {
+            const shellCache = await caches.open(APP_SHELL_CACHE);
+            await shellCache.put('/index.html', networkResponse.clone());
+            await shellCache.put('/', networkResponse.clone());
+          } catch {
+            // ignore cache write error
+          }
+          return networkResponse;
+        }
+        const fallbackOnBadStatus = await resolveCachedAppShell();
+        if (fallbackOnBadStatus) return fallbackOnBadStatus;
+        return networkResponse;
+      } catch {
+        const cachedFallback = await resolveCachedAppShell();
+        if (cachedFallback) return cachedFallback;
+        return new Response(
+          '<!doctype html><html lang="bn"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>শ্রমিক সাথী</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+          { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+        );
+      }
+    })()
+  );
+});
 
 function openSwAlarmDB() {
   return new Promise((resolve, reject) => {
@@ -49,6 +165,23 @@ async function loadAlarmsFromSW() {
   }
 }
 
+async function saveLastRingingAlarmInSW(alarm) {
+  try {
+    const db = await openSwAlarmDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SW_ALARM_STORE, 'readwrite');
+      tx.objectStore(SW_ALARM_STORE).put(
+        alarm ? { alarm, triggeredAt: Date.now() } : null,
+        'last_ringing_alarm'
+      );
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // ignore
+  }
+}
+
 function getBstNowParts() {
   // Bangladesh Standard Time is UTC+6
   const bstMs = Date.now() + 6 * 60 * 60 * 1000;
@@ -72,9 +205,10 @@ function computeNextTriggerTimestampMs(alarm) {
   const targetM = parseInt(parts[1], 10);
   if (isNaN(targetH) || isNaN(targetM)) return null;
 
-  const repeatDays = Array.isArray(alarm.repeatDays) && alarm.repeatDays.length > 0
-    ? alarm.repeatDays
-    : [0, 1, 2, 3, 4, 5, 6];
+  const repeatDays =
+    Array.isArray(alarm.repeatDays) && alarm.repeatDays.length > 0
+      ? alarm.repeatDays
+      : [0, 1, 2, 3, 4, 5, 6];
 
   const nowMs = Date.now();
   const bstOffsetMs = 6 * 60 * 60 * 1000;
@@ -95,7 +229,7 @@ function computeNextTriggerTimestampMs(alarm) {
       0
     );
     const targetUtcMs = targetBstMs - bstOffsetMs;
-    if (targetUtcMs > nowMs + 5000) {
+    if (targetUtcMs > nowMs + 1000) {
       return targetUtcMs;
     }
   }
@@ -112,7 +246,6 @@ async function scheduleHardwareNotificationTriggers(alarms) {
       return;
     }
 
-    // Clear previously scheduled trigger notifications first
     const existing = await self.registration.getNotifications({ includeTriggered: true });
     for (const notif of existing) {
       if (notif.tag && notif.tag.startsWith('shromik-scheduled-alarm-')) {
@@ -126,16 +259,17 @@ async function scheduleHardwareNotificationTriggers(alarms) {
       if (!nextMs) continue;
 
       await self.registration.showNotification(`⏰ ${alarm.label || 'ডিউটি অ্যালার্ম'}`, {
-        body: `সময়: ${alarm.time} — শ্রমিক সাথী অ্যালার্ম বাজছে! অ্যাপ খুলে বন্ধ বা স্নুজ করুন।`,
+        body: `সময়: ${alarm.time} — শ্রমিক সাথী অ্যালার্ম বাজছে!`,
         icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
         badge: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
         tag: `shromik-scheduled-alarm-${alarm.id}`,
         renotify: true,
         requireInteraction: true,
-        vibrate: [500, 200, 500, 200, 800, 200, 800],
+        silent: false,
+        vibrate: [800, 200, 800, 200, 1000, 200, 1000, 200, 1200],
         showTrigger: new self.TimestampTrigger(nextMs),
         data: {
-          url: '/?tab=more&sub=alarm&ring=1',
+          url: `/?tab=more&sub=alarm&ring=1&alarmId=${encodeURIComponent(alarm.id)}`,
           alarmId: alarm.id,
         },
         actions: [
@@ -145,11 +279,54 @@ async function scheduleHardwareNotificationTriggers(alarms) {
       });
     }
   } catch {
-    // TimestampTrigger is experimental on some browsers; fallback handled below
+    // TimestampTrigger fallback handled by SW precision timers below
   }
 }
 
 let lastSwTriggeredKey = '';
+let swPrecisionTimer = null;
+let swIntervalTimer = null;
+
+async function fireSwAlarmNotificationAndWakeClients(matching, dateISO) {
+  await saveLastRingingAlarmInSW(matching);
+
+  await self.registration.showNotification(`⏰ ${matching.label || 'ডিউটি অ্যালার্ম'}`, {
+    body: `সময়: ${matching.time} — আপনার নির্ধারিত অ্যালার্ম বাজছে!`,
+    icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+    badge: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+    tag: `shromik-live-alarm-${matching.id}-${dateISO}`,
+    renotify: true,
+    requireInteraction: true,
+    silent: false,
+    vibrate: [800, 200, 800, 200, 1000, 200, 1000, 200, 1200],
+    data: {
+      url: `/?tab=more&sub=alarm&ring=1&alarmId=${encodeURIComponent(matching.id)}`,
+      alarmId: matching.id,
+    },
+    actions: [
+      { action: 'dismiss', title: 'অ্যালার্ম বন্ধ করুন' },
+      { action: 'snooze_5', title: '৫ মিনিট স্নুজ' },
+    ],
+  });
+
+  const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  if (clientList.length > 0) {
+    for (const client of clientList) {
+      client.postMessage({
+        type: 'SW_ALARM_TRIGGERED',
+        alarm: matching,
+      });
+    }
+  } else if (self.clients.openWindow) {
+    try {
+      await self.clients.openWindow(
+        `/?tab=more&sub=alarm&ring=1&alarmId=${encodeURIComponent(matching.id)}`
+      );
+    } catch {
+      // Browser may require notification tap to open window
+    }
+  }
+}
 
 async function checkAndFireSwAlarms() {
   try {
@@ -171,36 +348,57 @@ async function checkAndFireSwAlarms() {
 
     if (matching) {
       lastSwTriggeredKey = triggerKey;
-      await self.registration.showNotification(`⏰ ${matching.label || 'ডিউটি অ্যালার্ম'}`, {
-        body: `সময়: ${matching.time} — আপনার নির্ধারিত অ্যালার্ম বাজছে!`,
-        icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
-        badge: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
-        tag: `shromik-live-alarm-${matching.id}-${bst.dateISO}`,
-        renotify: true,
-        requireInteraction: true,
-        vibrate: [600, 200, 600, 200, 900, 200, 900],
-        data: {
-          url: '/?tab=more&sub=alarm&ring=1',
-          alarmId: matching.id,
-        },
-        actions: [
-          { action: 'dismiss', title: 'অ্যালার্ম বন্ধ করুন' },
-          { action: 'snooze_5', title: '৫ মিনিট স্নুজ' },
-        ],
-      });
-
-      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const client of clientList) {
-        client.postMessage({
-          type: 'SW_ALARM_TRIGGERED',
-          alarm: matching,
-        });
-      }
+      await fireSwAlarmNotificationAndWakeClients(matching, bst.dateISO);
     }
   } catch {
     // ignore errors
   }
 }
+
+function armSwPrecisionTimers(alarms) {
+  if (swPrecisionTimer) {
+    clearTimeout(swPrecisionTimer);
+    swPrecisionTimer = null;
+  }
+  if (swIntervalTimer) {
+    clearInterval(swIntervalTimer);
+    swIntervalTimer = null;
+  }
+
+  const enabledAlarms = Array.isArray(alarms) ? alarms.filter((a) => a && a.isEnabled) : [];
+  if (enabledAlarms.length === 0) return;
+
+  // Periodic 5s check while SW stays alive
+  swIntervalTimer = setInterval(() => {
+    void checkAndFireSwAlarms();
+  }, 5000);
+
+  // Find the nearest upcoming alarm timestamp and set an exact timeout
+  let nearestMs = null;
+  for (const alarm of enabledAlarms) {
+    const nextMs = computeNextTriggerTimestampMs(alarm);
+    if (nextMs && (nearestMs === null || nextMs < nearestMs)) {
+      nearestMs = nextMs;
+    }
+  }
+
+  if (nearestMs !== null) {
+    const delayMs = Math.max(500, nearestMs - Date.now());
+    if (delayMs <= 24 * 60 * 60 * 1000) {
+      swPrecisionTimer = setTimeout(() => {
+        void checkAndFireSwAlarms().then(() => {
+          void loadAlarmsFromSW().then((latest) => armSwPrecisionTimers(latest));
+        });
+      }, delayMs);
+    }
+  }
+}
+
+// Re-arm timers whenever the Service Worker wakes up
+void loadAlarmsFromSW().then((alarms) => {
+  armSwPrecisionTimers(alarms);
+  void checkAndFireSwAlarms();
+});
 
 self.addEventListener('message', (event) => {
   const data = event.data;
@@ -211,6 +409,7 @@ self.addEventListener('message', (event) => {
     event.waitUntil(
       (async () => {
         await saveAlarmsInSW(alarms);
+        armSwPrecisionTimers(alarms);
         await scheduleHardwareNotificationTriggers(alarms);
         await checkAndFireSwAlarms();
       })()
@@ -218,24 +417,30 @@ self.addEventListener('message', (event) => {
   } else if (data.type === 'SHOW_ALARM_NOTIFICATION' && data.alarm) {
     const alarm = data.alarm;
     event.waitUntil(
-      self.registration.showNotification(`⏰ ${alarm.label || 'ডিউটি অ্যালার্ম'}`, {
-        body: `সময়: ${alarm.time} — শ্রমিক সাথী অ্যালার্ম বাজছে!`,
-        icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
-        badge: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
-        tag: `shromik-ringing-${alarm.id}`,
-        renotify: true,
-        requireInteraction: true,
-        vibrate: [600, 200, 600, 200, 900, 200, 900],
-        data: {
-          url: '/?tab=more&sub=alarm&ring=1',
-          alarmId: alarm.id,
-        },
-        actions: [
-          { action: 'dismiss', title: 'অ্যালার্ম বন্ধ করুন' },
-          { action: 'snooze_5', title: '৫ মিনিট স্নুজ' },
-        ],
-      })
+      (async () => {
+        await saveLastRingingAlarmInSW(alarm);
+        await self.registration.showNotification(`⏰ ${alarm.label || 'ডিউটি অ্যালার্ম'}`, {
+          body: `সময়: ${alarm.time} — শ্রমিক সাথী অ্যালার্ম বাজছে!`,
+          icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+          badge: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+          tag: `shromik-ringing-${alarm.id}`,
+          renotify: true,
+          requireInteraction: true,
+          silent: false,
+          vibrate: [800, 200, 800, 200, 1000, 200, 1000, 200, 1200],
+          data: {
+            url: `/?tab=more&sub=alarm&ring=1&alarmId=${encodeURIComponent(alarm.id)}`,
+            alarmId: alarm.id,
+          },
+          actions: [
+            { action: 'dismiss', title: 'অ্যালার্ম বন্ধ করুন' },
+            { action: 'snooze_5', title: '৫ মিনিট স্নুজ' },
+          ],
+        });
+      })()
     );
+  } else if (data.type === 'CLEAR_RINGING_ALARM') {
+    event.waitUntil(saveLastRingingAlarmInSW(null));
   } else if (data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
@@ -260,6 +465,9 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil(
     (async () => {
+      if (action === 'dismiss') {
+        await saveLastRingingAlarmInSW(null);
+      }
       const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of clientList) {
         client.postMessage({
@@ -272,8 +480,8 @@ self.addEventListener('notificationclick', (event) => {
           return;
         }
       }
-      if (self.clients.openWindow) {
-        await self.clients.openWindow(notifData.url || '/?tab=more&sub=alarm');
+      if (action !== 'dismiss' && self.clients.openWindow) {
+        await self.clients.openWindow(notifData.url || '/?tab=more&sub=alarm&ring=1');
       }
     })()
   );

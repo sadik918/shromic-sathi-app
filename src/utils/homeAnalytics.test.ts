@@ -227,6 +227,28 @@ describe('Home Overview Analytics Aggregation', () => {
       }),
       'Kamal Hossain'
     );
+
+    assert.equal(
+      resolveWorkerDisplayName({
+        profileFullName: 'শ্রমিক',
+        authDisplayName: 'আয়েশা মুক্তা',
+        localAccountName: null,
+        email: 'aishamukta000@gmail.com',
+        lang: 'bn',
+      }),
+      'আয়েশা মুক্তা'
+    );
+
+    assert.equal(
+      resolveWorkerDisplayName({
+        profileFullName: 'aishamukta000',
+        authDisplayName: 'Aisha Mukta',
+        localAccountName: null,
+        email: 'aishamukta000@gmail.com',
+        lang: 'bn',
+      }),
+      'Aisha Mukta'
+    );
   });
 
   it('computes Overtime Pie Analytics monthly and weekly distributions cleanly', () => {

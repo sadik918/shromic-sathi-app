@@ -35,7 +35,12 @@ const AdminDashboardView = lazy(() =>
 const VoiceEntryModal = lazy(() =>
   import('./components/VoiceEntryModal').then((m) => ({ default: m.VoiceEntryModal }))
 );
-import { getCustomToneFromStorage, playAlarmTone, stopAlarmSound } from './utils/alarmAudio';
+import {
+  getCustomToneFromStorage,
+  LATEST_CUSTOM_TONE_KEY,
+  playAlarmTone,
+  stopAlarmSound,
+} from './utils/alarmAudio';
 import {
   notifyAlarmRingingViaServiceWorker,
   startBackgroundAlarmGuard,
@@ -202,25 +207,58 @@ const WorkspaceShell: React.FC = () => {
     void syncAlarmsWithServiceWorker(activeAlarms);
     const hasEnabled = activeAlarms.some((a) => a.isEnabled);
     if (hasEnabled) {
-      startBackgroundAlarmGuard(() => activeAlarms);
+      startBackgroundAlarmGuard(
+        () => activeAlarms,
+        (triggered) => {
+          setRingingAlarm(triggered);
+        }
+      );
     }
   }, [user, isDemoMode, cloudDataLoaded, syncedAlarms]);
 
-  // Listen for Service Worker background alarm triggers & notification button actions
+  // Listen for Service Worker background alarm triggers, notification button actions, and ?ring=1 wakeup URL
   useEffect(() => {
+    const triggerRingingWithCachedAudio = async (triggered: AlarmItem) => {
+      setRingingAlarm(triggered);
+      const stored = await getCustomToneFromStorage(
+        triggered.customToneId || LATEST_CUSTOM_TONE_KEY
+      );
+      playAlarmTone('custom_device', stored?.dataUrl, true);
+    };
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('ring') === '1') {
+        const alarmId = params.get('alarmId');
+        const activeAlarms =
+          user && !isDemoMode
+            ? cloudDataLoaded
+              ? syncedAlarms
+              : loadSavedAlarms(user.uid)
+            : loadSavedAlarms();
+        const found =
+          (alarmId ? activeAlarms.find((a) => a.id === alarmId) : undefined) ||
+          activeAlarms.find((a) => a.isEnabled);
+        if (found) {
+          void triggerRingingWithCachedAudio(found);
+        }
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.delete('ring');
+          url.searchParams.delete('alarmId');
+          window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
     const onSwMessage = async (event: MessageEvent) => {
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'SW_ALARM_TRIGGERED' && data.alarm) {
-        const triggered: AlarmItem = data.alarm;
-        setRingingAlarm(triggered);
-        let customUrl: string | undefined;
-        if (triggered.toneId === 'custom_device' && triggered.customToneId) {
-          const stored = await getCustomToneFromStorage(triggered.customToneId);
-          customUrl = stored?.dataUrl;
-        }
-        playAlarmTone(triggered.toneId, customUrl, true);
+        await triggerRingingWithCachedAudio(data.alarm as AlarmItem);
       } else if (data.type === 'SW_NOTIFICATION_ACTION') {
         if (data.action === 'dismiss') {
           stopAlarmSound();
@@ -228,6 +266,17 @@ const WorkspaceShell: React.FC = () => {
         } else if (data.action === 'snooze_5') {
           stopAlarmSound();
           setRingingAlarm(null);
+        } else if (data.action === 'open' && data.alarmId) {
+          const activeAlarms =
+            user && !isDemoMode
+              ? cloudDataLoaded
+                ? syncedAlarms
+                : loadSavedAlarms(user.uid)
+              : loadSavedAlarms();
+          const found = activeAlarms.find((a) => a.id === data.alarmId);
+          if (found) {
+            await triggerRingingWithCachedAudio(found);
+          }
         }
       }
     };
@@ -235,7 +284,7 @@ const WorkspaceShell: React.FC = () => {
     return () => {
       navigator.serviceWorker.removeEventListener('message', onSwMessage);
     };
-  }, []);
+  }, [user, isDemoMode, cloudDataLoaded, syncedAlarms]);
 
   // Synchronize online accurate time on startup and periodically
   useEffect(() => {
@@ -270,12 +319,10 @@ const WorkspaceShell: React.FC = () => {
         setLastTriggeredKey(triggerKey);
         setRingingAlarm(matching);
         void notifyAlarmRingingViaServiceWorker(matching);
-        let customUrl: string | undefined;
-        if (matching.toneId === 'custom_device' && matching.customToneId) {
-          const stored = await getCustomToneFromStorage(matching.customToneId);
-          customUrl = stored?.dataUrl;
-        }
-        playAlarmTone(matching.toneId, customUrl, true);
+        const stored = await getCustomToneFromStorage(
+          matching.customToneId || LATEST_CUSTOM_TONE_KEY
+        );
+        playAlarmTone('custom_device', stored?.dataUrl, true);
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
           navigator.vibrate([400, 200, 400, 200, 400]);
         }
@@ -302,10 +349,11 @@ const WorkspaceShell: React.FC = () => {
           label: `${matchingCalRem.title}${parsed.cleanNotes ? ` — ${parsed.cleanNotes}` : ''} (${parsed.offsetLabelBn})`,
           isEnabled: true,
           repeatDays: [currentDay],
-          toneId: parsed.toneId,
+          toneId: 'custom_device',
         };
         setRingingAlarm(remAlarmItem);
-        playAlarmTone(parsed.toneId, undefined, true);
+        const stored = await getCustomToneFromStorage(LATEST_CUSTOM_TONE_KEY);
+        playAlarmTone('custom_device', stored?.dataUrl, true);
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
           navigator.vibrate([400, 200, 400, 200, 400]);
         }
@@ -319,22 +367,33 @@ const WorkspaceShell: React.FC = () => {
   const handleDismissRingingAlarm = () => {
     stopAlarmSound();
     setRingingAlarm(null);
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then((reg) => {
+          (navigator.serviceWorker.controller || reg.active)?.postMessage({
+            type: 'CLEAR_RINGING_ALARM',
+          });
+        })
+        .catch(() => {});
+    }
   };
 
   const handleSnoozeRingingAlarm = (minutes = 5) => {
     const current = ringingAlarm;
     stopAlarmSound();
     setRingingAlarm(null);
-    showToast(lang === 'bn' ? `অ্যালার্ম ${minutes} মিনিটের জন্য স্নুজ করা হয়েছে` : `Alarm snoozed for ${minutes} min`);
+    showToast(
+      lang === 'bn'
+        ? `অ্যালার্ম ${minutes} মিনিটের জন্য স্নুজ করা হয়েছে`
+        : `Alarm snoozed for ${minutes} min`
+    );
     setTimeout(async () => {
       if (current) {
         setRingingAlarm(current);
-        let customUrl: string | undefined;
-        if (current.toneId === 'custom_device' && current.customToneId) {
-          const stored = await getCustomToneFromStorage(current.customToneId);
-          customUrl = stored?.dataUrl;
-        }
-        playAlarmTone(current.toneId, customUrl, true);
+        const stored = await getCustomToneFromStorage(
+          current.customToneId || LATEST_CUSTOM_TONE_KEY
+        );
+        playAlarmTone('custom_device', stored?.dataUrl, true);
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
           navigator.vibrate([400, 200, 400, 200, 400]);
         }
@@ -418,9 +477,102 @@ const WorkspaceShell: React.FC = () => {
     { id: 'more', label: dict.navMore, icon: <Menu className="w-5 h-5" /> },
   ];
 
+  const pullStartYRef = React.useRef<number | null>(null);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+
+  const handleTouchStartPull = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (typeof window === 'undefined' || window.scrollY > 2 || isPullRefreshing) {
+      pullStartYRef.current = null;
+      return;
+    }
+    const touch = e.touches[0];
+    if (touch) {
+      pullStartYRef.current = touch.clientY;
+    }
+  };
+
+  const handleTouchMovePull = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (pullStartYRef.current === null || isPullRefreshing) return;
+    if (typeof window !== 'undefined' && window.scrollY > 2) {
+      pullStartYRef.current = null;
+      setPullDistance(0);
+      return;
+    }
+    const touch = e.touches[0];
+    if (!touch) return;
+    const deltaY = touch.clientY - pullStartYRef.current;
+    if (deltaY > 12) {
+      const damped = Math.min(84, Math.round((deltaY - 12) * 0.45));
+      setPullDistance(damped);
+    } else if (pullDistance > 0) {
+      setPullDistance(0);
+    }
+  };
+
+  const handleTouchEndPull = async () => {
+    if (pullStartYRef.current === null) return;
+    pullStartYRef.current = null;
+    if (pullDistance >= 52 && !isPullRefreshing) {
+      setIsPullRefreshing(true);
+      setPullDistance(48);
+      try {
+        if (typeof navigator === 'undefined' || navigator.onLine) {
+          await syncOfflineDataToCloud(true);
+        } else {
+          await new Promise((r) => window.setTimeout(r, 350));
+        }
+        setToastMsg(
+          lang === 'bn'
+            ? typeof navigator !== 'undefined' && !navigator.onLine
+              ? 'অফলাইন ডেটা আপ টু ডেট আছে'
+              : 'তথ্য রিফ্রেশ সম্পন্ন হয়েছে'
+            : typeof navigator !== 'undefined' && !navigator.onLine
+            ? 'Offline data is up to date'
+            : 'Data refreshed'
+        );
+        window.setTimeout(() => setToastMsg(''), 2200);
+      } finally {
+        setIsPullRefreshing(false);
+        setPullDistance(0);
+      }
+    } else {
+      setPullDistance(0);
+    }
+  };
+
   if (isAdminUser && activeTab === 'admin') {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+      <div
+        onTouchStart={handleTouchStartPull}
+        onTouchMove={handleTouchMovePull}
+        onTouchEnd={handleTouchEndPull}
+        className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+      >
+        {(pullDistance > 0 || isPullRefreshing) && (
+          <div
+            data-testid="in-app-pull-refresh-indicator"
+            className="flex items-center justify-center overflow-hidden bg-emerald-50/90 dark:bg-emerald-950/70 border-b border-emerald-200/70 dark:border-emerald-800/70 text-emerald-800 dark:text-emerald-200 text-xs font-bold transition-all no-print"
+            style={{ height: `${Math.max(pullDistance, isPullRefreshing ? 40 : 0)}px` }}
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 mr-1.5 ${isPullRefreshing || pullDistance >= 52 ? 'animate-spin' : ''}`}
+            />
+            <span>
+              {isPullRefreshing
+                ? lang === 'bn'
+                  ? 'রিফ্রেশ হচ্ছে...'
+                  : 'Refreshing...'
+                : pullDistance >= 52
+                ? lang === 'bn'
+                  ? 'ছেড়ে দিলে রিফ্রেশ হবে'
+                  : 'Release to refresh'
+                : lang === 'bn'
+                ? 'রিফ্রেশ করতে নিচে টানুন'
+                : 'Pull down to refresh'}
+            </span>
+          </div>
+        )}
         <Suspense
           fallback={
             <div className="min-h-screen flex items-center justify-center text-xs font-bold text-slate-500">
@@ -441,7 +593,36 @@ const WorkspaceShell: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col pb-20 md:pb-8">
+    <div
+      onTouchStart={handleTouchStartPull}
+      onTouchMove={handleTouchMovePull}
+      onTouchEnd={handleTouchEndPull}
+      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col pb-20 md:pb-8"
+    >
+      {(pullDistance > 0 || isPullRefreshing) && (
+        <div
+          data-testid="in-app-pull-refresh-indicator"
+          className="flex items-center justify-center overflow-hidden bg-emerald-50/90 dark:bg-emerald-950/70 border-b border-emerald-200/70 dark:border-emerald-800/70 text-emerald-800 dark:text-emerald-200 text-xs font-bold transition-all no-print"
+          style={{ height: `${Math.max(pullDistance, isPullRefreshing ? 40 : 0)}px` }}
+        >
+          <RefreshCw
+            className={`w-3.5 h-3.5 mr-1.5 ${isPullRefreshing || pullDistance >= 52 ? 'animate-spin' : ''}`}
+          />
+          <span>
+            {isPullRefreshing
+              ? lang === 'bn'
+                ? 'রিফ্রেশ হচ্ছে...'
+                : 'Refreshing...'
+              : pullDistance >= 52
+              ? lang === 'bn'
+                ? 'ছেড়ে দিলে রিফ্রেশ হবে'
+                : 'Release to refresh'
+              : lang === 'bn'
+              ? 'রিফ্রেশ করতে নিচে টানুন'
+              : 'Pull down to refresh'}
+          </span>
+        </div>
+      )}
       {/* Top Navigation Bar: Logo + App Title on Left, Desktop Nav in Center, Month + Lang Icon + Theme Icon on Right */}
       <header className="sticky top-0 z-30 h-14 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 no-print">
         <div className="max-w-7xl mx-auto h-full px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-4 lg:gap-6">

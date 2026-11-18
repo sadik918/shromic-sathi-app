@@ -12,7 +12,6 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
-  Smartphone,
   Trash2,
   Upload,
   Volume2,
@@ -20,15 +19,14 @@ import {
 } from 'lucide-react';
 import type { AlarmItem } from '../types';
 import {
-  ALARM_TONE_OPTIONS,
   type AlarmToneId,
   getCustomToneFromStorage,
+  LATEST_CUSTOM_TONE_KEY,
   playAlarmTone,
   saveCustomToneToStorage,
   stopAlarmSound,
 } from '../utils/alarmAudio';
 import {
-  registerPhoneSystemHardwareAlarm,
   requestAlarmNotificationPermission,
   startBackgroundAlarmGuard,
   syncAlarmsWithServiceWorker,
@@ -58,41 +56,22 @@ const QUICK_LABELS = [
   'ঘুম থেকে ওঠা',
 ];
 
-const DEFAULT_ALARMS: AlarmItem[] = [
-  {
-    id: 'default-1',
-    time: '07:00',
-    label: 'সকাল শিফট ও কারখানায় রওনা',
-    isEnabled: true,
-    repeatDays: [6, 0, 1, 2, 3, 4], // Saturday to Thursday
-    toneId: 'factory_siren',
-  },
-  {
-    id: 'default-2',
-    time: '17:00',
-    label: 'ওভারটাইম ডিউটি শুরু',
-    isEnabled: true,
-    repeatDays: [6, 0, 1, 2, 3, 4],
-    toneId: 'digital_beep',
-  },
-];
-
 function getAlarmStorageKey(uid?: string): string {
   return uid ? `${STORAGE_KEY}_${uid}` : STORAGE_KEY;
 }
 
-// Load alarms from storage
+// Load alarms from storage (strictly scoped by UID when authenticated; no pre-set default audio alarms)
 export function loadSavedAlarms(uid?: string): AlarmItem[] {
   try {
     const raw = localStorage.getItem(getAlarmStorageKey(uid));
-    if (!raw) return uid ? [] : DEFAULT_ALARMS;
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      return parsed.length > 0 ? parsed : uid ? [] : DEFAULT_ALARMS;
+      return parsed.filter((a) => a && typeof a.id === 'string' && (!uid || !a.userId || a.userId === uid));
     }
-    return uid ? [] : DEFAULT_ALARMS;
+    return [];
   } catch {
-    return uid ? [] : DEFAULT_ALARMS;
+    return [];
   }
 }
 
@@ -146,6 +125,7 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
     }
     void syncAlarmsWithServiceWorker(alarms);
   }, [alarms, isCloudAlarmMode, syncedAlarms, user?.uid]);
+
   const [currentTime, setCurrentTime] = useState<string>('');
   const [isOnlineTimeSynced, setIsOnlineTimeSynced] = useState<boolean>(false);
   const [isSyncingTime, setIsSyncingTime] = useState<boolean>(false);
@@ -153,27 +133,21 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [previewingToneId, setPreviewingToneId] = useState<string | null>(null);
   const [customToneCache, setCustomToneCache] = useState<Record<string, string>>({});
+  const [latestCachedTone, setLatestCachedTone] = useState<{
+    id: string;
+    name: string;
+    dataUrl: string;
+  } | null>(null);
   const [toastMsg, setToastMsg] = useState('');
 
-  // Form State
+  // Form State (Always custom_device uploaded from phone cache; no default synthesized tones)
   const [formTime, setFormTime] = useState('07:00');
   const [formLabel, setFormLabel] = useState('সকাল শিফট শুরু');
   const [formRepeatDays, setFormRepeatDays] = useState<number[]>([6, 0, 1, 2, 3, 4]);
-  const [formToneId, setFormToneId] = useState<AlarmToneId>('factory_siren');
+  const [formToneId, setFormToneId] = useState<AlarmToneId>('custom_device');
+  const [formCustomToneId, setFormCustomToneId] = useState<string>('');
   const [formCustomToneName, setFormCustomToneName] = useState('');
   const [formCustomToneDataUrl, setFormCustomToneDataUrl] = useState('');
-  const [syncWithPhoneClock, setSyncWithPhoneClock] = useState(false);
-
-  const handleSetPhoneHardwareAlarm = (alarm: AlarmItem) => {
-    startBackgroundAlarmGuard(() => alarms);
-    void requestAlarmNotificationPermission();
-    const method = registerPhoneSystemHardwareAlarm(alarm);
-    if (method === 'android_intent') {
-      showToast('ফোনের সিস্টেম ঘড়িতে (Clock App) অ্যালার্মটি খুলেছে — সেভ নিশ্চিত করুন');
-    } else {
-      showToast('ফোনের সিস্টেম অ্যালার্ম ফাইল ডাউনলোড হয়েছে (অ্যাপ/ফোন বন্ধ থাকলেও বাজবে)');
-    }
-  };
 
   const handleManualSyncTime = async () => {
     setIsSyncingTime(true);
@@ -188,7 +162,6 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
   };
 
   // Update live clock using Online Server-Synced Bangladesh Standard Time (Asia/Dhaka, UTC+6)
-  // Immune to broken local device clocks
   useEffect(() => {
     let mounted = true;
     const updateClock = () => {
@@ -205,7 +178,6 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
     updateClock();
 
     const clockInterval = setInterval(updateClock, 1000);
-    // Re-sync with online server every 2 minutes to prevent any drift
     const resyncInterval = setInterval(() => {
       syncOnlineAccurateTime().then(() => updateClock());
     }, 120000);
@@ -217,16 +189,31 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
     };
   }, []);
 
-  // Preload custom tones into cache for instant playback
+  // Preload custom tones from phone cache (IndexedDB + CacheStorage) for instant full-duration playback
   useEffect(() => {
-    alarms.forEach(async (a) => {
-      if (a.toneId === 'custom_device' && a.customToneId && !customToneCache[a.customToneId]) {
-        const stored = await getCustomToneFromStorage(a.customToneId);
-        if (stored) {
-          setCustomToneCache((prev) => ({ ...prev, [stored.id]: stored.dataUrl }));
+    let cancelled = false;
+    void (async () => {
+      const latest = await getCustomToneFromStorage(LATEST_CUSTOM_TONE_KEY);
+      if (!cancelled && latest) {
+        setLatestCachedTone(latest);
+        setCustomToneCache((prev) => ({
+          ...prev,
+          [latest.id]: latest.dataUrl,
+          [LATEST_CUSTOM_TONE_KEY]: latest.dataUrl,
+        }));
+      }
+      for (const a of alarms) {
+        if (a.customToneId) {
+          const stored = await getCustomToneFromStorage(a.customToneId);
+          if (!cancelled && stored) {
+            setCustomToneCache((prev) => ({ ...prev, [a.customToneId!]: stored.dataUrl }));
+          }
         }
       }
-    });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [alarms]);
 
   const showToast = (msg: string) => {
@@ -241,16 +228,27 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
     }
     const target = alarms.find((a) => a.id === id);
     if (!target) return;
-    const updatedItem: AlarmItem = { ...target, isEnabled: !target.isEnabled };
+    const nextEnabled = !target.isEnabled;
+    const updatedItem: AlarmItem = { ...target, isEnabled: nextEnabled };
+
+    if (!nextEnabled) {
+      stopAlarmSound();
+      if (previewingToneId === id) {
+        setPreviewingToneId(null);
+      }
+    }
 
     if (isCloudAlarmMode) {
       const nextList = alarms.map((a) => (a.id === id ? updatedItem : a));
       persistAlarms(nextList, user?.uid);
       void syncAlarmsWithServiceWorker(nextList);
       startBackgroundAlarmGuard(() => nextList);
-      void requestAlarmNotificationPermission();
+      if (nextEnabled) {
+        void requestAlarmNotificationPermission();
+      }
       try {
-        await saveAlarm(updatedItem);
+        // Pass `id` as existingId so the exact same alarm is updated in-place without creating a duplicate!
+        await saveAlarm(updatedItem, id);
       } catch {
         showToast('অ্যালার্ম সংরক্ষণ করা যায়নি, আবার চেষ্টা করুন');
       }
@@ -259,10 +257,12 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
 
     setLocalAlarms((prev) => {
       const updated = prev.map((a) => (a.id === id ? updatedItem : a));
-      persistAlarms(updated);
+      persistAlarms(updated, user?.uid);
       void syncAlarmsWithServiceWorker(updated);
       startBackgroundAlarmGuard(() => updated);
-      void requestAlarmNotificationPermission();
+      if (nextEnabled) {
+        void requestAlarmNotificationPermission();
+      }
       return updated;
     });
   };
@@ -272,9 +272,15 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
       triggerReadOnlyBlock();
       return;
     }
+    if (previewingToneId === id) {
+      stopAlarmSound();
+      setPreviewingToneId(null);
+    }
     if (isCloudAlarmMode) {
       const nextList = alarms.filter((a) => a.id !== id);
       persistAlarms(nextList, user?.uid);
+      void syncAlarmsWithServiceWorker(nextList);
+      startBackgroundAlarmGuard(() => nextList);
       try {
         await deleteAlarm(id);
         showToast('অ্যালার্ম মুছে ফেলা হয়েছে');
@@ -286,20 +292,31 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
 
     setLocalAlarms((prev) => {
       const updated = prev.filter((a) => a.id !== id);
-      persistAlarms(updated);
+      persistAlarms(updated, user?.uid);
+      void syncAlarmsWithServiceWorker(updated);
+      startBackgroundAlarmGuard(() => updated);
       return updated;
     });
     showToast('অ্যালার্ম মুছে ফেলা হয়েছে');
   };
 
-  const handleOpenNewModal = () => {
+  const handleOpenNewModal = async () => {
     setEditingAlarm(null);
     setFormTime('07:00');
     setFormLabel('সকাল শিফট শুরু');
     setFormRepeatDays([6, 0, 1, 2, 3, 4]);
-    setFormToneId('factory_siren');
-    setFormCustomToneName('');
-    setFormCustomToneDataUrl('');
+    setFormToneId('custom_device');
+
+    const cached = latestCachedTone || (await getCustomToneFromStorage(LATEST_CUSTOM_TONE_KEY));
+    if (cached) {
+      setFormCustomToneId(cached.id);
+      setFormCustomToneName(cached.name);
+      setFormCustomToneDataUrl(cached.dataUrl);
+    } else {
+      setFormCustomToneId('');
+      setFormCustomToneName('');
+      setFormCustomToneDataUrl('');
+    }
     setIsModalOpen(true);
   };
 
@@ -308,13 +325,15 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
     setFormTime(alarm.time);
     setFormLabel(alarm.label);
     setFormRepeatDays([...alarm.repeatDays]);
-    setFormToneId(alarm.toneId);
+    setFormToneId('custom_device');
+    setFormCustomToneId(alarm.customToneId || '');
     setFormCustomToneName(alarm.customToneName || '');
-    if (alarm.toneId === 'custom_device' && alarm.customToneId) {
-      const tone = await getCustomToneFromStorage(alarm.customToneId);
-      if (tone) {
-        setFormCustomToneDataUrl(tone.dataUrl);
-      }
+
+    const stored = await getCustomToneFromStorage(alarm.customToneId || LATEST_CUSTOM_TONE_KEY);
+    if (stored) {
+      setFormCustomToneId(alarm.customToneId || stored.id);
+      setFormCustomToneName(alarm.customToneName || stored.name);
+      setFormCustomToneDataUrl(stored.dataUrl);
     } else {
       setFormCustomToneDataUrl('');
     }
@@ -336,8 +355,8 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
       return;
     }
 
-    if (file.size > 15 * 1024 * 1024) {
-      showToast('ফাইলের সাইজ ১৫MB এর কম হতে হবে');
+    if (file.size > 20 * 1024 * 1024) {
+      showToast('ফাইলের সাইজ ২০MB এর কম হতে হবে');
       return;
     }
 
@@ -347,94 +366,115 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
       const toneId = `custom_${Date.now()}`;
       await saveCustomToneToStorage(toneId, file.name, result);
       setFormToneId('custom_device');
+      setFormCustomToneId(toneId);
       setFormCustomToneName(file.name);
       setFormCustomToneDataUrl(result);
-      setCustomToneCache((prev) => ({ ...prev, [toneId]: result }));
-      showToast(`কাস্টম অডিও যুক্ত হয়েছে: ${file.name}`);
+      setLatestCachedTone({ id: toneId, name: file.name, dataUrl: result });
+      setCustomToneCache((prev) => ({
+        ...prev,
+        [toneId]: result,
+        [LATEST_CUSTOM_TONE_KEY]: result,
+      }));
+      showToast(`ফোনের ক্যাশে রিংটোন সংরক্ষিত হয়েছে: ${file.name}`);
     };
     reader.readAsDataURL(file);
   };
 
-  const handleTestTone = (toneId: AlarmToneId, customUrl?: string) => {
-    if (previewingToneId === toneId) {
+  // Play the full uploaded audio duration from phone cache without any 4s cutoff
+  const handleTestTone = async (previewKey: string, customUrl?: string) => {
+    if (previewingToneId === previewKey) {
       stopAlarmSound();
       setPreviewingToneId(null);
-    } else {
-      setPreviewingToneId(toneId);
-      playAlarmTone(toneId, customUrl || formCustomToneDataUrl, false);
-      setTimeout(() => {
-        setPreviewingToneId(null);
-      }, 4000);
+      return;
     }
+
+    let resolvedUrl = customUrl || formCustomToneDataUrl;
+    if (!resolvedUrl) {
+      const cached = await getCustomToneFromStorage(LATEST_CUSTOM_TONE_KEY);
+      resolvedUrl = cached?.dataUrl || '';
+    }
+    if (!resolvedUrl) {
+      showToast('প্রথমে আপনার ফোন থেকে একটি অডিও রিংটোন আপলোড করুন');
+      return;
+    }
+
+    setPreviewingToneId(previewKey);
+    playAlarmTone('custom_device', resolvedUrl, false, () => {
+      setPreviewingToneId((curr) => (curr === previewKey ? null : curr));
+    });
   };
 
   const handleSaveAlarm = async (e: React.FormEvent) => {
     e.preventDefault();
     stopAlarmSound();
+    setPreviewingToneId(null);
     if (isReadOnlyDemo) {
       setIsModalOpen(false);
       triggerReadOnlyBlock();
       return;
     }
 
-    let customToneId: string | undefined = editingAlarm?.customToneId;
-    if (formToneId === 'custom_device' && formCustomToneDataUrl) {
+    let customToneId: string | undefined =
+      formCustomToneId || editingAlarm?.customToneId || latestCachedTone?.id;
+    const toneName = formCustomToneName || editingAlarm?.customToneName || latestCachedTone?.name;
+    const toneDataUrl = formCustomToneDataUrl || latestCachedTone?.dataUrl;
+
+    if (toneDataUrl) {
       if (!customToneId) {
         customToneId = `tone_${Date.now()}`;
       }
-      await saveCustomToneToStorage(customToneId, formCustomToneName || 'Custom Ringtone', formCustomToneDataUrl);
-      setCustomToneCache((prev) => ({ ...prev, [customToneId!]: formCustomToneDataUrl }));
+      await saveCustomToneToStorage(
+        customToneId,
+        toneName || 'Custom Ringtone',
+        toneDataUrl
+      );
+      setCustomToneCache((prev) => ({
+        ...prev,
+        [customToneId!]: toneDataUrl,
+        [LATEST_CUSTOM_TONE_KEY]: toneDataUrl,
+      }));
     }
 
+    const alarmId = editingAlarm ? editingAlarm.id : `alarm_${Date.now()}`;
     const newAlarm: AlarmItem = {
-      id: editingAlarm ? editingAlarm.id : `alarm_${Date.now()}`,
+      id: alarmId,
       time: formTime,
       label: formLabel.trim() || 'ডিউটি অ্যালার্ম',
-      isEnabled: true,
+      isEnabled: editingAlarm ? editingAlarm.isEnabled : true,
       repeatDays: formRepeatDays,
-      toneId: formToneId,
-      customToneName: formToneId === 'custom_device' ? formCustomToneName : undefined,
-      customToneId: formToneId === 'custom_device' ? customToneId : undefined,
+      toneId: 'custom_device',
+      customToneName: toneName || undefined,
+      customToneId: customToneId || undefined,
     };
 
-    startBackgroundAlarmGuard(() => [...alarms, newAlarm]);
+    const nextList = editingAlarm
+      ? alarms.map((a) => (a.id === editingAlarm.id ? newAlarm : a))
+      : [...alarms, newAlarm];
+
+    startBackgroundAlarmGuard(() => nextList);
     void requestAlarmNotificationPermission();
 
     if (isCloudAlarmMode) {
-      const nextList = editingAlarm
-        ? alarms.map((a) => (a.id === editingAlarm.id ? newAlarm : a))
-        : [...alarms, newAlarm];
       persistAlarms(nextList, user?.uid);
       void syncAlarmsWithServiceWorker(nextList);
       try {
-        await saveAlarm(newAlarm);
+        await saveAlarm(newAlarm, alarmId);
         setIsModalOpen(false);
-        if (syncWithPhoneClock) {
-          handleSetPhoneHardwareAlarm(newAlarm);
-        } else {
-          showToast(editingAlarm ? 'অ্যালার্ম আপডেট করা হয়েছে' : 'নতুন অ্যালার্ম যুক্ত করা হয়েছে');
-        }
+        showToast(editingAlarm ? 'অ্যালার্ম আপডেট করা হয়েছে' : 'নতুন অ্যালার্ম যুক্ত করা হয়েছে');
       } catch {
         showToast('অ্যালার্ম সেভ করা যায়নি, আবার চেষ্টা করুন');
       }
       return;
     }
 
-    setLocalAlarms((prev) => {
-      const updated = editingAlarm
-        ? prev.map((a) => (a.id === editingAlarm.id ? newAlarm : a))
-        : [...prev, newAlarm];
-      persistAlarms(updated);
-      void syncAlarmsWithServiceWorker(updated);
-      return updated;
+    setLocalAlarms(() => {
+      persistAlarms(nextList, user?.uid);
+      void syncAlarmsWithServiceWorker(nextList);
+      return nextList;
     });
 
     setIsModalOpen(false);
-    if (syncWithPhoneClock) {
-      handleSetPhoneHardwareAlarm(newAlarm);
-    } else {
-      showToast(editingAlarm ? 'অ্যালার্ম আপডেট করা হয়েছে' : 'নতুন অ্যালার্ম যুক্ত করা হয়েছে');
-    }
+    showToast(editingAlarm ? 'অ্যালার্ম আপডেট করা হয়েছে' : 'নতুন অ্যালার্ম যুক্ত করা হয়েছে');
   };
 
   const toggleRepeatDay = (day: number) => {
@@ -543,7 +583,7 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
             কোনো অ্যালার্ম সেট করা নেই
           </p>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            আপনার সকালের শিফট, ওভারটাইম শুরু বা টিফিনের সময় সহজেই মনে রাখতে নতুন অ্যালার্ম যুক্ত করুন।
+            আপনার সকালের শিফট, ওভারটাইম শুরু বা টিফিনের সময় মনে রাখতে ফোন থেকে রিংটোন আপলোড করে অ্যালার্ম যুক্ত করুন।
           </p>
           <button
             type="button"
@@ -557,11 +597,10 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
           {alarms.map((alarm) => {
-            const toneObj = ALARM_TONE_OPTIONS.find((t) => t.id === alarm.toneId);
-            const isCustom = alarm.toneId === 'custom_device';
-            const toneDisplay = isCustom
-              ? alarm.customToneName || 'ডিভাইস অডিও'
-              : toneObj?.nameBn || 'ফ্যাক্টরি সাইরেন';
+            const toneDisplay =
+              alarm.customToneName ||
+              latestCachedTone?.name ||
+              'ফোন থেকে রিংটোন আপলোড করুন';
             const isToneTesting = previewingToneId === alarm.id;
 
             return (
@@ -635,34 +674,28 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
                   </div>
 
                   <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
-                    {/* Native Phone System Clock Bridge (Rings even if app is closed or phone is powered off) */}
-                    <button
-                      type="button"
-                      data-testid={`system-clock-alarm-${alarm.id}`}
-                      onClick={() => handleSetPhoneHardwareAlarm(alarm)}
-                      title="ফোনের ঘড়িতে সেট করুন (অ্যাপ বা ফোন বন্ধ থাকলেও বাজবে)"
-                      className="min-h-[30px] px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/70 border border-emerald-200/80 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-[11px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer"
-                    >
-                      <Smartphone className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                      <span>ফোনের ঘড়িতে সেট</span>
-                    </button>
-
-                    {/* Test Audio Button */}
+                    {/* Test Audio Button (Plays full duration from phone cache) */}
                     <button
                       type="button"
                       data-testid={`preview-alarm-${alarm.id}`}
                       onClick={() => {
-                        const customUrl = alarm.customToneId ? customToneCache[alarm.customToneId] : undefined;
-                        handleTestTone(alarm.id as AlarmToneId, customUrl);
+                        const customUrl =
+                          (alarm.customToneId ? customToneCache[alarm.customToneId] : undefined) ||
+                          customToneCache[LATEST_CUSTOM_TONE_KEY];
+                        void handleTestTone(alarm.id, customUrl);
                       }}
                       title="রিংটোন পরীক্ষা করুন"
-                      className={`min-h-[30px] px-2 py-1 rounded-lg text-xs font-medium inline-flex items-center gap-1 transition-colors ${
+                      className={`min-h-[30px] px-2.5 py-1 rounded-lg text-xs font-medium inline-flex items-center gap-1 transition-colors ${
                         isToneTesting
                           ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300'
                           : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200'
                       }`}
                     >
-                      {isToneTesting ? <Pause className="w-3 h-3 text-amber-600" /> : <Play className="w-3 h-3 text-emerald-600" />}
+                      {isToneTesting ? (
+                        <Pause className="w-3 h-3 text-amber-600" />
+                      ) : (
+                        <Play className="w-3 h-3 text-emerald-600" />
+                      )}
                       <span className="text-[11px]">{isToneTesting ? 'থামান' : 'শুনুন'}</span>
                     </button>
 
@@ -672,7 +705,7 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
                       data-testid={`edit-alarm-${alarm.id}`}
                       onClick={() => handleOpenEditModal(alarm)}
                       title="অ্যালার্ম পরিবর্তন করুন"
-                      className="min-h-[30px] px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors"
+                      className="min-h-[30px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors"
                     >
                       সম্পাদনা
                     </button>
@@ -739,7 +772,9 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
                     className="flex-1 text-2xl font-mono font-bold tracking-wider px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-center focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                   />
                   <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 rounded-xl text-center shrink-0">
-                    <span className="text-xs text-emerald-600 dark:text-emerald-400 block font-medium">বাংলা সময়</span>
+                    <span className="text-xs text-emerald-600 dark:text-emerald-400 block font-medium">
+                      বাংলা সময়
+                    </span>
                     <span className="text-sm font-bold text-emerald-950 dark:text-emerald-200">
                       {formatBengaliTime(formTime)}
                     </span>
@@ -852,149 +887,71 @@ export const AlarmView: React.FC<AlarmViewProps> = () => {
                 </div>
               </div>
 
-              {/* 4. Tone Selector (Built-in + Custom Device Tone) */}
+              {/* 4. Phone Ringtone Uploader (Cached Locally, Full Length Playback) */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
-                  অ্যালার্মের রিংটোন নির্বাচন করুন
+                  ফোন থেকে অ্যালার্মের রিংটোন আপলোড করুন
                 </label>
 
-                <div className="space-y-2">
-                  {ALARM_TONE_OPTIONS.map((opt) => {
-                    const isSelected = formToneId === opt.id;
-                    const isTesting = previewingToneId === opt.id;
+                <div className="p-3.5 rounded-2xl border border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <Music className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span className="truncate">
+                          {formCustomToneName
+                            ? `ফাইল: ${formCustomToneName}`
+                            : 'ফোনের মেমোরি থেকে অডিও রিংটোন নির্বাচন করুন'}
+                        </span>
+                      </span>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        আপলোড করা রিংটোন ফোনের ক্যাশে সংরক্ষিত থাকবে এবং সম্পূর্ণ সাউন্ড বাজবে
+                      </p>
+                    </div>
 
-                    if (opt.id === 'custom_device') {
-                      return (
-                        <div
-                          key={opt.id}
-                          className={`p-3 rounded-2xl border transition-all ${
-                            isSelected
-                              ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40'
-                              : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <label className="flex items-center gap-2 cursor-pointer min-w-0">
-                              <input
-                                type="radio"
-                                name="alarm_tone"
-                                value={opt.id}
-                                checked={isSelected}
-                                onChange={() => setFormToneId('custom_device')}
-                                className="text-emerald-600 focus:ring-emerald-500 shrink-0"
-                              />
-                              <div className="min-w-0">
-                                <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                                  <Music className="w-3.5 h-3.5 text-emerald-600" />
-                                  <span>{opt.nameBn}</span>
-                                </span>
-                                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                                  {formCustomToneName ? `ফাইল: ${formCustomToneName}` : opt.descriptionBn}
-                                </p>
-                              </div>
-                            </label>
-
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {/* Audio Upload File Trigger */}
-                              <label
-                                data-testid="upload-custom-tone-btn"
-                                className="min-h-[30px] px-2.5 py-1 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
-                              >
-                                <Upload className="w-3 h-3 text-emerald-600" />
-                                <span>{formCustomToneName ? 'পরিবর্তন' : 'অডিও ফাইল বাছুন'}</span>
-                                <input
-                                  type="file"
-                                  accept="audio/*"
-                                  className="hidden"
-                                  onChange={handleCustomAudioUpload}
-                                />
-                              </label>
-
-                              {formCustomToneDataUrl && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleTestTone('custom_device', formCustomToneDataUrl)}
-                                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
-                                    isTesting
-                                      ? 'bg-amber-600 text-white'
-                                      : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                                  }`}
-                                >
-                                  {isTesting ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div
-                        key={opt.id}
-                        className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-2 ${
-                          isSelected
-                            ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40'
-                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/40 hover:bg-slate-50 dark:hover:bg-slate-800'
-                        }`}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <label
+                        data-testid="upload-custom-tone-btn"
+                        className="min-h-[34px] px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
                       >
-                        <label className="flex items-center gap-2.5 cursor-pointer min-w-0 flex-1">
-                          <input
-                            type="radio"
-                            name="alarm_tone"
-                            value={opt.id}
-                            checked={isSelected}
-                            onChange={() => setFormToneId(opt.id)}
-                            className="text-emerald-600 focus:ring-emerald-500 shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <span className="text-xs font-bold text-slate-900 dark:text-white block">
-                              {opt.nameBn}
-                            </span>
-                            <span className="text-[11px] text-slate-500 dark:text-slate-400 block truncate">
-                              {opt.descriptionBn}
-                            </span>
-                          </div>
-                        </label>
+                        <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>{formCustomToneName ? 'পরিবর্তন' : 'অডিও ফাইল বাছুন'}</span>
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          className="hidden"
+                          onChange={handleCustomAudioUpload}
+                        />
+                      </label>
 
-                        {/* Test Button */}
+                      {formCustomToneDataUrl && (
                         <button
                           type="button"
-                          onClick={() => handleTestTone(opt.id)}
-                          title="টোন শুনুন"
-                          className={`min-h-[30px] px-2.5 py-1 rounded-xl text-xs font-medium inline-flex items-center gap-1 transition-colors shrink-0 ${
-                            isTesting
-                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300'
-                              : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200'
+                          onClick={() => void handleTestTone('modal_preview', formCustomToneDataUrl)}
+                          title={previewingToneId === 'modal_preview' ? 'থামান' : 'শুনুন'}
+                          className={`min-h-[34px] px-2.5 rounded-xl flex items-center gap-1 text-xs font-semibold transition-colors ${
+                            previewingToneId === 'modal_preview'
+                              ? 'bg-amber-600 text-white'
+                              : 'bg-emerald-600 text-white hover:bg-emerald-700'
                           }`}
                         >
-                          {isTesting ? <Pause className="w-3 h-3 text-amber-600" /> : <Play className="w-3 h-3 text-emerald-600" />}
-                          <span className="text-[11px]">{isTesting ? 'থামান' : 'শুনুন'}</span>
+                          {previewingToneId === 'modal_preview' ? (
+                            <>
+                              <Pause className="w-3.5 h-3.5" />
+                              <span>থামান</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-3.5 h-3.5" />
+                              <span>শুনুন</span>
+                            </>
+                          )}
                         </button>
-                      </div>
-                    );
-                  })}
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              {/* 5. Optional: Sync with Native Phone Clock for Power-Off / Force-Closed Reliability */}
-              <label className="flex items-start gap-2.5 p-3 rounded-2xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/60 dark:bg-emerald-950/40 cursor-pointer">
-                <input
-                  type="checkbox"
-                  data-testid="sync-phone-clock-checkbox"
-                  checked={syncWithPhoneClock}
-                  onChange={(e) => setSyncWithPhoneClock(e.target.checked)}
-                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                />
-                <div className="text-xs">
-                  <span className="font-bold text-emerald-950 dark:text-emerald-200 block">
-                    ফোনের সিস্টেম ঘড়িতেও যুক্ত করুন (অ্যাপ বা ফোন বন্ধ থাকলেও বাজবে)
-                  </span>
-                  <span className="text-[11px] text-emerald-800/90 dark:text-emerald-300/80 block mt-0.5">
-                    অ্যান্ড্রয়েড ফোনের নিজস্ব Clock অ্যাপে অ্যালার্মটি যুক্ত হবে, ফলে ব্যাকগ্রাউন্ড থেকে অ্যাপ কেটে দিলে বা ফোন বন্ধ থাকলেও সঠিক সময়ে বাজবে।
-                  </span>
-                </div>
-              </label>
 
               {/* Form Buttons */}
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">

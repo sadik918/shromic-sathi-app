@@ -56,9 +56,12 @@ import { formatMonthLabel } from '../utils/i18n';
 import {
   classifyFirestoreReadError,
   extractAvailableRegistrationMonths,
+  isGenericWorkerPlaceholderName,
   isOfflineOrTransientFirestoreError,
   mapFirestoreUserDirectoryDoc,
+  mapWorkerProfileDocToDirectoryEntry,
   mergeUserDirectories,
+  resolveBestUserDisplayName,
   type ClassifiedFirestoreReadError,
 } from '../utils/cloudSyncHelpers';
 import { AdminSubscriptionSection } from './AdminSubscriptionSection';
@@ -381,22 +384,34 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       return;
     }
     setDirectorySyncStatus('loading');
-    const unsub = onSnapshot(
+    let latestDirectoryEntries: AdminUserDirectoryEntry[] = [];
+    let latestProfileEntries: AdminUserDirectoryEntry[] = [];
+
+    const applyCombinedUsers = () => {
+      const combinedRemote = mergeUserDirectories(
+        latestDirectoryEntries,
+        latestProfileEntries,
+        { firestoreConnected: true }
+      );
+      setStore((prev) => {
+        const nextUsers = mergeUserDirectories(combinedRemote, prev.users, {
+          firestoreConnected: true,
+        });
+        const nextState = { ...prev, users: nextUsers };
+        saveAdminStore(nextState);
+        return nextState;
+      });
+    };
+
+    const unsubDirectory = onSnapshot(
       collection(db, 'userDirectory'),
       (snapshot) => {
-        const remoteUsers = snapshot.docs.map((d) =>
+        latestDirectoryEntries = snapshot.docs.map((d) =>
           mapFirestoreUserDirectoryDoc(d.id, d.data() as Record<string, unknown>, todayISO)
         );
         setDirectoryReadError(null);
         setDirectorySyncStatus(snapshot.metadata.fromCache ? 'cached' : 'live');
-        setStore((prev) => {
-          const nextUsers = mergeUserDirectories(remoteUsers, prev.users, {
-            firestoreConnected: true,
-          });
-          const nextState = { ...prev, users: nextUsers };
-          saveAdminStore(nextState);
-          return nextState;
-        });
+        applyCombinedUsers();
       },
       (err) => {
         console.error('Admin userDirectory listener error:', err);
@@ -406,7 +421,42 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
         setErrorBanner(lang === 'bn' ? classified.messageBn : classified.messageEn);
       }
     );
-    return () => unsub();
+
+    const unsubProfiles = onSnapshot(
+      collection(db, 'users'),
+      (snapshot) => {
+        latestProfileEntries = snapshot.docs.map((d) =>
+          mapWorkerProfileDocToDirectoryEntry(d.id, d.data() as Record<string, unknown>, todayISO)
+        );
+        applyCombinedUsers();
+
+        // Backfill /userDirectory/{uid} for any user in /users whose directory entry is missing or has a placeholder/email-prefix name
+        const dirByUid = new Map(latestDirectoryEntries.map((u) => [u.uid, u]));
+        for (const profEntry of latestProfileEntries) {
+          if (!profEntry.uid || isGenericWorkerPlaceholderName(profEntry.displayName)) continue;
+          const existingDir = dirByUid.get(profEntry.uid);
+          if (!existingDir) continue;
+          const bestName = resolveBestUserDisplayName(
+            [profEntry.displayName, existingDir.displayName],
+            existingDir.email || profEntry.email
+          );
+          if (bestName && bestName !== existingDir.displayName) {
+            void updateDoc(doc(db, 'userDirectory', profEntry.uid), {
+              displayName: bestName.slice(0, 120),
+              updatedAt: serverTimestamp(),
+            }).catch(() => {});
+          }
+        }
+      },
+      () => {
+        // Non-fatal if /users read fails transiently; /userDirectory remains active
+      }
+    );
+
+    return () => {
+      unsubDirectory();
+      unsubProfiles();
+    };
   }, [isAdminUser, user, isDemoMode, todayISO, lang]);
 
   const handleRefreshUsersFromCloud = async () => {
@@ -415,10 +465,25 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     setDirectorySyncStatus('loading');
     setDirectoryReadError(null);
     try {
-      const snapshot = await getDocsFromServer(collection(db, 'userDirectory'));
-      const remoteUsers = snapshot.docs.map((d) =>
+      const [dirSnapshot, usersSnapshot] = await Promise.all([
+        getDocsFromServer(collection(db, 'userDirectory')),
+        getDocsFromServer(collection(db, 'users')).catch(() => null),
+      ]);
+      const dirUsers = dirSnapshot.docs.map((d) =>
         mapFirestoreUserDirectoryDoc(d.id, d.data() as Record<string, unknown>, todayISO)
       );
+      const profileUsers = usersSnapshot
+        ? usersSnapshot.docs.map((d) =>
+            mapWorkerProfileDocToDirectoryEntry(
+              d.id,
+              d.data() as Record<string, unknown>,
+              todayISO
+            )
+          )
+        : [];
+      const remoteUsers = mergeUserDirectories(dirUsers, profileUsers, {
+        firestoreConnected: true,
+      });
       setDirectorySyncStatus('live');
       setDirectoryReadError(null);
       setStore((prev) => {

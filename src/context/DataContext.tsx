@@ -120,12 +120,14 @@ import {
 import { resolveWorkerDisplayName } from '../utils/homeAnalytics';
 import {
   getBstTodayISO,
+  isGenericWorkerPlaceholderName,
   isOfflineOrTransientFirestoreError,
   isStrictAdminSession,
   mapFirebaseAuthError,
   normalizeLoanPayloadForFirestore,
   normalizeSubcollectionPayloadForFirestore,
   normalizeWorkerProfileForFirestore,
+  resolveBestUserDisplayName,
   resolveVerifiedAdminSession,
   type SubcollectionName,
 } from '../utils/cloudSyncHelpers';
@@ -437,18 +439,55 @@ interface UserLocalMirror {
   feedback: SupportFeedback[];
 }
 
+function filterOwnedItems<T extends { userId?: string }>(items: T[] | undefined, uid: string): T[] {
+  if (!Array.isArray(items)) return [];
+  return items.filter((item) => item && (!item.userId || item.userId === uid));
+}
+
 function loadUserMirror(uid: string): UserLocalMirror {
+  if (!uid) {
+    return {
+      profile: null,
+      overtime: [],
+      salaryRecords: [],
+      payments: [],
+      attendance: [],
+      expenses: [],
+      savings: [],
+      documents: [],
+      reminders: [],
+      loans: [],
+      workplaces: [],
+      contacts: [],
+      alarms: [],
+      editHistory: [],
+      feedback: [],
+    };
+  }
   try {
     const raw = localStorage.getItem(`shromik_sathi_cloud_mirror_${uid}`);
     if (raw) {
       const parsed = JSON.parse(raw) as UserLocalMirror;
+      const validProfile =
+        parsed.profile && (!parsed.profile.userId || parsed.profile.userId === uid)
+          ? { ...parsed.profile, userId: uid }
+          : null;
       return {
-        ...parsed,
-        loans: parsed.loans || [],
-        workplaces: parsed.workplaces || [],
-        contacts: parsed.contacts || [],
-        alarms: parsed.alarms || [],
-        editHistory: parsed.editHistory || [],
+        profile: validProfile,
+        overtime: filterOwnedItems(parsed.overtime, uid),
+        salaryRecords: filterOwnedItems(parsed.salaryRecords, uid),
+        payments: filterOwnedItems(parsed.payments, uid),
+        attendance: filterOwnedItems(parsed.attendance, uid),
+        expenses: filterOwnedItems(parsed.expenses, uid),
+        savings: filterOwnedItems(parsed.savings, uid),
+        documents: filterOwnedItems(parsed.documents, uid),
+        reminders: filterOwnedItems(parsed.reminders, uid),
+        loans: filterOwnedItems(parsed.loans, uid),
+        workplaces: filterOwnedItems(parsed.workplaces, uid),
+        contacts: filterOwnedItems(parsed.contacts, uid),
+        alarms: filterOwnedItems(parsed.alarms, uid),
+        editHistory: filterOwnedItems(parsed.editHistory, uid),
+        feedback: filterOwnedItems(parsed.feedback, uid),
       };
     }
   } catch {
@@ -1100,11 +1139,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     ) => {
       if (!currentUser?.uid) return;
       const language = opts?.language || langStateRef.current || 'bn';
-      const displayName =
-        (opts?.displayName || '').trim() ||
-        fbProfileNameRef.current.trim() ||
-        (currentUser.displayName || '').trim() ||
-        '';
+      const displayName = resolveBestUserDisplayName(
+        [
+          opts?.displayName,
+          fbProfileNameRef.current,
+          currentUser.displayName,
+          auth.currentUser?.displayName,
+        ],
+        currentUser.email || auth.currentUser?.email
+      );
 
       return defaultUserDirectorySyncCoordinator.sync({
         user: currentUser,
@@ -1802,7 +1845,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const mirrorProf = loadUserMirror(uid).profile;
           const localHasSetup = Boolean(mirrorProf && isWorkerSetupCompleted(mirrorProf));
           const remoteHasSetup = isWorkerSetupCompleted(remoteProfile);
-          const mergedProfile: WorkerProfile =
+          const rawMerged: WorkerProfile =
             localHasSetup && !remoteHasSetup
               ? {
                   ...defaultWorkerProfile(uid, user.displayName),
@@ -1816,12 +1859,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   ...remoteProfile,
                   userId: uid,
                 };
+          const resolvedName = resolveBestUserDisplayName(
+            [user.displayName, rawMerged.fullName, remoteProfile.fullName, mirrorProf?.fullName],
+            user.email
+          );
+          const mergedProfile: WorkerProfile = {
+            ...rawMerged,
+            fullName:
+              !isGenericWorkerPlaceholderName(rawMerged.fullName) &&
+              rawMerged.fullName?.trim() &&
+              rawMerged.fullName.trim().toLowerCase() !== (user.email || '').split('@')[0]?.toLowerCase()
+                ? rawMerged.fullName
+                : resolvedName || rawMerged.fullName,
+          };
           profileEnsuredRef.current = uid;
           setFbProfile(mergedProfile);
           saveUserMirror(uid, { profile: mergedProfile }, { fromRemoteSnapshot: true });
+          const nameUpgradedFromPlaceholder =
+            Boolean(user.displayName?.trim()) &&
+            isGenericWorkerPlaceholderName(remoteProfile.fullName) &&
+            mergedProfile.fullName !== remoteProfile.fullName;
           if (
-            localHasSetup &&
-            !remoteHasSetup &&
+            ((localHasSetup && !remoteHasSetup) || nameUpgradedFromPlaceholder) &&
             !snap.metadata.fromCache &&
             (typeof navigator === 'undefined' || navigator.onLine)
           ) {
@@ -1834,6 +1893,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             localStorage.removeItem('shromik_sathi_manual_setup_mode');
             setNeedsOnboarding(false);
             setIsManualSetupMode(false);
+          }
+          if (
+            !isGenericWorkerPlaceholderName(mergedProfile.fullName) ||
+            Boolean(user.displayName?.trim())
+          ) {
+            void syncUserDirectoryEntry(user, {
+              displayName: resolveBestUserDisplayName(
+                [user.displayName, mergedProfile.fullName],
+                user.email
+              ),
+              language: mergedProfile.language,
+            }).catch(() => {});
           }
           markCollectionReady('profile');
           return;
@@ -1857,7 +1928,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const mirrorProf = loadUserMirror(uid).profile;
             const localHasSetup = Boolean(mirrorProf && isWorkerSetupCompleted(mirrorProf));
             const remoteHasSetup = isWorkerSetupCompleted(remoteProfile);
-            const mergedProfile: WorkerProfile =
+            const rawMerged: WorkerProfile =
               localHasSetup && !remoteHasSetup
                 ? {
                     ...defaultWorkerProfile(uid, user.displayName),
@@ -1871,6 +1942,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     ...remoteProfile,
                     userId: uid,
                   };
+            const resolvedName = resolveBestUserDisplayName(
+              [user.displayName, rawMerged.fullName, remoteProfile.fullName, mirrorProf?.fullName],
+              user.email
+            );
+            const mergedProfile: WorkerProfile = {
+              ...rawMerged,
+              fullName:
+                !isGenericWorkerPlaceholderName(rawMerged.fullName) &&
+                rawMerged.fullName?.trim() &&
+                rawMerged.fullName.trim().toLowerCase() !== (user.email || '').split('@')[0]?.toLowerCase()
+                  ? rawMerged.fullName
+                  : resolvedName || rawMerged.fullName,
+            };
             profileEnsuredRef.current = uid;
             setFbProfile(mergedProfile);
             saveUserMirror(uid, { profile: mergedProfile }, { fromRemoteSnapshot: true });
@@ -1884,6 +1968,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               localStorage.removeItem('shromik_sathi_manual_setup_mode');
               setNeedsOnboarding(false);
               setIsManualSetupMode(false);
+            }
+            if (
+              !isGenericWorkerPlaceholderName(mergedProfile.fullName) ||
+              Boolean(user.displayName?.trim())
+            ) {
+              void syncUserDirectoryEntry(user, {
+                displayName: resolveBestUserDisplayName(
+                  [user.displayName, mergedProfile.fullName],
+                  user.email
+                ),
+                language: mergedProfile.language,
+              }).catch(() => {});
             }
             markCollectionReady('profile');
             return;
@@ -2142,7 +2238,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const currentUser = auth.currentUser;
       if (!currentUser) return;
       const uid = currentUser.uid;
-      const emailKey = (currentUser.email || activeLocalEmail || '').trim().toLowerCase();
+      const emailKey = (currentUser.email || '').trim().toLowerCase();
 
       // Merge any legacy email-keyed offline queue into the authenticated uid's queue once
       if (emailKey && !isDemoAccountEmail(emailKey)) {
@@ -2471,7 +2567,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (navigator.onLine) {
       void syncOfflineDataToCloud();
     }
+
+    // Periodic 15s check when online so any offline-entered data automatically syncs to Firestore
+    const autoSyncTimer = window.setInterval(() => {
+      if (
+        navigator.onLine &&
+        auth.currentUser &&
+        loadOfflineQueue(auth.currentUser.uid).length > 0
+      ) {
+        void syncOfflineDataToCloud();
+      }
+    }, 15000);
+
     return () => {
+      window.clearInterval(autoSyncTimer);
       window.removeEventListener('online', handleOnlineOrFocus);
       window.removeEventListener('focus', handleOnlineOrFocus);
       document.removeEventListener('visibilitychange', handleOnlineOrFocus);
@@ -2518,6 +2627,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               ...data,
               enabled: effectiveEnabled,
               renewalWarningDays: effectiveWarningDays,
+              paymentNumberBkash:
+                (data.paymentNumberBkash || '').trim() ||
+                prev.paymentNumberBkash ||
+                DEFAULT_GLOBAL_SUBSCRIPTION_CONFIG.paymentNumberBkash,
+              paymentNumberNagad:
+                (data.paymentNumberNagad || '').trim() ||
+                prev.paymentNumberNagad ||
+                DEFAULT_GLOBAL_SUBSCRIPTION_CONFIG.paymentNumberNagad,
             };
             if (typeof window !== 'undefined') {
               localStorage.setItem('shromik_sathi_sub_config', JSON.stringify(merged));
@@ -3270,9 +3387,53 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const uid = cred.user.uid;
     const userEmail = cred.user.email || '';
 
-    // Persist session cache & navigate directly to Home on the 1st click
+    // Persist session cache & hydrate ONLY this user's isolated mirror immediately
     persistAuthSessionCache(cred.user);
     prevAuthUidRef.current = uid;
+    profileEnsuredRef.current = null;
+    directorySyncedRef.current = null;
+    autoAlignedMonthUidRef.current = null;
+    remoteKnownDocIdsRef.current = {};
+    nonRetryableFailedMutationsRef.current.clear();
+
+    const mirror = loadUserMirror(uid);
+    const googleResolvedName = resolveBestUserDisplayName(
+      [cred.user.displayName, mirror.profile?.fullName],
+      userEmail
+    );
+    const fallbackProf: WorkerProfile = mirror.profile
+      ? {
+          ...mirror.profile,
+          fullName:
+            !isGenericWorkerPlaceholderName(mirror.profile.fullName) &&
+            mirror.profile.fullName.trim().toLowerCase() !== userEmail.split('@')[0]?.toLowerCase()
+              ? mirror.profile.fullName
+              : googleResolvedName || cred.user.displayName || mirror.profile.fullName,
+          photoUrl: mirror.profile.photoUrl || cred.user.photoURL || '',
+        }
+      : {
+          ...defaultWorkerProfile(uid, cred.user.displayName),
+          fullName: googleResolvedName || cred.user.displayName || 'শ্রমিক',
+          photoUrl: cred.user.photoURL || '',
+          language: lang,
+          privacyConsent: true,
+        };
+    setFbProfile(fallbackProf);
+    setFbOvertime(mirror.overtime || []);
+    setFbSalaryRecords(mirror.salaryRecords || []);
+    setFbPayments(mirror.payments || []);
+    setFbAttendance(mirror.attendance || []);
+    setFbExpenses(mirror.expenses || []);
+    setFbSavings(mirror.savings || []);
+    setFbDocuments(mirror.documents || []);
+    setFbReminders(mirror.reminders || []);
+    setFbLoans(mirror.loans || []);
+    setFbWorkplaces(mirror.workplaces || []);
+    setFbContacts(mirror.contacts || []);
+    setFbAlarms(mirror.alarms || []);
+    setFbEditHistory(mirror.editHistory || []);
+    setFbFeedback(mirror.feedback || []);
+
     setLiveAuthUid(uid);
     setUser(cred.user);
     setAuthReady(true);
@@ -3286,18 +3447,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveLocalEmail(userEmail);
       localStorage.setItem('shromik_sathi_active_email', userEmail);
     }
-
-    // Hydrate profile from local mirror or Firestore immediately so 1st click opens Home right away
-    const mirror = loadUserMirror(uid);
-    const fallbackProf: WorkerProfile =
-      mirror.profile || {
-        ...defaultWorkerProfile(uid, cred.user.displayName),
-        fullName: cred.user.displayName || 'শ্রমিক',
-        photoUrl: cred.user.photoURL || '',
-        language: lang,
-        privacyConsent: true,
-      };
-    setFbProfile(fallbackProf);
     setCloudDataLoaded(true);
 
     // Fetch existing Firestore profile and sync all collections in the background without blocking navigation
@@ -3319,7 +3468,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const remoteProf = snap.data() as WorkerProfile;
         const localHasSetup = Boolean(mirror.profile && isWorkerSetupCompleted(mirror.profile));
         const remoteHasSetup = isWorkerSetupCompleted(remoteProf);
-        const mergedProf: WorkerProfile =
+        const rawMerged: WorkerProfile =
           localHasSetup && !remoteHasSetup
             ? {
                 ...defaultWorkerProfile(uid, cred.user.displayName),
@@ -3333,6 +3482,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 ...remoteProf,
                 userId: uid,
               };
+        const bestName = resolveBestUserDisplayName(
+          [cred.user.displayName, rawMerged.fullName, remoteProf.fullName],
+          userEmail
+        );
+        const mergedProf: WorkerProfile = {
+          ...rawMerged,
+          fullName:
+            !isGenericWorkerPlaceholderName(rawMerged.fullName) &&
+            rawMerged.fullName?.trim() &&
+            rawMerged.fullName.trim().toLowerCase() !== userEmail.split('@')[0]?.toLowerCase()
+              ? rawMerged.fullName
+              : bestName || rawMerged.fullName,
+          photoUrl: rawMerged.photoUrl || cred.user.photoURL || '',
+        };
         setFbProfile(mergedProf);
         saveUserMirror(uid, { profile: mergedProf }, { fromRemoteSnapshot: true });
       } else if (serverCheckSucceeded) {
@@ -3340,7 +3503,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await ensureParentProfileInFirestore(cred.user, fallbackProf);
       }
       await syncUserDirectoryEntry(cred.user, {
-        displayName: cred.user.displayName || undefined,
+        displayName: cred.user.displayName || googleResolvedName || undefined,
         language: lang,
       });
       void syncOfflineDataToCloud(true);
@@ -3381,8 +3544,38 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       const cred = await signInWithEmailAndPassword(auth, email, password);
+      const uid = cred.user.uid;
       persistAuthSessionCache(cred.user);
-      setLiveAuthUid(cred.user.uid);
+      prevAuthUidRef.current = uid;
+      profileEnsuredRef.current = null;
+      directorySyncedRef.current = null;
+      autoAlignedMonthUidRef.current = null;
+      remoteKnownDocIdsRef.current = {};
+      nonRetryableFailedMutationsRef.current.clear();
+
+      const mirror = loadUserMirror(uid);
+      setFbProfile(
+        mirror.profile || {
+          ...defaultWorkerProfile(uid, cred.user.displayName),
+          language: lang,
+        }
+      );
+      setFbOvertime(mirror.overtime || []);
+      setFbSalaryRecords(mirror.salaryRecords || []);
+      setFbPayments(mirror.payments || []);
+      setFbAttendance(mirror.attendance || []);
+      setFbExpenses(mirror.expenses || []);
+      setFbSavings(mirror.savings || []);
+      setFbDocuments(mirror.documents || []);
+      setFbReminders(mirror.reminders || []);
+      setFbLoans(mirror.loans || []);
+      setFbWorkplaces(mirror.workplaces || []);
+      setFbContacts(mirror.contacts || []);
+      setFbAlarms(mirror.alarms || []);
+      setFbEditHistory(mirror.editHistory || []);
+      setFbFeedback(mirror.feedback || []);
+
+      setLiveAuthUid(uid);
       setUser(cred.user);
       setActiveLocalEmail(email);
       localStorage.setItem('shromik_sathi_active_email', email);
@@ -3522,8 +3715,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       if (cred.user) {
+        const uid = cred.user.uid;
         persistAuthSessionCache(cred.user);
-        setLiveAuthUid(cred.user.uid);
+        prevAuthUidRef.current = uid;
+        profileEnsuredRef.current = null;
+        directorySyncedRef.current = null;
+        autoAlignedMonthUidRef.current = null;
+        remoteKnownDocIdsRef.current = {};
+        nonRetryableFailedMutationsRef.current.clear();
+
+        setFbOvertime([]);
+        setFbSalaryRecords([]);
+        setFbPayments([]);
+        setFbAttendance([]);
+        setFbExpenses([]);
+        setFbSavings([]);
+        setFbDocuments([]);
+        setFbReminders([]);
+        setFbLoans([]);
+        setFbWorkplaces([]);
+        setFbContacts([]);
+        setFbAlarms([]);
+        setFbEditHistory([]);
+        setFbFeedback([]);
+
+        setLiveAuthUid(uid);
         setUser(cred.user);
         try {
           await updateFirebaseAuthProfile(cred.user, { displayName: cleanName });
@@ -3531,14 +3747,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // ignore non-fatal profile displayName update error
         }
         const initialProf: WorkerProfile = {
-          ...defaultWorkerProfile(cred.user.uid, cleanName),
+          ...defaultWorkerProfile(uid, cleanName),
           fullName: cleanName,
           language: lang,
           privacyConsent: true,
         };
         setFbProfile(initialProf);
         setCloudDataLoaded(true);
-        saveUserMirror(cred.user.uid, { profile: initialProf }, { fromRemoteSnapshot: true });
+        saveUserMirror(uid, { profile: initialProf }, { fromRemoteSnapshot: true });
         await ensureParentProfileInFirestore(cred.user, initialProf);
         await syncUserDirectoryEntry(cred.user, {
           displayName: cleanName,
@@ -3649,8 +3865,30 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('shromik_sathi_manual_setup_mode');
     localStorage.removeItem('shromik_sathi_active_tab');
     localStorage.removeItem('shromik_sathi_more_subview');
+    localStorage.removeItem('shromik_sathi_active_email');
+    prevAuthUidRef.current = null;
+    profileEnsuredRef.current = null;
+    directorySyncedRef.current = null;
+    autoAlignedMonthUidRef.current = null;
+    remoteKnownDocIdsRef.current = {};
+    nonRetryableFailedMutationsRef.current.clear();
     setNeedsOnboarding(false);
     setIsManualSetupMode(false);
+    setFbProfile(null);
+    setFbOvertime([]);
+    setFbSalaryRecords([]);
+    setFbPayments([]);
+    setFbAttendance([]);
+    setFbExpenses([]);
+    setFbSavings([]);
+    setFbDocuments([]);
+    setFbReminders([]);
+    setFbLoans([]);
+    setFbWorkplaces([]);
+    setFbContacts([]);
+    setFbAlarms([]);
+    setFbEditHistory([]);
+    setFbFeedback([]);
     setLiveAuthUid(null);
     setUser(null);
     exitDemoMode();
@@ -3731,7 +3969,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     // Guard: Do not allow adding or editing overtime in upcoming future months or future dates
-    const liveToday = getTodayISO();
+    const localToday = getTodayISO();
+    const bstToday = getBstTodayISO();
+    const liveToday = localToday > bstToday ? localToday : bstToday;
     const liveMonth = getCurrentMonthISO(liveToday);
     if (isFutureMonth(sanitized.month, liveMonth) || isFutureDate(sanitized.date, liveToday)) {
       return;
@@ -4165,7 +4405,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     // Guard: Do not allow adding or editing attendance in upcoming future months or future dates
-    const liveToday = getTodayISO();
+    const localToday = getTodayISO();
+    const bstToday = getBstTodayISO();
+    const liveToday = localToday > bstToday ? localToday : bstToday;
     const liveMonth = getCurrentMonthISO(liveToday);
     if (isFutureMonth(sanitized.month, liveMonth) || isFutureDate(sanitized.date, liveToday)) {
       return;
@@ -5474,14 +5716,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const saveAlarm = async (
-    rec: Omit<AlarmItem, 'id' | 'userId'>,
+    rec: Omit<AlarmItem, 'id' | 'userId'> & { id?: string },
     existingId?: string
   ) => {
     if (isReadOnlyDemo) {
       triggerReadOnlyBlock();
       return;
     }
-    const id = existingId || makeStableId('alarm');
+    const id =
+      (existingId && existingId.trim()) ||
+      (typeof rec.id === 'string' && rec.id.trim() ? rec.id.trim() : '') ||
+      makeStableId('alarm');
     const cleanTime = (rec.time || '07:00').trim().slice(0, 10);
     const cleanLabel = (rec.label || 'ডিউটি অ্যালার্ম').trim().slice(0, 150) || 'ডিউটি অ্যালার্ম';
     const validTones = new Set([
@@ -5498,13 +5743,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       repeatDays: Array.isArray(rec.repeatDays)
         ? rec.repeatDays.filter((d) => typeof d === 'number' && d >= 0 && d <= 6)
         : [6, 0, 1, 2, 3, 4],
-      toneId: validTones.has(rec.toneId) ? rec.toneId : 'factory_siren',
-      ...(rec.toneId === 'custom_device' && rec.customToneName
-        ? { customToneName: rec.customToneName.slice(0, 120) }
-        : {}),
-      ...(rec.toneId === 'custom_device' && rec.customToneId
-        ? { customToneId: rec.customToneId.slice(0, 128) }
-        : {}),
+      toneId: validTones.has(rec.toneId) ? rec.toneId : 'custom_device',
+      ...(rec.customToneName ? { customToneName: rec.customToneName.slice(0, 120) } : {}),
+      ...(rec.customToneId ? { customToneId: rec.customToneId.slice(0, 128) } : {}),
       ...(rec.lastTriggeredDate ? { lastTriggeredDate: rec.lastTriggeredDate.slice(0, 20) } : {}),
     };
 
@@ -5515,7 +5756,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const optimisticItem: AlarmItem = { id, userId: user.uid, ...sanitized };
     const exists = fbAlarms.some((a) => a.id === id);
     setFbAlarms((prev) => {
-      const next = exists
+      const existsInPrev = prev.some((a) => a.id === id);
+      const next = existsInPrev
         ? prev.map((a) => (a.id === id ? optimisticItem : a))
         : [...prev, optimisticItem];
       saveUserMirror(user.uid, { alarms: next });

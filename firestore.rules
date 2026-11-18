@@ -540,8 +540,8 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get: if isOwner(userId) && isValidId(userId);
-      allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+      allow get: if (isOwner(userId) || isAdmin()) && isValidId(userId);
+      allow list: if (isOwner(userId) && existing().userId == request.auth.uid) || isAdmin();
       allow create: if isOwner(userId) && isValidId(userId) && isValidWorkerProfile(incoming()) &&
         incoming().createdAt == request.time && incoming().updatedAt == request.time;
       allow update: if isValidWorkerProfile(incoming()) && isOwner(userId) && isValidId(userId) &&

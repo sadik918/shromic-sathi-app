@@ -21,6 +21,7 @@
     text-rendering: optimizeLegibility;
     font-kerning: normal;
     overflow-x: hidden;
+    overscroll-behavior-y: contain;
   }
 
   body {
@@ -32,6 +33,7 @@
     -moz-osx-font-smoothing: grayscale;
     -webkit-tap-highlight-color: transparent;
     overflow-x: hidden;
+    overscroll-behavior-y: contain;
   }
 
   /* Ensure all interactive controls, headings, tables, and form inputs use Hind Siliguri -> Noto Sans Bengali -> Inter */

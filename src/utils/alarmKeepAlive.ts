@@ -1,22 +1,25 @@
 /**
- * Shromik Sathi — Multi-Layer Background & Hardware Alarm Engine
+ * Shromik Sathi — Background & Service Worker Alarm Keep-Alive Engine
  *
- * Layer 1: Service Worker Notification & TimestampTrigger sync (works when screen is locked or minimized)
- * Layer 2: Background Audio Keep-Alive + MediaSession + Screen WakeLock (prevents Android from killing the background timer)
- * Layer 3: Native Android Clock Intent (`android.intent.action.SET_ALARM`) & `.ics` VALARM Bridge
- *          (ensures the phone's hardware RTC clock rings even if the web app is swiped away from background or phone is restarted/powered off)
+ * Ensures alarms trigger and play the user's cached custom ringtone even when the app
+ * is minimized, screen is locked, or swiped from recent apps.
  */
 
 import type { AlarmItem } from '../types';
-import { playAlarmTone } from './alarmAudio';
+import { getCustomToneFromStorage, LATEST_CUSTOM_TONE_KEY, playAlarmTone } from './alarmAudio';
 import { getAccurateBstNow } from './networkTime';
 
 const BG_GUARD_STORAGE_KEY = 'shromik_sathi_bg_alarm_guard_v1';
 
-let keepAliveAudioCtx: AudioContext | null = null;
+// Tiny valid 1-second silent WAV (8kHz mono PCM) so Android keeps the media session & background timer alive
+const SILENT_WAV_DATA_URI =
+  'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
+let keepAliveAudioEl: HTMLAudioElement | null = null;
 let keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 let activeWakeLock: any = null;
 let lastGuardTriggeredKey = '';
+let webLockHeld = false;
 
 export function isBackgroundAlarmGuardEnabled(): boolean {
   if (typeof window === 'undefined') return true;
@@ -55,8 +58,8 @@ export async function requestAlarmNotificationPermission(): Promise<boolean> {
 }
 
 /**
- * Syncs the current alarm list with the active Service Worker so background notifications
- * and TimestampTriggers stay up to date even when the app tab is closed.
+ * Syncs the current alarm list with the active Service Worker so background notifications,
+ * precision timers, and TimestampTriggers stay active even when the app is closed.
  */
 export async function syncAlarmsWithServiceWorker(alarms: AlarmItem[]): Promise<void> {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
@@ -76,6 +79,13 @@ export async function syncAlarmsWithServiceWorker(alarms: AlarmItem[]): Promise<
         });
       } catch {
         // Periodic background sync permission is optional
+      }
+    }
+    if ('sync' in reg) {
+      try {
+        await (reg as any).sync.register('shromik-alarm-sync-check');
+      } catch {
+        // Background sync optional
       }
     }
   } catch {
@@ -126,60 +136,41 @@ async function acquireScreenWakeLock(): Promise<void> {
   }
 }
 
-let userGestureUnlocked = false;
-if (typeof window !== 'undefined') {
-  const unlockAudioOnGesture = () => {
-    userGestureUnlocked = true;
-    if (keepAliveAudioCtx && keepAliveAudioCtx.state === 'suspended') {
-      void keepAliveAudioCtx.resume();
-    }
-  };
-  window.addEventListener('pointerdown', unlockAudioOnGesture, { once: true, passive: true });
-  window.addEventListener('keydown', unlockAudioOnGesture, { once: true, passive: true });
+function acquirePersistentWebLock(): void {
+  if (webLockHeld || typeof navigator === 'undefined' || !('locks' in navigator)) return;
+  try {
+    webLockHeld = true;
+    navigator.locks
+      .request('shromik_sathi_background_alarm_lock', { mode: 'shared' }, () => {
+        return new Promise<void>(() => {
+          // Hold lock for lifetime of active alarm session to discourage background tab freeze
+        });
+      })
+      .catch(() => {
+        webLockHeld = false;
+      });
+  } catch {
+    webLockHeld = false;
+  }
 }
 
-/**
- * Starts the ultra-low-power Web Audio + MediaSession background keep-alive guard.
- */
-export function startBackgroundAlarmGuard(
-  getActiveAlarms: () => AlarmItem[],
-  onAlarmTriggered?: (alarm: AlarmItem) => void
-): void {
-  if (typeof window === 'undefined' || !isBackgroundAlarmGuardEnabled()) return;
-
+function startSilentMediaKeepAliveLoop(): void {
+  if (typeof window === 'undefined') return;
   try {
-    const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-
-    // Play a tiny inaudible pulse once every 20 seconds after user gesture so Android Chrome keeps the audio session alive
-    const pulseSubtleKeepAlive = () => {
-      if (!userGestureUnlocked || !AudioCtx) return;
-      if (!keepAliveAudioCtx || keepAliveAudioCtx.state === 'closed') {
-        keepAliveAudioCtx = new AudioCtx();
+    if (!keepAliveAudioEl) {
+      const audio = new Audio(SILENT_WAV_DATA_URI);
+      audio.loop = true;
+      audio.volume = 0.01;
+      keepAliveAudioEl = audio;
+    }
+    if (keepAliveAudioEl.paused) {
+      const p = keepAliveAudioEl.play();
+      if (p) {
+        p.catch(() => {
+          // Will unlock on next user interaction
+        });
       }
-      if (keepAliveAudioCtx.state === 'suspended') {
-        void keepAliveAudioCtx.resume();
-        return;
-      }
-      try {
-        const osc = keepAliveAudioCtx.createOscillator();
-        const gain = keepAliveAudioCtx.createGain();
-        osc.frequency.value = 30;
-        gain.gain.value = 0.00005; // Completely inaudible
-        osc.connect(gain);
-        gain.connect(keepAliveAudioCtx.destination);
-        const now = keepAliveAudioCtx.currentTime;
-        osc.start(now);
-        osc.stop(now + 0.05);
-      } catch {
-        // ignore
-      }
-    };
-
-    pulseSubtleKeepAlive();
-    void acquireScreenWakeLock();
-
+    }
     if ('mediaSession' in navigator) {
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
@@ -194,20 +185,55 @@ export function startBackgroundAlarmGuard(
             },
           ],
         });
+        navigator.mediaSession.playbackState = 'playing';
       } catch {
         // ignore MediaMetadata unsupported
       }
     }
+  } catch {
+    // ignore
+  }
+}
+
+if (typeof window !== 'undefined') {
+  const unlockOnGesture = () => {
+    if (keepAliveAudioEl && keepAliveAudioEl.paused) {
+      void keepAliveAudioEl.play().catch(() => {});
+    }
+  };
+  window.addEventListener('pointerdown', unlockOnGesture, { passive: true });
+  window.addEventListener('keydown', unlockOnGesture, { passive: true });
+}
+
+/**
+ * Starts the continuous background keep-alive guard so alarms ring on time even in background.
+ */
+export function startBackgroundAlarmGuard(
+  getActiveAlarms: () => AlarmItem[],
+  onAlarmTriggered?: (alarm: AlarmItem) => void
+): void {
+  if (typeof window === 'undefined' || !isBackgroundAlarmGuardEnabled()) return;
+
+  try {
+    const activeList = getActiveAlarms().filter((a) => a.isEnabled);
+    if (activeList.length === 0) {
+      stopBackgroundAlarmGuard();
+      return;
+    }
+
+    startSilentMediaKeepAliveLoop();
+    acquirePersistentWebLock();
+    void acquireScreenWakeLock();
 
     if (keepAliveInterval) {
       clearInterval(keepAliveInterval);
     }
 
-    keepAliveInterval = setInterval(() => {
+    keepAliveInterval = setInterval(async () => {
       const list = getActiveAlarms().filter((a) => a.isEnabled);
       if (list.length === 0) return;
 
-      pulseSubtleKeepAlive();
+      startSilentMediaKeepAliveLoop();
 
       const bst = getAccurateBstNow();
       const triggerKey = `${bst.dateISO}_${bst.time24}`;
@@ -218,11 +244,14 @@ export function startBackgroundAlarmGuard(
       );
       if (match) {
         lastGuardTriggeredKey = triggerKey;
-        playAlarmTone(match.toneId, undefined, true);
+        const stored = await getCustomToneFromStorage(
+          match.customToneId || LATEST_CUSTOM_TONE_KEY
+        );
+        playAlarmTone('custom_device', stored?.dataUrl, true);
         void notifyAlarmRingingViaServiceWorker(match);
         onAlarmTriggered?.(match);
       }
-    }, 10000);
+    }, 4000);
   } catch {
     // ignore audio init restrictions
   }
@@ -241,13 +270,13 @@ export function stopBackgroundAlarmGuard(): void {
     }
     activeWakeLock = null;
   }
-  if (keepAliveAudioCtx && keepAliveAudioCtx.state !== 'closed') {
+  if (keepAliveAudioEl) {
     try {
-      void keepAliveAudioCtx.close();
+      keepAliveAudioEl.pause();
     } catch {
       // ignore
     }
-    keepAliveAudioCtx = null;
+    keepAliveAudioEl = null;
   }
 }
 
@@ -256,28 +285,20 @@ export function isAndroidDevice(): boolean {
   return /android/i.test(navigator.userAgent);
 }
 
-/**
- * Builds an Android `intent://` URI that opens the phone's built-in System Clock app
- * (`android.intent.action.SET_ALARM`) pre-filled with the exact hour, minute, and label.
- * Android's native Clock app uses hardware RTC_WAKEUP, which rings even when the browser/app
- * is swiped away from background OR when the phone is powered off!
- */
-export function buildAndroidSystemClockIntentUrl(alarm: Pick<AlarmItem, 'time' | 'label' | 'repeatDays'>): string {
+export function buildAndroidSystemClockIntentUrl(
+  alarm: Pick<AlarmItem, 'time' | 'label' | 'repeatDays'>
+): string {
   const [hhStr, mmStr] = (alarm.time || '07:00').split(':');
   const hour = Math.max(0, Math.min(23, parseInt(hhStr, 10) || 7));
   const minutes = Math.max(0, Math.min(59, parseInt(mmStr, 10) || 0));
   const message = encodeURIComponent((alarm.label || 'শ্রমিক সাথী ডিউটি অ্যালার্ম').trim());
 
-  // Android Intent URI for SET_ALARM action
   return `intent:#Intent;action=android.intent.action.SET_ALARM;i.android.intent.extra.alarm.HOUR=${hour};i.android.intent.extra.alarm.MINUTES=${minutes};S.android.intent.extra.alarm.MESSAGE=${message};B.android.intent.extra.alarm.SKIP_UI=false;end`;
 }
 
-/**
- * Generates an iCalendar (`.ics`) content string with an embedded hardware `VALARM` audio/display
- * trigger and weekly recurrence rule (`RRULE`) so any phone (Android or iOS) can register a
- * system-level recurring alarm notification.
- */
-export function generateAlarmIcsContent(alarm: Pick<AlarmItem, 'id' | 'time' | 'label' | 'repeatDays'>): string {
+export function generateAlarmIcsContent(
+  alarm: Pick<AlarmItem, 'id' | 'time' | 'label' | 'repeatDays'>
+): string {
   const [hhStr, mmStr] = (alarm.time || '07:00').split(':');
   const hour = String(Math.max(0, Math.min(23, parseInt(hhStr, 10) || 7))).padStart(2, '0');
   const minute = String(Math.max(0, Math.min(59, parseInt(mmStr, 10) || 0))).padStart(2, '0');
@@ -293,7 +314,9 @@ export function generateAlarmIcsContent(alarm: Pick<AlarmItem, 'id' | 'time' | '
     5: 'FR',
     6: 'SA',
   };
-  const byDays = (alarm.repeatDays && alarm.repeatDays.length > 0 ? alarm.repeatDays : [6, 0, 1, 2, 3, 4])
+  const byDays = (
+    alarm.repeatDays && alarm.repeatDays.length > 0 ? alarm.repeatDays : [6, 0, 1, 2, 3, 4]
+  )
     .map((d) => dayMap[d])
     .filter(Boolean)
     .join(',');
@@ -329,11 +352,9 @@ export function generateAlarmIcsContent(alarm: Pick<AlarmItem, 'id' | 'time' | '
   ].join('\r\n');
 }
 
-/**
- * Triggers the native Android System Clock alarm on Android devices, or downloads/opens
- * a system `.ics` VALARM file on desktop/iOS devices.
- */
-export function registerPhoneSystemHardwareAlarm(alarm: Pick<AlarmItem, 'id' | 'time' | 'label' | 'repeatDays'>): 'android_intent' | 'ics_calendar' {
+export function registerPhoneSystemHardwareAlarm(
+  alarm: Pick<AlarmItem, 'id' | 'time' | 'label' | 'repeatDays'>
+): 'android_intent' | 'ics_calendar' {
   if (typeof window === 'undefined') return 'ics_calendar';
 
   if (isAndroidDevice()) {

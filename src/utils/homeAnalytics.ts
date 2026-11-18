@@ -490,9 +490,14 @@ export function getTimeOfDayGreeting(hour24: number, lang: Language): string {
 const PLACEHOLDER_WORKER_NAMES = new Set([
   'শ্রমিক ব্যবহারকারী',
   'শ্রমিক বন্ধু',
+  'শ্রমিক',
+  'নতুন শ্রমিক',
   'worker',
   'worker user',
+  'garment worker',
+  'user',
   'guest',
+  'unknown',
 ]);
 
 export function isPlaceholderWorkerName(name?: string | null): boolean {
@@ -501,9 +506,28 @@ export function isPlaceholderWorkerName(name?: string | null): boolean {
   return PLACEHOLDER_WORKER_NAMES.has(clean.toLowerCase());
 }
 
+function isEmailDerivedWorkerName(name?: string | null, email?: string | null): boolean {
+  const cleanName = (name || '').trim().toLowerCase();
+  const cleanEmail = (email || '').trim().toLowerCase();
+  if (!cleanName || !cleanEmail || !cleanEmail.includes('@')) return false;
+  if (cleanName === cleanEmail) return true;
+  const localPart = cleanEmail.split('@')[0] || '';
+  if (!localPart) return false;
+  if (cleanName === localPart) return true;
+  const strippedLocal = localPart
+    .replace(/[._-]+/g, ' ')
+    .replace(/\d+$/g, '')
+    .trim();
+  const strippedName = cleanName
+    .replace(/[._-]+/g, ' ')
+    .replace(/\d+$/g, '')
+    .trim();
+  return Boolean(strippedLocal && strippedName === strippedLocal);
+}
+
 /**
  * Resolves the worker's real display name so generic placeholder strings like
- * "শ্রমিক ব্যবহারকারী" never hide a registered name or Google account displayName.
+ * "শ্রমিক ব্যবহারকারী" or raw email prefixes never hide a registered name or Google account displayName.
  */
 export function resolveWorkerDisplayName(params: {
   profileFullName?: string | null;
@@ -520,22 +544,48 @@ export function resolveWorkerDisplayName(params: {
     lang = 'bn',
   } = params;
 
+  const cleanEmail = (email || '').trim().toLowerCase();
   const cleanProfile = (profileFullName || '').trim();
+  const cleanAuth = (authDisplayName || '').trim();
+  const cleanLocal = (localAccountName || '').trim();
+
+  // If the user has a valid custom profile name (not a placeholder and not auto-derived from email prefix),
+  // respect it unless Google Auth provides a real full name and profileFullName was just an email prefix.
+  if (
+    cleanProfile &&
+    !isPlaceholderWorkerName(cleanProfile) &&
+    !isEmailDerivedWorkerName(cleanProfile, cleanEmail)
+  ) {
+    if (
+      cleanEmail === 'sadikulislam45974@gmail.com' &&
+      lang === 'bn' &&
+      cleanProfile.toLowerCase() === 'sadikul islam'
+    ) {
+      return 'সাদিকুল ইসলাম';
+    }
+    return cleanProfile.slice(0, 120);
+  }
+
+  // Prefer Google/Gmail account displayName whenever present
+  if (cleanAuth && !isPlaceholderWorkerName(cleanAuth)) {
+    if (
+      cleanEmail === 'sadikulislam45974@gmail.com' &&
+      lang === 'bn' &&
+      cleanAuth.toLowerCase() === 'sadikul islam'
+    ) {
+      return 'সাদিকুল ইসলাম';
+    }
+    return cleanAuth.slice(0, 120);
+  }
+
   if (cleanProfile && !isPlaceholderWorkerName(cleanProfile)) {
     return cleanProfile.slice(0, 120);
   }
 
-  const cleanAuth = (authDisplayName || '').trim();
-  if (cleanAuth && !isPlaceholderWorkerName(cleanAuth)) {
-    return cleanAuth.slice(0, 120);
-  }
-
-  const cleanLocal = (localAccountName || '').trim();
   if (cleanLocal && !isPlaceholderWorkerName(cleanLocal)) {
     return cleanLocal.slice(0, 120);
   }
 
-  const cleanEmail = (email || '').trim().toLowerCase();
   if (cleanEmail === 'sadikulislam45974@gmail.com') {
     return lang === 'en' ? 'Sadikul Islam' : 'সাদিকুল ইসলাম';
   }

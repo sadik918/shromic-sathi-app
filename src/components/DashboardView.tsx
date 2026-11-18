@@ -899,6 +899,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               >
                 {workerDisplayName}
               </h1>
+              {user?.email && !user.email.endsWith('@shromiksathi.app') && (
+                <p
+                  data-testid="dashboard-user-email"
+                  className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 truncate"
+                >
+                  {user.email}
+                </p>
+              )}
             </div>
           </div>
 

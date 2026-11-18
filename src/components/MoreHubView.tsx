@@ -871,7 +871,9 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                   (lang === 'bn' ? 'শ্রমিক প্রোফাইল' : 'Worker Profile')}
               </p>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                {factoryName || (lang === 'bn' ? 'আরও ও সেটিংস' : 'More & Tools')}
+                {user?.email && !user.email.endsWith('@shromiksathi.app')
+                  ? user.email
+                  : factoryName || (lang === 'bn' ? 'আরও ও সেটিংস' : 'More & Tools')}
               </p>
             </div>
           </div>
@@ -1067,7 +1069,11 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                     {profile.fullName || user?.displayName || (lang === 'bn' ? 'শ্রমিক প্রোফাইল' : 'Worker Profile')}
                   </p>
                   <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                    {lang === 'bn' ? 'প্রোফাইল দেখুন' : 'View Profile'}
+                    {user?.email && !user.email.endsWith('@shromiksathi.app')
+                      ? user.email
+                      : lang === 'bn'
+                      ? 'প্রোফাইল দেখুন'
+                      : 'View Profile'}
                   </p>
                 </div>
               </button>
@@ -1137,15 +1143,27 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                 )}
               </div>
 
-              <h2
-                data-testid="worker-profile-heading"
-                className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5 truncate"
-              >
-                <UserCheck className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-700 dark:text-emerald-400 shrink-0" />
-                <span className="truncate">
-                  {lang === 'bn' ? 'প্রোফাইল' : 'Profile'}
-                </span>
-              </h2>
+              <div className="min-w-0 flex-1 truncate">
+                <h2
+                  data-testid="worker-profile-heading"
+                  className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5 truncate"
+                >
+                  <UserCheck className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+                  <span className="truncate">
+                    {profile.fullName ||
+                      user?.displayName ||
+                      (lang === 'bn' ? 'প্রোফাইল' : 'Profile')}
+                  </span>
+                </h2>
+                {user?.email && !user.email.endsWith('@shromiksathi.app') && (
+                  <p
+                    data-testid="worker-profile-email"
+                    className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 truncate mt-0.5"
+                  >
+                    {user.email}
+                  </p>
+                )}
+              </div>
             </div>
 
             {/* Profile Photo Controls & Profile Edit Icon Button */}
@@ -1297,8 +1315,13 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                       {lang === 'bn' ? 'পূর্ণ নাম' : 'Full Name'}
                     </span>
                     <p className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-                      {fullName || '—'}
+                      {profile.fullName || user?.displayName || fullName || '—'}
                     </p>
+                    {user?.email && !user.email.endsWith('@shromiksathi.app') && (
+                      <p className="text-xs font-medium text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                        {user.email}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
