@@ -203,13 +203,6 @@ const WorkspaceShell: React.FC = () => {
   remindersRef.current = reminders;
   syncedAlarmsRef.current = syncedAlarms;
 
-  // Ref-based pull-to-refresh tracking to avoid 60Hz React re-renders during touch scrolling
-  const pullStartYRef = React.useRef<number | null>(null);
-  const pullDistanceRef = React.useRef(0);
-  const pullIndicatorRef = React.useRef<HTMLDivElement | null>(null);
-  const pullIconRef = React.useRef<SVGSVGElement | null>(null);
-  const pullTextRef = React.useRef<HTMLSpanElement | null>(null);
-  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
 
   // Persist current tab and sub-view so reloading (online or offline) stays on the exact same page
   useEffect(() => {
@@ -547,127 +540,9 @@ const WorkspaceShell: React.FC = () => {
     { id: 'attendance', label: dict.navAttendance, icon: <Calendar className="w-5 h-5" /> },
     { id: 'more', label: dict.navMore, icon: <Menu className="w-5 h-5" /> },
   ];
-
-  const updatePullIndicatorDom = (distance: number, refreshing: boolean) => {
-    pullDistanceRef.current = distance;
-    const el = pullIndicatorRef.current;
-    if (el) {
-      const targetHeight = Math.max(distance, refreshing ? 40 : 0);
-      el.style.height = `${targetHeight}px`;
-      el.style.opacity = targetHeight > 0 ? '1' : '0';
-      el.style.borderBottomWidth = targetHeight > 0 ? '1px' : '0px';
-    }
-    const iconEl = pullIconRef.current;
-    if (iconEl) {
-      iconEl.classList.toggle('animate-spin', refreshing || distance >= 52);
-    }
-    const textEl = pullTextRef.current;
-    if (textEl) {
-      textEl.textContent = refreshing
-        ? lang === 'bn'
-          ? 'রিফ্রেশ হচ্ছে...'
-          : 'Refreshing...'
-        : distance >= 52
-        ? lang === 'bn'
-          ? 'ছেড়ে দিলে রিফ্রেশ হবে'
-          : 'Release to refresh'
-        : lang === 'bn'
-        ? 'রিফ্রেশ করতে নিচে টানুন'
-        : 'Pull down to refresh';
-    }
-  };
-
-  const handleTouchStartPull = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (typeof window === 'undefined' || window.scrollY > 2 || isPullRefreshing) {
-      pullStartYRef.current = null;
-      return;
-    }
-    const touch = e.touches[0];
-    if (touch) {
-      pullStartYRef.current = touch.clientY;
-    }
-  };
-
-  const handleTouchMovePull = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (pullStartYRef.current === null || isPullRefreshing) return;
-    if (typeof window !== 'undefined' && window.scrollY > 2) {
-      pullStartYRef.current = null;
-      if (pullDistanceRef.current > 0) {
-        updatePullIndicatorDom(0, false);
-      }
-      return;
-    }
-    const touch = e.touches[0];
-    if (!touch) return;
-    const deltaY = touch.clientY - pullStartYRef.current;
-    if (deltaY > 12) {
-      const damped = Math.min(84, Math.round((deltaY - 12) * 0.45));
-      if (damped !== pullDistanceRef.current) {
-        updatePullIndicatorDom(damped, false);
-      }
-    } else if (pullDistanceRef.current > 0) {
-      updatePullIndicatorDom(0, false);
-    }
-  };
-
-  const handleTouchEndPull = async () => {
-    if (pullStartYRef.current === null) return;
-    pullStartYRef.current = null;
-    if (pullDistanceRef.current >= 52 && !isPullRefreshing) {
-      setIsPullRefreshing(true);
-      updatePullIndicatorDom(48, true);
-      try {
-        if (typeof navigator === 'undefined' || navigator.onLine) {
-          await syncOfflineDataToCloud(true);
-        } else {
-          await new Promise((r) => window.setTimeout(r, 350));
-        }
-        setToastMsg(
-          lang === 'bn'
-            ? typeof navigator !== 'undefined' && !navigator.onLine
-              ? 'অফলাইন ডেটা আপ টু ডেট আছে'
-              : 'তথ্য রিফ্রেশ সম্পন্ন হয়েছে'
-            : typeof navigator !== 'undefined' && !navigator.onLine
-            ? 'Offline data is up to date'
-            : 'Data refreshed'
-        );
-        window.setTimeout(() => setToastMsg(''), 2200);
-      } finally {
-        setIsPullRefreshing(false);
-        updatePullIndicatorDom(0, false);
-      }
-    } else if (pullDistanceRef.current > 0) {
-      updatePullIndicatorDom(0, false);
-    }
-  };
-
-  const renderPullIndicator = () => (
-    <div
-      ref={pullIndicatorRef}
-      data-testid="in-app-pull-refresh-indicator"
-      className="flex items-center justify-center overflow-hidden bg-emerald-50 dark:bg-emerald-950/90 border-emerald-200/70 dark:border-emerald-800/70 text-emerald-800 dark:text-emerald-200 text-xs font-bold no-print"
-      style={{ height: isPullRefreshing ? '40px' : '0px', opacity: isPullRefreshing ? 1 : 0, borderBottomWidth: isPullRefreshing ? '1px' : '0px' }}
-    >
-      <RefreshCw
-        ref={pullIconRef}
-        className={`w-3.5 h-3.5 mr-1.5 ${isPullRefreshing ? 'animate-spin' : ''}`}
-      />
-      <span ref={pullTextRef}>
-        {isPullRefreshing
-          ? lang === 'bn'
-            ? 'রিফ্রেশ হচ্ছে...'
-            : 'Refreshing...'
-          : lang === 'bn'
-          ? 'রিফ্রেশ করতে নিচে টানুন'
-          : 'Pull down to refresh'}
-      </span>
-    </div>
-  );
-
   if (isAdminUser && activeTab === 'admin') {
     return (
       <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-        {renderPullIndicator()}
         <Suspense
           fallback={
             <div className="min-h-screen flex items-center justify-center text-xs font-bold text-slate-500">
@@ -689,7 +564,6 @@ const WorkspaceShell: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col pb-20 md:pb-8">
-      {renderPullIndicator()}
       {/* Top Navigation Bar: Logo + App Title + Sync/Offline Status on Left, Desktop Nav in Center, Month + Lang Icon + Theme Icon on Right */}
       <header className="sticky top-0 z-30 h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 no-print">
         <div className="max-w-7xl mx-auto h-full px-2.5 sm:px-6 lg:px-8 flex items-center justify-between gap-1.5 sm:gap-4 lg:gap-6">
@@ -820,14 +694,14 @@ const WorkspaceShell: React.FC = () => {
                 }
                 aria-label={lang === 'bn' ? 'অ্যাডমিন ড্যাশবোর্ড' : 'Admin Dashboard'}
                 title={lang === 'bn' ? 'অ্যাডমিন ড্যাশবোর্ড' : 'Admin Dashboard'}
-                className={`h-8 sm:h-9 px-2 sm:px-2.5 rounded-xl border text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0 ${
+                className={`h-8 w-8 sm:h-9 sm:w-auto sm:px-2.5 rounded-xl border text-xs font-bold inline-flex items-center justify-center gap-1 transition-colors shrink-0 ${
                   activeTab === 'admin'
                     ? 'bg-emerald-700 text-white border-emerald-700 shadow-2xs'
                     : 'bg-emerald-50/90 hover:bg-emerald-100 dark:bg-emerald-950/60 border-emerald-200/80 dark:border-emerald-800/80 text-emerald-900 dark:text-emerald-200'
                 }`}
               >
-                <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden min-[360px]:inline">
+                <ShieldCheck className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
+                <span className="hidden sm:inline">
                   {lang === 'bn' ? 'অ্যাডমিন' : 'Admin'}
                 </span>
               </button>
@@ -969,7 +843,7 @@ const WorkspaceShell: React.FC = () => {
                 if (subscriptionRenewalNotice.shouldShowRenewal) {
                   setRenewalModalTrigger((prev) => prev + 1);
                 }
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+                window.scrollTo(0, 0);
               }}
               className="min-h-[32px] sm:min-h-[38px] px-2.5 sm:px-4 py-1 sm:py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 dark:from-emerald-500 dark:to-teal-500 dark:hover:from-emerald-400 dark:hover:to-teal-400 text-white dark:text-slate-950 text-[11px] sm:text-[13px] font-extrabold inline-flex items-center justify-center gap-1 sm:gap-1.5 shadow-xs transition-all active:scale-[0.98] cursor-pointer shrink-0 whitespace-nowrap"
             >
@@ -989,7 +863,7 @@ const WorkspaceShell: React.FC = () => {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-5">
+      <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-5 overflow-x-clip">
         {cloudSyncError && (
           <div
             role="alert"

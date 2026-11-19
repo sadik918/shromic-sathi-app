@@ -854,7 +854,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
         <aside
           data-testid="more-desktop-subnav"
           aria-label={lang === 'bn' ? 'আরও মেনু নেভিগেশন' : 'More Navigation'}
-          className="hidden md:flex md:flex-col w-60 lg:w-64 xl:w-[272px] shrink-0 md:sticky md:top-18 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-3 shadow-2xs no-print max-h-[calc(100vh-5.5rem)] overflow-y-auto [scrollbar-width:thin]"
+          className="hidden md:flex md:flex-col w-60 lg:w-64 xl:w-[272px] shrink-0 md:sticky md:top-18 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-3 shadow-2xs no-print max-h-[calc(100vh-5.5rem)] overflow-y-auto [scrollbar-width:none]"
         >
           {/* Compact Worker Identity Strip */}
           <div className="flex items-center gap-2.5 px-2 pb-3 mb-2 border-b border-slate-100 dark:border-slate-800">

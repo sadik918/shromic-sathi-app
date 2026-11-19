@@ -1783,8 +1783,15 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     if (navEl && navEl.contains(e.target as Node) && navEl.scrollHeight > navEl.clientHeight) {
       return;
     }
-    if (adminScrollContainerRef.current && e.deltaY !== 0) {
-      adminScrollContainerRef.current.scrollBy({ top: e.deltaY });
+    const scrollEl = adminScrollContainerRef.current;
+    if (scrollEl && e.deltaY !== 0) {
+      const pixelDelta =
+        e.deltaMode === 1
+          ? e.deltaY * 40
+          : e.deltaMode === 2
+          ? e.deltaY * scrollEl.clientHeight
+          : e.deltaY;
+      scrollEl.scrollTop += pixelDelta;
     }
   };
 
@@ -1840,7 +1847,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
         <nav
           ref={adminSidebarNavRef}
           aria-label="Admin Navigation"
-          className="flex-1 p-3 space-y-1.5 overflow-y-auto"
+          className="flex-1 min-h-0 p-3 space-y-1.5 overflow-y-auto overscroll-y-contain"
         >
           {ADMIN_MENU_SECTIONS.map((sec) => {
             const isActive = activeSection === sec.id;
@@ -1899,7 +1906,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       {/* ===================================================================== */}
       {/* RIGHT MAIN WORKSPACE (FIXED TOP HEADER + SCROLLABLE CONTENT PANE) */}
       {/* ===================================================================== */}
-      <div className="flex-1 flex flex-col min-w-0 lg:h-screen lg:overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 lg:h-screen lg:overflow-hidden">
         {/* Pinned Top Admin Header */}
         <header
           data-testid="admin-top-header"
@@ -2133,7 +2140,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
         <div
           ref={adminScrollContainerRef}
           data-testid="admin-scroll-container"
-          className="flex-1 lg:overflow-y-auto p-3 sm:p-5 lg:p-6"
+          className="flex-1 min-h-0 lg:overflow-y-auto overscroll-y-contain p-3 sm:p-5 lg:p-6"
         >
           <div className="max-w-7xl mx-auto space-y-5">
           {/* ================================================================= */}

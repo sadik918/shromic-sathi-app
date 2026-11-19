@@ -20,10 +20,18 @@
     -webkit-text-size-adjust: 100%;
     text-rendering: optimizeLegibility;
     font-kerning: normal;
-    scroll-behavior: smooth;
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-x: clip;
+    overflow-y: visible;
+    scroll-behavior: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: auto;
   }
 
   body {
+    margin: 0;
     font-family: var(--font-sans);
     line-height: 1.65;
     letter-spacing: 0em;
@@ -31,9 +39,40 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     -webkit-tap-highlight-color: transparent;
-    overflow-x: clip;
-    min-height: 100vh;
-    touch-action: pan-x pan-y;
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+    touch-action: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #root {
+    min-height: 100%;
+    overflow: visible;
+  }
+
+  /* Hide visual scrollbars cleanly across all browsers & WebViews while keeping native wheel and touch scrolling 100% active */
+  html,
+  body,
+  *,
+  *::before,
+  *::after {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  *::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  /* Ensure smooth hardware momentum scrolling on internal scroll containers (modals, horizontal tabs, desktop admin pane) */
+  [class*="overflow-y-auto"],
+  [class*="overflow-x-auto"] {
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Ensure all interactive controls, headings, tables, and form inputs use Hind Siliguri -> Noto Sans Bengali -> Inter */
@@ -58,8 +97,14 @@
     touch-action: manipulation;
   }
 
+  /* Allow vertical touch-swipe scrolling even when finger starts on top of Recharts graphs/pies on mobile & WebView */
   .recharts-wrapper,
   .recharts-surface,
+  .recharts-responsive-container {
+    touch-action: pan-y !important;
+    outline: none !important;
+  }
+
   .recharts-sector {
     outline: none !important;
   }
