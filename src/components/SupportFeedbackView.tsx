@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Clock,
   HelpCircle,
+  Megaphone,
   MessageSquare,
   PhoneCall,
   Send,
@@ -17,10 +18,12 @@ import {
 import type { FeedbackCategory, Language, SupportFeedback } from '../types';
 import { formatNumber, VERIFIED_WORKER_HELPLINES } from '../utils/calculations';
 import { formatDateReadable } from '../utils/i18n';
-import { formatFeedbackDateISO, loadAdminStore } from '../utils/adminLogic';
+import { formatFeedbackDateISO, loadAdminStore, type PlatformAnnouncement } from '../utils/adminLogic';
 import {
   filterWorkerFeedback,
   getFeedbackCategoryLabel,
+  getSupportStatusMeta,
+  mergeSupportReplies,
   SUPPORT_CATEGORIES,
   SUPPORT_FAQS,
   SUPPORT_QUICK_PROMPTS,
@@ -30,8 +33,10 @@ interface SupportFeedbackViewProps {
   lang: Language;
   todayISO: string;
   feedbackList: SupportFeedback[];
+  publishedAnnouncements?: PlatformAnnouncement[];
   isAdminUser: boolean;
   onSubmitFeedback: (category: FeedbackCategory, message: string) => Promise<void>;
+  onReplyFeedback?: (id: string, message: string) => Promise<void>;
   onResolveFeedback: (id: string) => Promise<void>;
   onDeleteAccount: () => Promise<void>;
   onSuccessToast: (msg: string) => void;
@@ -41,8 +46,10 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
   lang,
   todayISO,
   feedbackList,
+  publishedAnnouncements = [],
   isAdminUser,
   onSubmitFeedback,
+  onReplyFeedback,
   onResolveFeedback,
   onDeleteAccount,
   onSuccessToast,
@@ -53,6 +60,8 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
   const [historyFilter, setHistoryFilter] = useState<'all' | 'open' | 'resolved'>('all');
   const [openFaqId, setOpenFaqId] = useState<string | null>(SUPPORT_FAQS[0]?.id || null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
+  const [sendingFollowUpId, setSendingFollowUpId] = useState<string | null>(null);
 
   const selectedCategoryMeta =
     SUPPORT_CATEGORIES.find((c) => c.id === fbCategory) || SUPPORT_CATEGORIES[0];
@@ -75,7 +84,7 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
     const adminStore = loadAdminStore(todayISO);
     const map = new Map<
       string,
-      Array<{ id: string; authorName: string; message: string; createdAt: string }>
+      Array<{ id: string; authorName: string; authorRole?: string; message: string; createdAt: string }>
     >();
     for (const t of adminStore.tickets) {
       if (t.replies && t.replies.length > 0) {
@@ -84,6 +93,23 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
     }
     return map;
   }, [todayISO, feedbackList, adminStoreVersion]);
+
+  const handleSendFollowUp = async (ticketId: string) => {
+    const text = (followUpDrafts[ticketId] || '').trim();
+    if (!text || !onReplyFeedback || sendingFollowUpId) return;
+    setSendingFollowUpId(ticketId);
+    try {
+      await onReplyFeedback(ticketId, text);
+      setFollowUpDrafts((prev) => ({ ...prev, [ticketId]: '' }));
+      onSuccessToast(
+        lang === 'bn'
+          ? 'আপনার ফিরতি বার্তাটি পাঠানো হয়েছে।'
+          : 'Your follow-up reply has been sent.'
+      );
+    } finally {
+      setSendingFollowUpId(null);
+    }
+  };
 
   const filteredHistory = useMemo(
     () => filterWorkerFeedback(feedbackList, historyFilter),
@@ -123,8 +149,46 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
 
   return (
     <div data-testid="support-feedback-view" className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-      {/* LEFT COLUMN: Smart Support Composer + Submitted Ticket History */}
+      {/* LEFT COLUMN: Admin Announcements + Smart Support Composer + Submitted Ticket History */}
       <div className="xl:col-span-7 space-y-5">
+        {publishedAnnouncements.length > 0 && (
+          <section
+            data-testid="support-admin-announcements"
+            className="bg-white dark:bg-slate-900 border border-emerald-200/80 dark:border-emerald-900/70 rounded-2xl p-4 sm:p-5 space-y-3"
+          >
+            <div className="flex items-center gap-2.5 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+              <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-100 dark:border-emerald-900/60 flex items-center justify-center shrink-0">
+                <Megaphone className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+              </div>
+              <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white truncate">
+                {lang === 'bn' ? 'অ্যাডমিন নোটিশ ও ঘোষণা' : 'Admin Notices & Announcements'}
+              </h2>
+            </div>
+
+            <div className="space-y-2.5">
+              {publishedAnnouncements.slice(0, 5).map((ann) => (
+                <article
+                  key={ann.id}
+                  data-testid={`support-announcement-${ann.id}`}
+                  className="p-3.5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-800/50 space-y-1"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                      {lang === 'bn' ? ann.titleBn : ann.titleEn || ann.titleBn}
+                    </h3>
+                    <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 tabular-nums shrink-0">
+                      {formatDateReadable(ann.publishedAt || ann.createdAt || todayISO, lang)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed">
+                    {lang === 'bn' ? ann.messageBn : ann.messageEn || ann.messageBn}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* 1. Support Request Composer */}
         <section
           data-testid="support-submit-card"
@@ -308,29 +372,14 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
               {filteredHistory.map((item) => {
                 const liveReplies = Array.isArray(item.replies) ? item.replies : [];
                 const localReplies = adminTicketRepliesMap.get(item.id) || [];
-                const combinedRepliesMap = new Map<
-                  string,
-                  { id: string; authorName: string; message: string; createdAt: string }
-                >();
-                for (const r of liveReplies) {
-                  if (r && r.id && r.message) {
-                    combinedRepliesMap.set(r.id, r);
-                  }
-                }
-                for (const r of localReplies) {
-                  if (r && r.id && r.message && !combinedRepliesMap.has(r.id)) {
-                    combinedRepliesMap.set(r.id, r);
-                  }
-                }
-                const replies = Array.from(combinedRepliesMap.values());
+                const replies = mergeSupportReplies(liveReplies, localReplies);
                 const createdStr = formatDateReadable(
                   formatFeedbackDateISO(item.createdAt, todayISO),
                   lang
                 );
-                const isResolved =
-                  item.status === 'resolved' ||
-                  item.adminStatus === 'resolved' ||
-                  item.adminStatus === 'closed';
+                const statusMeta = getSupportStatusMeta(item, replies.length, lang);
+                const isResolved = statusMeta.isResolved;
+                const followUpValue = followUpDrafts[item.id] || '';
 
                 return (
                   <div
@@ -351,10 +400,13 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
 
                       <div className="flex items-center gap-2 shrink-0">
                         <span
+                          data-testid={`support-status-${item.id}`}
                           className={`inline-flex items-center gap-1 text-[11px] font-bold ${
-                            isResolved
+                            statusMeta.tone === 'resolved'
                               ? 'text-emerald-700 dark:text-emerald-400'
-                              : replies.length > 0 || item.adminStatus === 'in_progress'
+                              : statusMeta.tone === 'waiting'
+                              ? 'text-indigo-700 dark:text-indigo-400'
+                              : statusMeta.tone === 'replied'
                               ? 'text-sky-700 dark:text-sky-400'
                               : 'text-amber-700 dark:text-amber-400'
                           }`}
@@ -364,19 +416,7 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
                           ) : (
                             <Clock className="w-3.5 h-3.5" />
                           )}
-                          <span>
-                            {isResolved
-                              ? lang === 'bn'
-                                ? 'সমাধান হয়েছে'
-                                : 'Resolved'
-                              : replies.length > 0 || item.adminStatus === 'in_progress'
-                              ? lang === 'bn'
-                                ? 'উত্তর দেওয়া হয়েছে'
-                                : 'Replied'
-                              : lang === 'bn'
-                              ? 'অপেক্ষমাণ'
-                              : 'Pending'}
-                          </span>
+                          <span>{statusMeta.label}</span>
                         </span>
 
                         {isAdminUser && !isResolved && (
@@ -397,20 +437,74 @@ export const SupportFeedbackView: React.FC<SupportFeedbackViewProps> = ({
 
                     {replies.length > 0 && (
                       <div className="pt-2 border-t border-slate-200/70 dark:border-slate-700/70 space-y-1.5">
-                        {replies.map((rep) => (
-                          <div
-                            key={rep.id}
-                            data-testid={`support-reply-${rep.id}`}
-                            className="p-2.5 rounded-lg bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200/70 dark:border-emerald-800/60 text-xs space-y-0.5"
-                          >
-                            <div className="flex items-center justify-between text-[11px] font-bold text-emerald-800 dark:text-emerald-300">
-                              <span>{rep.authorName}</span>
-                              <span className="tabular-nums font-medium">{rep.createdAt}</span>
+                        {replies.map((rep) => {
+                          const isOwnReply = rep.authorRole === 'user';
+                          return (
+                            <div
+                              key={rep.id}
+                              data-testid={`support-reply-${rep.id}`}
+                              className={`p-2.5 rounded-lg border text-xs space-y-0.5 ${
+                                isOwnReply
+                                  ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700'
+                                  : 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-200/70 dark:border-emerald-800/60'
+                              }`}
+                            >
+                              <div
+                                className={`flex items-center justify-between text-[11px] font-bold ${
+                                  isOwnReply
+                                    ? 'text-slate-700 dark:text-slate-300'
+                                    : 'text-emerald-800 dark:text-emerald-300'
+                                }`}
+                              >
+                                <span>
+                                  {isOwnReply
+                                    ? lang === 'bn'
+                                      ? 'আপনার ফিরতি বার্তা'
+                                      : 'Your Reply'
+                                    : rep.authorName}
+                                </span>
+                                <span className="tabular-nums font-medium">{rep.createdAt}</span>
+                              </div>
+                              <p className="text-slate-800 dark:text-slate-200">{rep.message}</p>
                             </div>
-                            <p className="text-slate-800 dark:text-slate-200">{rep.message}</p>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
+                    )}
+
+                    {!isResolved && onReplyFeedback && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void handleSendFollowUp(item.id);
+                        }}
+                        className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2"
+                      >
+                        <input
+                          type="text"
+                          data-testid={`support-followup-input-${item.id}`}
+                          maxLength={800}
+                          value={followUpValue}
+                          onChange={(e) =>
+                            setFollowUpDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))
+                          }
+                          placeholder={
+                            lang === 'bn'
+                              ? 'আরও কিছু জানাতে চাইলে এখানে লিখুন...'
+                              : 'Write a follow-up reply...'
+                          }
+                          className="flex-1 min-h-[36px] px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-600"
+                        />
+                        <button
+                          type="submit"
+                          data-testid={`support-followup-submit-${item.id}`}
+                          disabled={!followUpValue.trim() || sendingFollowUpId === item.id}
+                          className="min-h-[36px] px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>{lang === 'bn' ? 'পাঠান' : 'Send'}</span>
+                        </button>
+                      </form>
                     )}
                   </div>
                 );

@@ -542,6 +542,29 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidPlatformAnnouncement(data) {
+      return data.keys().hasAll(['titleBn', 'messageBn', 'category', 'status', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'titleBn', 'titleEn', 'messageBn', 'messageEn',
+          'category', 'status', 'audience', 'startDate', 'endDate',
+          'publishedBy', 'publishedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        data.titleBn is string && data.titleBn.size() >= 1 && data.titleBn.size() <= 200 &&
+        (!('titleEn' in data) || (data.titleEn is string && data.titleEn.size() <= 200)) &&
+        data.messageBn is string && data.messageBn.size() >= 1 && data.messageBn.size() <= 1500 &&
+        (!('messageEn' in data) || (data.messageEn is string && data.messageEn.size() <= 1500)) &&
+        data.category is string && data.category in ['general', 'maintenance', 'new_feature', 'security', 'important_update'] &&
+        data.status is string && data.status in ['draft', 'published', 'archived'] &&
+        (!('audience' in data) || (data.audience is string && data.audience.size() <= 40)) &&
+        (!('startDate' in data) || (data.startDate is string && data.startDate.size() <= 25)) &&
+        (!('endDate' in data) || (data.endDate is string && data.endDate.size() <= 25)) &&
+        (!('publishedBy' in data) || (data.publishedBy is string && data.publishedBy.size() <= 150)) &&
+        (!('publishedAt' in data) || (data.publishedAt is string && data.publishedAt.size() <= 40)) &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        data.updatedAt is timestamp;
+    }
+
     // 4. Collection Rules
     match /admins/{adminId} {
       allow get: if isOwner(adminId) && isValidId(adminId);
@@ -895,7 +918,8 @@ service cloud.firestore {
           (
             isOwner(existing().userId) &&
             existing().status != 'resolved' &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['message', 'category', 'updatedAt'])
+            incoming().status == existing().status &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['message', 'category', 'replies', 'updatedAt'])
           )
         );
       allow delete: if isValidId(feedbackId) && (isOwner(existing().userId) || isAdmin());
@@ -949,11 +973,7 @@ service cloud.firestore {
       allow get: if isValidId(announcementId) && (isSignedIn() || isAdmin());
       allow list: if (isSignedIn() && existing().status == 'published') || isAdmin();
       allow create, update: if isAdmin() && isValidId(announcementId) &&
-        incoming().keys().hasAll(['titleBn', 'messageBn', 'category', 'status', 'updatedAt']) &&
-        incoming().titleBn is string && incoming().titleBn.size() >= 1 && incoming().titleBn.size() <= 200 &&
-        incoming().messageBn is string && incoming().messageBn.size() >= 1 && incoming().messageBn.size() <= 1500 &&
-        incoming().category in ['general', 'maintenance', 'new_feature', 'security', 'important_update'] &&
-        incoming().status in ['draft', 'published', 'archived'] &&
+        isValidPlatformAnnouncement(incoming()) &&
         incoming().updatedAt == request.time;
       allow delete: if false;
     }

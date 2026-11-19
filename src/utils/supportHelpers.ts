@@ -1,5 +1,5 @@
-import type { FeedbackCategory, Language, SupportFeedback } from '../types';
-import type { SupportTicketRecord } from './adminLogic';
+import type { FeedbackCategory, Language, SupportFeedback, SupportFeedbackReply } from '../types';
+import type { PlatformAnnouncement, SupportTicketRecord } from './adminLogic';
 
 export interface SupportCategoryOption {
   id: FeedbackCategory;
@@ -152,14 +152,137 @@ export function getFeedbackCategoryLabel(category: FeedbackCategory, lang: Langu
   return lang === 'bn' ? match.labelBn : match.labelEn;
 }
 
+function toTimestampMs(val: unknown): number {
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  if (typeof val === 'string' && val.trim()) {
+    const parsed = Date.parse(val.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (val && typeof val === 'object') {
+    const ts = val as { toMillis?: () => number; toDate?: () => Date; seconds?: number };
+    if (typeof ts.toMillis === 'function') {
+      try {
+        return ts.toMillis();
+      } catch {
+        return 0;
+      }
+    }
+    if (typeof ts.toDate === 'function') {
+      try {
+        return ts.toDate().getTime();
+      } catch {
+        return 0;
+      }
+    }
+    if (typeof ts.seconds === 'number') {
+      return ts.seconds * 1000;
+    }
+  }
+  return 0;
+}
+
+export function sortSupportFeedbackNewestFirst(items: SupportFeedback[]): SupportFeedback[] {
+  return [...items].sort((a, b) => {
+    const bTime = Math.max(toTimestampMs(b.updatedAt), toTimestampMs(b.createdAt));
+    const aTime = Math.max(toTimestampMs(a.updatedAt), toTimestampMs(a.createdAt));
+    return bTime - aTime;
+  });
+}
+
+export function mergeSupportReplies(
+  primary: SupportFeedbackReply[] = [],
+  secondary: SupportFeedbackReply[] = []
+): SupportFeedbackReply[] {
+  const map = new Map<string, SupportFeedbackReply>();
+  for (const r of primary) {
+    if (r && r.id && typeof r.message === 'string' && r.message.trim()) {
+      map.set(r.id, r);
+    }
+  }
+  for (const r of secondary) {
+    if (r && r.id && typeof r.message === 'string' && r.message.trim() && !map.has(r.id)) {
+      map.set(r.id, r);
+    }
+  }
+  return Array.from(map.values());
+}
+
+export function getSupportStatusMeta(
+  item: Pick<SupportFeedback, 'status' | 'adminStatus'>,
+  replyCount: number,
+  lang: Language
+): { label: string; tone: 'resolved' | 'waiting' | 'replied' | 'pending'; isResolved: boolean } {
+  const isClosed = item.adminStatus === 'closed';
+  const isResolved =
+    item.status === 'resolved' || item.adminStatus === 'resolved' || isClosed;
+  if (isClosed) {
+    return {
+      label: lang === 'bn' ? 'বন্ধ করা হয়েছে' : 'Closed',
+      tone: 'resolved',
+      isResolved: true,
+    };
+  }
+  if (isResolved) {
+    return {
+      label: lang === 'bn' ? 'সমাধান হয়েছে' : 'Resolved',
+      tone: 'resolved',
+      isResolved: true,
+    };
+  }
+  if (item.adminStatus === 'waiting_for_user') {
+    return {
+      label: lang === 'bn' ? 'আপনার উত্তরের অপেক্ষায়' : 'Waiting for Reply',
+      tone: 'waiting',
+      isResolved: false,
+    };
+  }
+  if (replyCount > 0 || item.adminStatus === 'in_progress') {
+    return {
+      label: lang === 'bn' ? 'উত্তর দেওয়া হয়েছে' : 'Replied',
+      tone: 'replied',
+      isResolved: false,
+    };
+  }
+  return {
+    label: lang === 'bn' ? 'অপেক্ষমাণ' : 'Pending',
+    tone: 'pending',
+    isResolved: false,
+  };
+}
+
+export function filterActivePublishedAnnouncements(
+  announcements: PlatformAnnouncement[],
+  todayISO: string
+): PlatformAnnouncement[] {
+  return [...announcements]
+    .filter((ann) => {
+      if (!ann || ann.status !== 'published') return false;
+      if (!ann.titleBn?.trim() && !ann.messageBn?.trim()) return false;
+      if (ann.endDate && /^\d{4}-\d{2}-\d{2}$/.test(ann.endDate) && ann.endDate < todayISO) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const bKey = b.updatedAt || b.publishedAt || b.createdAt || '';
+      const aKey = a.updatedAt || a.publishedAt || a.createdAt || '';
+      return bKey.localeCompare(aKey);
+    });
+}
+
 export function filterWorkerFeedback(
   items: SupportFeedback[],
   statusFilter: 'all' | 'open' | 'resolved',
   searchQuery = ''
 ): SupportFeedback[] {
   const q = searchQuery.trim().toLowerCase();
-  return items.filter((item) => {
-    if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+  return sortSupportFeedbackNewestFirst(items).filter((item) => {
+    const isResolved =
+      item.status === 'resolved' ||
+      item.adminStatus === 'resolved' ||
+      item.adminStatus === 'closed';
+    if (statusFilter === 'resolved' && !isResolved) return false;
+    if (statusFilter === 'open' && isResolved) return false;
     if (q) {
       return (
         item.message.toLowerCase().includes(q) ||

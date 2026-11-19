@@ -138,9 +138,19 @@ import {
   type SubcollectionName,
 } from '../utils/cloudSyncHelpers';
 import { defaultUserDirectorySyncCoordinator } from '../utils/userDirectorySync';
+import {
+  formatFeedbackDateISO,
+  type PlatformAnnouncement,
+} from '../utils/adminLogic';
+import {
+  filterActivePublishedAnnouncements,
+  mergeSupportReplies,
+  sortSupportFeedbackNewestFirst,
+} from '../utils/supportHelpers';
 
 interface DataContextValue {
   user: User | null;
+  liveAuthUid: string | null;
   authReady: boolean;
   cloudDataLoaded: boolean;
   cloudSyncError: string;
@@ -184,6 +194,7 @@ interface DataContextValue {
   alarms: AlarmItem[];
   editHistory: EditHistoryEntry[];
   feedbackList: SupportFeedback[];
+  publishedAnnouncements: PlatformAnnouncement[];
   isAdminUser: boolean;
   loginWithGoogle: (mode?: 'signin' | 'signup') => Promise<void>;
   loginWithCredentials: (identifier: string, password: string) => Promise<void>;
@@ -231,6 +242,8 @@ interface DataContextValue {
   deleteAlarm: (id: string) => Promise<void>;
   restoreDeletedRecord: (historyId: string) => Promise<boolean>;
   submitFeedback: (category: FeedbackCategory, message: string) => Promise<void>;
+  replyToFeedback: (id: string, message: string) => Promise<void>;
+  syncFeedbackUpdateLocal: (updated: SupportFeedback) => void;
   resolveFeedback: (id: string) => Promise<void>;
   importBackupNonDestructive: (bundle: BackupBundle) => Promise<{ added: number; skipped: number }>;
   seedSampleDemoData: (options?: { silent?: boolean }) => Promise<{ added: number }>;
@@ -935,8 +948,45 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     () => initialCachedMirror?.editHistory || []
   );
   const [fbFeedback, setFbFeedback] = useState<SupportFeedback[]>(
-    () => initialCachedMirror?.feedback || []
+    () => sortSupportFeedbackNewestFirst(initialCachedMirror?.feedback || [])
   );
+  const [fbAnnouncements, setFbAnnouncements] = useState<PlatformAnnouncement[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = localStorage.getItem('shromik_sathi_live_announcements_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed as PlatformAnnouncement[];
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const syncLocalAnnouncements = () => {
+      try {
+        const raw = localStorage.getItem('shromik_sathi_live_announcements_v1');
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setFbAnnouncements(
+            filterActivePublishedAnnouncements(parsed as PlatformAnnouncement[], getBstTodayISO())
+          );
+        }
+      } catch {
+        // ignore storage errors
+      }
+    };
+    window.addEventListener('storage', syncLocalAnnouncements);
+    window.addEventListener('shromik-sathi-announcements-updated', syncLocalAnnouncements);
+    return () => {
+      window.removeEventListener('storage', syncLocalAnnouncements);
+      window.removeEventListener('shromik-sathi-announcements-updated', syncLocalAnnouncements);
+    };
+  }, []);
 
   // Subscription system state (respects Admin Master Switch and Firestore config)
   const [subscriptionConfig, setSubscriptionConfig] = useState<GlobalSubscriptionConfig>(() => {
@@ -2263,7 +2313,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
 
         setFbFeedback((prev) => {
-          const merged = remoteFb.length > 0 ? mergeById(prev, remoteFb) : prev;
+          const merged = sortSupportFeedbackNewestFirst(
+            remoteFb.length > 0 ? mergeById(prev, remoteFb) : prev
+          );
           saveUserMirror(uid, { feedback: merged }, { fromRemoteSnapshot: true });
           return merged;
         });
@@ -2309,12 +2361,59 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       (err) => reportFirestoreFailure(err, OperationType.LIST, 'feedback')
     );
 
+    const announcementsQuery = isVerifiedAdmin
+      ? collection(db, 'announcements')
+      : query(collection(db, 'announcements'), where('status', '==', 'published'));
+
+    const unsubAnnouncements = onSnapshot(
+      announcementsQuery,
+      (snap) => {
+        if (cancelled) return;
+        const todayStr = getBstTodayISO();
+        const remoteAnns: PlatformAnnouncement[] = snap.docs.map((d) => {
+          const raw = d.data() as Record<string, any>;
+          const updatedStr = formatFeedbackDateISO(raw.updatedAt, todayStr);
+          const createdStr = formatFeedbackDateISO(raw.createdAt, updatedStr);
+          return {
+            id: d.id,
+            titleBn: String(raw.titleBn || ''),
+            titleEn: String(raw.titleEn || raw.titleBn || ''),
+            messageBn: String(raw.messageBn || ''),
+            messageEn: String(raw.messageEn || raw.messageBn || ''),
+            category: raw.category || 'general',
+            status: raw.status || 'published',
+            audience: raw.audience === 'verified_workers' ? 'verified_workers' : 'all',
+            startDate: String(raw.startDate || createdStr),
+            endDate: String(raw.endDate || ''),
+            publishedBy: String(raw.publishedBy || ''),
+            publishedAt: raw.publishedAt ? String(raw.publishedAt) : updatedStr,
+            createdAt: createdStr,
+            updatedAt: updatedStr,
+          };
+        });
+        const activePublished = filterActivePublishedAnnouncements(remoteAnns, todayStr);
+        setFbAnnouncements(activePublished);
+        try {
+          localStorage.setItem(
+            'shromik_sathi_live_announcements_v1',
+            JSON.stringify(activePublished)
+          );
+        } catch {
+          // ignore storage quota errors
+        }
+      },
+      () => {
+        // Non-fatal if /announcements read fails transiently
+      }
+    );
+
     return () => {
       cancelled = true;
       window.clearTimeout(readySafetyTimer);
       unsubProfile();
       unsubs.forEach((u) => u());
       unsubFeedback();
+      unsubAnnouncements();
     };
   }, [
     authReady,
@@ -6205,6 +6304,133 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   };
 
+  const replyToFeedback = async (id: string, message: string) => {
+    if (isReadOnlyDemo) {
+      triggerReadOnlyBlock();
+      return;
+    }
+    const trimmed = message.trim().slice(0, 1000);
+    if (!trimmed) return;
+    const authorName =
+      (
+        activeProfile.fullName ||
+        user?.displayName ||
+        user?.email?.split('@')[0] ||
+        'শ্রমিক ব্যবহারকারী'
+      )
+        .trim()
+        .slice(0, 120) || 'শ্রমিক ব্যবহারকারী';
+    const nowStamp = `${getBstTodayISO()} ${new Date().toTimeString().slice(0, 5)}`;
+    const newReply = {
+      id: `rep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      authorName,
+      authorRole: 'user',
+      message: trimmed,
+      createdAt: nowStamp,
+    };
+
+    if (isDemoMode || !user) {
+      setDemoState((prev) => {
+        const next = {
+          ...prev,
+          feedback: sortSupportFeedbackNewestFirst(
+            (prev.feedback || []).map((f) =>
+              f.id === id
+                ? {
+                    ...f,
+                    replies: mergeSupportReplies(f.replies || [], [newReply]),
+                    updatedAt: new Date().toISOString(),
+                  }
+                : f
+            )
+          ),
+        };
+        persistCurrentLocalStore(next);
+        return next;
+      });
+      return;
+    }
+
+    let nextRepliesForDoc: NonNullable<SupportFeedback['replies']> = [newReply];
+    setFbFeedback((prev) => {
+      const next = sortSupportFeedbackNewestFirst(
+        prev.map((f) => {
+          if (f.id !== id) return f;
+          nextRepliesForDoc = mergeSupportReplies(f.replies || [], [newReply]).slice(-100);
+          return {
+            ...f,
+            replies: nextRepliesForDoc,
+            updatedAt: new Date().toISOString(),
+          };
+        })
+      );
+      saveUserMirror(user.uid, { feedback: next });
+      return next;
+    });
+
+    if (
+      (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      !auth.currentUser ||
+      auth.currentUser.uid !== user.uid
+    ) {
+      return;
+    }
+
+    await withPendingTracking(async () => {
+      try {
+        await updateDoc(doc(db, 'feedback', id), {
+          replies: nextRepliesForDoc,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        logFirestoreWarning(err, OperationType.UPDATE, `feedback/${id}`);
+      }
+    });
+  };
+
+  const syncFeedbackUpdateLocal = useCallback(
+    (updated: SupportFeedback) => {
+      if (isDemoMode || !user) {
+        setDemoState((prev) => {
+          const exists = (prev.feedback || []).some((f) => f.id === updated.id);
+          const list = exists
+            ? (prev.feedback || []).map((f) =>
+                f.id === updated.id
+                  ? {
+                      ...f,
+                      ...updated,
+                      replies: mergeSupportReplies(updated.replies || [], f.replies || []),
+                    }
+                  : f
+              )
+            : [updated, ...(prev.feedback || [])];
+          const next = { ...prev, feedback: sortSupportFeedbackNewestFirst(list) };
+          persistCurrentLocalStore(next);
+          return next;
+        });
+        return;
+      }
+      setFbFeedback((prev) => {
+        const exists = prev.some((f) => f.id === updated.id);
+        const list = exists
+          ? prev.map((f) =>
+              f.id === updated.id
+                ? {
+                    ...f,
+                    ...updated,
+                    replies: mergeSupportReplies(updated.replies || [], f.replies || []),
+                  }
+                : f
+            )
+          : [updated, ...prev];
+        const sorted = sortSupportFeedbackNewestFirst(list);
+        saveUserMirror(user.uid, { feedback: sorted });
+        return sorted;
+      });
+    },
+    [isDemoMode, user]
+  );
+
   const resolveFeedback = async (id: string) => {
     if (isReadOnlyDemo) {
       triggerReadOnlyBlock();
@@ -6532,6 +6758,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const value: DataContextValue = {
     user,
+    liveAuthUid,
     authReady,
     cloudDataLoaded,
     cloudSyncError,
@@ -6575,6 +6802,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     alarms: isDemoMode || !user ? [] : fbAlarms,
     editHistory: isDemoMode || !user ? demoState.editHistory || [] : fbEditHistory,
     feedbackList: isDemoMode || !user ? demoState.feedback || [] : fbFeedback,
+    publishedAnnouncements: fbAnnouncements,
     isAdminUser: isVerifiedAdmin,
     loginWithGoogle,
     loginWithCredentials,
@@ -6622,6 +6850,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     deleteAlarm,
     restoreDeletedRecord,
     submitFeedback,
+    replyToFeedback,
+    syncFeedbackUpdateLocal,
     resolveFeedback,
     importBackupNonDestructive,
     seedSampleDemoData,

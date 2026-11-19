@@ -42,6 +42,7 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   getDocsFromServer,
   onSnapshot,
   serverTimestamp,
@@ -100,6 +101,7 @@ import type { SupportFeedback } from '../types';
 import {
   ADMIN_QUICK_REPLIES,
   computeSupportTicketCounts,
+  filterActivePublishedAnnouncements,
 } from '../utils/supportHelpers';
 import { buildAdminDashboardChartsData } from '../utils/adminSystemHelpers';
 import {
@@ -281,6 +283,7 @@ const ROLE_MATRIX_STORAGE_KEY = 'shromik_sathi_role_feature_matrix_v1';
 export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAdmin }) => {
   const {
     user,
+    liveAuthUid,
     profile,
     isAdminUser,
     isDemoMode,
@@ -291,6 +294,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     pendingWritesCount,
     feedbackList,
     resolveFeedback,
+    syncFeedbackUpdateLocal,
     lang,
     setLang,
     darkMode,
@@ -507,12 +511,65 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       }
     );
 
+    const unsubAnnouncements = onSnapshot(
+      collection(db, 'announcements'),
+      (snapshot) => {
+        const liveAnns: PlatformAnnouncement[] = snapshot.docs.map((d) => {
+          const raw = d.data() as Record<string, any>;
+          const createdStr =
+            typeof raw.createdAt === 'string' && raw.createdAt
+              ? raw.createdAt
+              : todayISO;
+          const updatedStr =
+            typeof raw.updatedAt === 'string' && raw.updatedAt
+              ? raw.updatedAt
+              : createdStr;
+          return {
+            id: d.id,
+            titleBn: String(raw.titleBn || raw.titleEn || ''),
+            titleEn: String(raw.titleEn || raw.titleBn || ''),
+            messageBn: String(raw.messageBn || raw.messageEn || ''),
+            messageEn: String(raw.messageEn || raw.messageBn || ''),
+            category: (raw.category || 'general') as AnnouncementCategory,
+            status:
+              raw.status === 'draft' || raw.status === 'archived'
+                ? raw.status
+                : 'published',
+            audience: raw.audience || 'all',
+            startDate: typeof raw.startDate === 'string' ? raw.startDate : todayISO,
+            endDate: typeof raw.endDate === 'string' ? raw.endDate : '2026-12-31',
+            publishedBy: String(raw.publishedBy || PRIMARY_SUPER_ADMIN_EMAIL),
+            publishedAt: typeof raw.publishedAt === 'string' ? raw.publishedAt : createdStr,
+            createdAt: createdStr,
+            updatedAt: updatedStr,
+          };
+        });
+        if (liveAnns.length > 0) {
+          setStore((prev) => {
+            const byId = new Map<string, PlatformAnnouncement>();
+            for (const a of prev.announcements) byId.set(a.id, a);
+            for (const a of liveAnns) byId.set(a.id, a);
+            const merged = Array.from(byId.values()).sort((a, b) =>
+              (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '')
+            );
+            const nextState = { ...prev, announcements: merged };
+            saveAdminStore(nextState);
+            return nextState;
+          });
+        }
+      },
+      () => {
+        // Non-fatal if /announcements read fails transiently
+      }
+    );
+
     return () => {
       unsubDirectory();
       unsubProfiles();
       unsubFeedback();
+      unsubAnnouncements();
     };
-  }, [isAdminUser, user, isDemoMode, isOnline, todayISO, lang]);
+  }, [isAdminUser, user, liveAuthUid, isDemoMode, isOnline, todayISO, lang]);
 
   const handleRefreshUsersFromCloud = async () => {
     if (!isAdminUser || !user || isDemoMode) return;
@@ -1053,8 +1110,33 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     [store.tickets, activeTicketId, filteredTickets]
   );
 
-  const persistTicketToFirestore = async (targetTicket: SupportTicketRecord) => {
-    if (!user || isDemoMode) return;
+  const buildFeedbackSyncPayload = (targetTicket: SupportTicketRecord): SupportFeedback => {
+    const fbStatus: 'open' | 'resolved' =
+      targetTicket.status === 'resolved' || targetTicket.status === 'closed'
+        ? 'resolved'
+        : 'open';
+    return {
+      id: targetTicket.id,
+      userId: targetTicket.userId || user?.uid || 'demo_user',
+      workerName: targetTicket.workerName || 'শ্রমিক ব্যবহারকারী',
+      category: reverseMapTicketCategoryToFeedbackCategory(targetTicket.category),
+      message: targetTicket.message || 'সহায়তা অনুরোধ',
+      status: fbStatus,
+      adminStatus: targetTicket.status,
+      assignedTo: targetTicket.assignedTo || 'Support Team',
+      ticketNumber: targetTicket.ticketNumber || 'TKT-2001',
+      subject: targetTicket.subject || 'সাধারণ সহায়তা অনুরোধ',
+      replies: targetTicket.replies || [],
+      internalNotes: targetTicket.internalNotes || [],
+      createdAt: targetTicket.createdAt || todayISO,
+      updatedAt: new Date().toISOString(),
+    };
+  };
+
+  const persistTicketToFirestore = async (
+    targetTicket: SupportTicketRecord
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!user || isDemoMode) return { ok: true };
     const fbStatus: 'open' | 'resolved' =
       targetTicket.status === 'resolved' || targetTicket.status === 'closed'
         ? 'resolved'
@@ -1072,6 +1154,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     const cleanReplies = (targetTicket.replies || []).slice(-100).map((r) => ({
       id: String(r.id || `rep_${Date.now()}`).slice(0, 80),
       authorName: String(r.authorName || actorName).slice(0, 120),
+      authorRole: r.authorRole === 'user' ? 'user' : 'admin',
       message: String(r.message || '').slice(0, 1000),
       createdAt: String(r.createdAt || todayISO).slice(0, 40),
     }));
@@ -1082,40 +1165,71 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       createdAt: String(n.createdAt || todayISO).slice(0, 40),
     }));
     const ticketRef = doc(db, 'feedback', targetTicket.id);
+    const updatePayload = {
+      status: fbStatus,
+      adminStatus: targetTicket.status,
+      assignedTo: (targetTicket.assignedTo || 'Support Team').slice(0, 120),
+      ticketNumber: (targetTicket.ticketNumber || 'TKT-2001').slice(0, 40),
+      subject: (targetTicket.subject || 'সাধারণ সহায়তা অনুরোধ').slice(0, 200),
+      replies: cleanReplies,
+      internalNotes: cleanNotes,
+      updatedAt: serverTimestamp(),
+    };
     try {
-      await updateDoc(ticketRef, {
-        status: fbStatus,
-        adminStatus: targetTicket.status,
-        assignedTo: (targetTicket.assignedTo || 'Support Team').slice(0, 120),
-        ticketNumber: (targetTicket.ticketNumber || 'TKT-2001').slice(0, 40),
-        subject: (targetTicket.subject || 'সাধারণ সহায়তা অনুরোধ').slice(0, 200),
-        replies: cleanReplies,
-        internalNotes: cleanNotes,
-        updatedAt: serverTimestamp(),
-      });
-    } catch {
+      await updateDoc(ticketRef, updatePayload);
+      return { ok: true };
+    } catch (updateErr) {
       try {
-        await setDoc(
-          ticketRef,
-          {
+        const snap = await getDoc(ticketRef);
+        if (snap.exists()) {
+          const existing = snap.data() as Record<string, unknown>;
+          const repairPayload: Record<string, unknown> = {
+            userId:
+              typeof existing.userId === 'string' && existing.userId
+                ? existing.userId
+                : safeUserId,
+            workerName:
+              typeof existing.workerName === 'string' && existing.workerName
+                ? existing.workerName
+                : safeWorkerName,
+            category:
+              typeof existing.category === 'string' && existing.category
+                ? existing.category
+                : fbCategory,
+            message:
+              typeof existing.message === 'string' && existing.message
+                ? existing.message
+                : safeMessage,
+            ...updatePayload,
+          };
+          if (!existing.createdAt) {
+            repairPayload.createdAt = serverTimestamp();
+          }
+          await setDoc(ticketRef, repairPayload, { merge: true });
+        } else {
+          await setDoc(ticketRef, {
             userId: safeUserId,
             workerName: safeWorkerName,
             category: fbCategory,
             message: safeMessage,
-            status: fbStatus,
-            adminStatus: targetTicket.status,
-            assignedTo: (targetTicket.assignedTo || 'Support Team').slice(0, 120),
-            ticketNumber: (targetTicket.ticketNumber || 'TKT-2001').slice(0, 40),
-            subject: (targetTicket.subject || 'সাধারণ সহায়তা অনুরোধ').slice(0, 200),
-            replies: cleanReplies,
-            internalNotes: cleanNotes,
+            ...updatePayload,
             createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        );
-      } catch {
-        // Offline persistence or local store already holds the update
+          });
+        }
+        return { ok: true };
+      } catch (fallbackErr) {
+        const errObj = fallbackErr || updateErr;
+        if (isOfflineOrTransientFirestoreError(errObj)) {
+          return { ok: true };
+        }
+        console.error('Failed to persist support ticket update to Firestore:', errObj);
+        return {
+          ok: false,
+          error:
+            lang === 'bn'
+              ? 'ক্লাউডে টিকিট আপডেট সিঙ্ক করতে সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।'
+              : 'Failed to sync support ticket update to cloud. Please try again.',
+        };
       }
     }
   };
@@ -1134,7 +1248,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       ...ticket,
       status: nextStatus,
       updatedAt: todayISO,
-      resolvedAt: nextStatus === 'resolved' ? todayISO : ticket.resolvedAt,
+      resolvedAt: nextStatus === 'resolved' || nextStatus === 'closed' ? todayISO : ticket.resolvedAt,
     };
 
     const auditEntry = recordAudit({
@@ -1151,7 +1265,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       saveAdminStore(next);
       return next;
     });
-    void persistTicketToFirestore(updatedTicket);
+    syncFeedbackUpdateLocal(buildFeedbackSyncPayload(updatedTicket));
+    const res = await persistTicketToFirestore(updatedTicket);
+    if (!res.ok && res.error) {
+      showError(res.error);
+      return;
+    }
     showToast(
       lang === 'bn'
         ? `টিকিট ${ticket.ticketNumber}-এর স্ট্যাটাস আপডেট করা হয়েছে।`
@@ -1159,7 +1278,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     );
   };
 
-  const handleAssignTicket = (ticket: SupportTicketRecord, assignee: string) => {
+  const handleAssignTicket = async (ticket: SupportTicketRecord, assignee: string) => {
     if (!canAdminPerform(effectiveRole, 'assign_tickets') && effectiveRole !== 'support_moderator') {
       showError(lang === 'bn' ? 'টিকিট অ্যাসাইন করার অনুমতি নেই।' : 'Permission denied.');
       return;
@@ -1181,11 +1300,16 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       saveAdminStore(next);
       return next;
     });
-    void persistTicketToFirestore(updatedTicket);
+    syncFeedbackUpdateLocal(buildFeedbackSyncPayload(updatedTicket));
+    const res = await persistTicketToFirestore(updatedTicket);
+    if (!res.ok && res.error) {
+      showError(res.error);
+      return;
+    }
     showToast(lang === 'bn' ? 'টিকিট দায়িত্বপ্রাপ্ত মডারেটরকে অ্যাসাইন করা হয়েছে।' : 'Ticket assigned.');
   };
 
-  const handleAddTicketReply = (e: React.FormEvent) => {
+  const handleAddTicketReply = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTicket || !ticketReplyText.trim()) return;
     if (!canAdminPerform(effectiveRole, 'manage_tickets')) {
@@ -1197,6 +1321,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     const newReply = {
       id: `rep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       authorName: actorName,
+      authorRole: 'admin' as const,
       message: msg,
       createdAt: nowStamp,
     };
@@ -1215,12 +1340,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       saveAdminStore(next);
       return next;
     });
-    void persistTicketToFirestore(updatedTicket);
+    syncFeedbackUpdateLocal(buildFeedbackSyncPayload(updatedTicket));
     setTicketReplyText('');
-    showToast(lang === 'bn' ? 'ব্যবহারকারীর টিকিটে উত্তর যুক্ত করা হয়েছে।' : 'Reply sent to ticket thread.');
+    const res = await persistTicketToFirestore(updatedTicket);
+    if (!res.ok && res.error) {
+      showError(res.error);
+      return;
+    }
+    showToast(lang === 'bn' ? 'ব্যবহারকারীর টিকিটে উত্তর পাঠানো হয়েছে।' : 'Reply sent to ticket thread.');
   };
 
-  const handleAddInternalNote = (e: React.FormEvent) => {
+  const handleAddInternalNote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTicket || !ticketInternalNoteText.trim()) return;
     const note = ticketInternalNoteText.trim();
@@ -1244,8 +1374,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       saveAdminStore(next);
       return next;
     });
-    void persistTicketToFirestore(updatedTicket);
     setTicketInternalNoteText('');
+    const res = await persistTicketToFirestore(updatedTicket);
+    if (!res.ok && res.error) {
+      showError(res.error);
+      return;
+    }
     showToast(lang === 'bn' ? 'অভ্যন্তরীণ অ্যাডমিন নোট সংরক্ষিত হয়েছে।' : 'Internal note added.');
   };
 
@@ -1272,7 +1406,34 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
   const [policyReasonInput, setPolicyReasonInput] = useState('');
   const [policyConfirmOpen, setPolicyConfirmOpen] = useState(false);
 
-  const handlePublishAnnouncement = (e: React.FormEvent, asDraft = false) => {
+  const syncPublishedAnnouncementsLocal = (announcements: PlatformAnnouncement[]) => {
+    if (typeof window === 'undefined') return;
+    try {
+      const active = filterActivePublishedAnnouncements(announcements, todayISO);
+      localStorage.setItem('shromik_sathi_live_announcements_v1', JSON.stringify(active));
+      window.dispatchEvent(new CustomEvent('shromik-sathi-announcements-updated'));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const buildAnnouncementCloudPayload = (ann: PlatformAnnouncement, statusOverride?: 'draft' | 'published' | 'archived') => ({
+    titleBn: ann.titleBn.slice(0, 200),
+    titleEn: (ann.titleEn || ann.titleBn).slice(0, 200),
+    messageBn: ann.messageBn.slice(0, 1500),
+    messageEn: (ann.messageEn || ann.messageBn).slice(0, 1500),
+    category: ann.category,
+    status: statusOverride || ann.status,
+    audience: ann.audience || 'all',
+    startDate: (ann.startDate || todayISO).slice(0, 20),
+    endDate: (ann.endDate || '2026-12-31').slice(0, 20),
+    publishedBy: (ann.publishedBy || actorEmail).slice(0, 120),
+    publishedAt: (ann.publishedAt || todayISO).slice(0, 40),
+    createdAt: (ann.createdAt || todayISO).slice(0, 40),
+    updatedAt: serverTimestamp(),
+  });
+
+  const handlePublishAnnouncement = async (e: React.FormEvent, asDraft = false) => {
     e.preventDefault();
     if (!canAdminPerform(effectiveRole, 'publish_announcements')) {
       showError(
@@ -1318,27 +1479,39 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     });
 
     setStore((prev) => {
+      const nextAnns = [newAnn, ...prev.announcements];
       const next = {
         ...prev,
-        announcements: [newAnn, ...prev.announcements],
+        announcements: nextAnns,
         auditLogs: [auditEntry, ...prev.auditLogs],
       };
       saveAdminStore(next);
+      syncPublishedAnnouncementsLocal(nextAnns);
       return next;
     });
 
-    if (user && !isDemoMode) {
-      setDoc(doc(db, 'announcements', newAnn.id), {
-        titleBn: newAnn.titleBn,
-        messageBn: newAnn.messageBn,
-        category: newAnn.category,
-        status: newAnn.status,
-        updatedAt: serverTimestamp(),
-      }).catch(() => {});
-    }
-
     setAnnTitleBn('');
     setAnnMessageBn('');
+
+    if (user && !isDemoMode) {
+      try {
+        await setDoc(
+          doc(db, 'announcements', newAnn.id),
+          buildAnnouncementCloudPayload(newAnn)
+        );
+      } catch (err) {
+        if (!isOfflineOrTransientFirestoreError(err)) {
+          console.error('Failed to publish announcement to Firestore:', err);
+          showError(
+            lang === 'bn'
+              ? 'ক্লাউডে নোটিশ প্রকাশ করতে সমস্যা হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।'
+              : 'Failed to sync announcement to cloud.'
+          );
+          return;
+        }
+      }
+    }
+
     showToast(
       lang === 'bn'
         ? status === 'published'
@@ -1348,7 +1521,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     );
   };
 
-  const handleToggleAnnouncementStatus = (ann: PlatformAnnouncement, nextStatus: 'published' | 'archived') => {
+  const handleToggleAnnouncementStatus = async (ann: PlatformAnnouncement, nextStatus: 'published' | 'archived') => {
     if (!canAdminPerform(effectiveRole, 'publish_announcements')) {
       showError(lang === 'bn' ? 'অনুমতি নেই।' : 'Permission denied.');
       return;
@@ -1365,30 +1538,32 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       );
       const next = { ...prev, announcements: nextAnns, auditLogs: [auditEntry, ...prev.auditLogs] };
       saveAdminStore(next);
+      syncPublishedAnnouncementsLocal(nextAnns);
       return next;
     });
     if (user && !isDemoMode) {
-      void updateDoc(doc(db, 'announcements', ann.id), {
-        status: nextStatus,
-        updatedAt: serverTimestamp(),
-      }).catch(() =>
-        setDoc(
+      try {
+        await setDoc(
           doc(db, 'announcements', ann.id),
-          {
-            titleBn: ann.titleBn,
-            messageBn: ann.messageBn,
-            category: ann.category,
-            status: nextStatus,
-            updatedAt: serverTimestamp(),
-          },
+          buildAnnouncementCloudPayload(ann, nextStatus),
           { merge: true }
-        ).catch(() => {})
-      );
+        );
+      } catch (err) {
+        if (!isOfflineOrTransientFirestoreError(err)) {
+          console.error('Failed to update announcement status:', err);
+          showError(
+            lang === 'bn'
+              ? 'নোটিশের স্ট্যাটাস ক্লাউডে আপডেট হয়নি।'
+              : 'Failed to update announcement in cloud.'
+          );
+          return;
+        }
+      }
     }
     showToast(lang === 'bn' ? 'ঘোষণার স্ট্যাটাস আপডেট করা হয়েছে।' : 'Announcement updated.');
   };
 
-  const handleDeleteAnnouncement = (ann: PlatformAnnouncement) => {
+  const handleDeleteAnnouncement = async (ann: PlatformAnnouncement) => {
     if (!canAdminPerform(effectiveRole, 'publish_announcements')) {
       showError(lang === 'bn' ? 'অনুমতি নেই।' : 'Permission denied.');
       return;
@@ -1403,13 +1578,21 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       const nextAnns = prev.announcements.filter((a) => a.id !== ann.id);
       const next = { ...prev, announcements: nextAnns, auditLogs: [auditEntry, ...prev.auditLogs] };
       saveAdminStore(next);
+      syncPublishedAnnouncementsLocal(nextAnns);
       return next;
     });
     if (user && !isDemoMode) {
-      void updateDoc(doc(db, 'announcements', ann.id), {
-        status: 'archived',
-        updatedAt: serverTimestamp(),
-      }).catch(() => {});
+      try {
+        await setDoc(
+          doc(db, 'announcements', ann.id),
+          buildAnnouncementCloudPayload(ann, 'archived'),
+          { merge: true }
+        );
+      } catch (err) {
+        if (!isOfflineOrTransientFirestoreError(err)) {
+          console.error('Failed to archive announcement:', err);
+        }
+      }
     }
     showToast(lang === 'bn' ? 'নোটিশটি তালিকা থেকে সরানো হয়েছে।' : 'Announcement removed.');
   };
@@ -1798,7 +1981,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
   return (
     <div
       data-testid="super-admin-dashboard"
-      className="min-h-screen lg:h-screen w-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col lg:flex-row lg:overflow-hidden"
+      className="min-h-screen lg:fixed lg:inset-0 lg:h-dvh lg:w-screen lg:overflow-hidden w-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col lg:flex-row"
     >
       {/* ===================================================================== */}
       {/* DESKTOP FIXED LEFT SIDEBAR (FLUSH TO LEFT EDGE, NEVER SCROLLS) */}
@@ -1806,7 +1989,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       <aside
         data-testid="admin-desktop-sidebar"
         onWheel={handleDesktopFixedChromeWheel}
-        className={`hidden lg:flex flex-col shrink-0 lg:h-screen bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-[width] duration-200 ${
+        className={`hidden lg:flex flex-col shrink-0 lg:h-full bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-[width] duration-200 ${
           sidebarCollapsed ? 'w-[76px]' : 'w-64'
         }`}
       >
@@ -1906,7 +2089,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       {/* ===================================================================== */}
       {/* RIGHT MAIN WORKSPACE (FIXED TOP HEADER + SCROLLABLE CONTENT PANE) */}
       {/* ===================================================================== */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 lg:h-screen lg:overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 lg:h-full lg:overflow-hidden">
         {/* Pinned Top Admin Header */}
         <header
           data-testid="admin-top-header"
@@ -3861,7 +4044,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                   </div>
 
                   {/* Right 7 Cols: Active Ticket Details, Quick Replies, Assignment & Notes */}
-                  <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
+                  <div className="lg:col-span-7 lg:sticky lg:top-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
                     {!activeTicket ? (
                       <div className="py-12 text-center text-xs text-slate-400">
                         {lang === 'bn'
@@ -3943,18 +4126,38 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                               {lang === 'bn' ? 'এখনো কোনো উত্তর পাঠানো হয়নি।' : 'No replies sent yet.'}
                             </p>
                           ) : (
-                            activeTicket.replies.map((rep) => (
-                              <div
-                                key={rep.id}
-                                className="p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/60 text-xs space-y-1"
-                              >
-                                <div className="flex items-center justify-between text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold">
-                                  <span>{rep.authorName}</span>
-                                  <span className="font-mono">{rep.createdAt}</span>
+                            activeTicket.replies.map((rep) => {
+                              const isWorkerReply = rep.authorRole === 'user';
+                              return (
+                                <div
+                                  key={rep.id}
+                                  className={`p-3 rounded-xl border text-xs space-y-1 ${
+                                    isWorkerReply
+                                      ? 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700'
+                                      : 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200/70 dark:border-emerald-800/60'
+                                  }`}
+                                >
+                                  <div
+                                    className={`flex items-center justify-between text-[11px] font-semibold ${
+                                      isWorkerReply
+                                        ? 'text-slate-700 dark:text-slate-300'
+                                        : 'text-emerald-800 dark:text-emerald-300'
+                                    }`}
+                                  >
+                                    <span>
+                                      {rep.authorName}
+                                      {isWorkerReply
+                                        ? lang === 'bn'
+                                          ? ' (ব্যবহারকারী)'
+                                          : ' (User)'
+                                        : ''}
+                                    </span>
+                                    <span className="font-mono">{rep.createdAt}</span>
+                                  </div>
+                                  <p className="text-slate-800 dark:text-slate-200">{rep.message}</p>
                                 </div>
-                                <p className="text-slate-800 dark:text-slate-200">{rep.message}</p>
-                              </div>
-                            ))
+                              );
+                            })
                           )}
 
                           {/* Quick Reply Chips */}

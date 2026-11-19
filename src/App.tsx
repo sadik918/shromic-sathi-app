@@ -7,6 +7,7 @@ import {
   Clock,
   Globe,
   Home,
+  Megaphone,
   Menu,
   Moon,
   RefreshCw,
@@ -131,6 +132,7 @@ const WorkspaceShell: React.FC = () => {
     expenses,
     reminders,
     alarms: syncedAlarms,
+    publishedAnnouncements,
     isAdminUser,
     subscriptionRenewalNotice,
   } = useData();
@@ -194,6 +196,16 @@ const WorkspaceShell: React.FC = () => {
   const [renewalModalTrigger, setRenewalModalTrigger] = useState(0);
   const [attendanceFocusDate, setAttendanceFocusDate] = useState<string | undefined>(undefined);
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+  const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = sessionStorage.getItem('shromik_sathi_dismissed_announcements_v1');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [toastMsg, setToastMsg] = useState('');
   const toastTimerRef = React.useRef<number | null>(null);
   const [ringingAlarm, setRingingAlarm] = useState<AlarmItem | null>(null);
@@ -202,6 +214,24 @@ const WorkspaceShell: React.FC = () => {
   const syncedAlarmsRef = React.useRef(syncedAlarms);
   remindersRef.current = reminders;
   syncedAlarmsRef.current = syncedAlarms;
+
+  const activeTopAnnouncement = React.useMemo(
+    () =>
+      publishedAnnouncements.find((ann) => !dismissedAnnouncementIds.includes(ann.id)) || null,
+    [publishedAnnouncements, dismissedAnnouncementIds]
+  );
+
+  const handleDismissAnnouncement = (id: string) => {
+    setDismissedAnnouncementIds((prev) => {
+      const next = prev.includes(id) ? prev : [...prev, id];
+      try {
+        sessionStorage.setItem('shromik_sathi_dismissed_announcements_v1', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
 
   // Persist current tab and sub-view so reloading (online or offline) stays on the exact same page
@@ -540,9 +570,13 @@ const WorkspaceShell: React.FC = () => {
     { id: 'attendance', label: dict.navAttendance, icon: <Calendar className="w-5 h-5" /> },
     { id: 'more', label: dict.navMore, icon: <Menu className="w-5 h-5" /> },
   ];
-  if (isAdminUser && activeTab === 'admin') {
+  const isAdminModeActive =
+    isAdminUser &&
+    (activeTab === 'admin' || (activeTab === 'more' && moreSubView === 'admin_panel'));
+
+  if (isAdminModeActive) {
     return (
-      <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+      <div className="min-h-screen lg:fixed lg:inset-0 lg:h-dvh lg:w-screen lg:overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
         <Suspense
           fallback={
             <div className="min-h-screen flex items-center justify-center text-xs font-bold text-slate-500">
@@ -550,7 +584,14 @@ const WorkspaceShell: React.FC = () => {
             </div>
           }
         >
-          <AdminDashboardView onExitAdmin={() => handleNavigate('dashboard')} />
+          <AdminDashboardView
+            onExitAdmin={() => {
+              if (moreSubView === 'admin_panel') {
+                setMoreSubView('profile');
+              }
+              handleNavigate('dashboard');
+            }}
+          />
         </Suspense>
 
         <AlarmRingingOverlay
@@ -864,6 +905,41 @@ const WorkspaceShell: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-5 overflow-x-clip">
+        {activeTopAnnouncement && !(activeTab === 'more' && moreSubView === 'support') && (
+          <div
+            role="region"
+            aria-label={lang === 'bn' ? 'অ্যাডমিন নোটিশ' : 'Admin Notice'}
+            data-testid="live-admin-announcement-banner"
+            className="mb-3 rounded-2xl border border-emerald-200/90 dark:border-emerald-800/70 bg-emerald-50/75 dark:bg-emerald-950/40 px-3.5 py-2.5 text-xs text-slate-800 dark:text-slate-100 flex items-start justify-between gap-3 no-print"
+          >
+            <div className="flex items-start gap-2.5 min-w-0">
+              <span className="w-7 h-7 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0 mt-0.5">
+                <Megaphone className="w-3.5 h-3.5" />
+              </span>
+              <div className="min-w-0 space-y-0.5">
+                <p className="font-extrabold text-slate-900 dark:text-white leading-snug">
+                  {lang === 'bn'
+                    ? activeTopAnnouncement.titleBn
+                    : activeTopAnnouncement.titleEn || activeTopAnnouncement.titleBn}
+                </p>
+                <p className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                  {lang === 'bn'
+                    ? activeTopAnnouncement.messageBn
+                    : activeTopAnnouncement.messageEn || activeTopAnnouncement.messageBn}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              data-testid="dismiss-announcement-btn"
+              onClick={() => handleDismissAnnouncement(activeTopAnnouncement.id)}
+              aria-label={lang === 'bn' ? 'নোটিশ বন্ধ করুন' : 'Dismiss notice'}
+              className="w-7 h-7 rounded-lg text-slate-500 dark:text-slate-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/60 flex items-center justify-center shrink-0 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         {cloudSyncError && (
           <div
             role="alert"

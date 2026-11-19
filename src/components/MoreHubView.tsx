@@ -111,6 +111,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     loans,
     editHistory,
     feedbackList,
+    publishedAnnouncements,
     isAdminUser,
     updateProfile,
     saveVaultDocument,
@@ -120,6 +121,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     deleteReminder,
     restoreDeletedRecord,
     submitFeedback,
+    replyToFeedback,
     resolveFeedback,
     importBackupNonDestructive,
     deleteAccountAndData,
@@ -2676,8 +2678,10 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
             lang={lang}
             todayISO={todayISO}
             feedbackList={feedbackList}
+            publishedAnnouncements={publishedAnnouncements}
             isAdminUser={isAdminUser}
             onSubmitFeedback={submitFeedback}
+            onReplyFeedback={replyToFeedback}
             onResolveFeedback={resolveFeedback}
             onDeleteAccount={deleteAccountAndData}
             onSuccessToast={(msg) => setNotice(msg)}

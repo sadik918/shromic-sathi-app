@@ -209,6 +209,7 @@ export interface SupportTicketRecord {
   replies: Array<{
     id: string;
     authorName: string;
+    authorRole?: string;
     message: string;
     createdAt: string;
   }>;
@@ -650,6 +651,9 @@ export function mapLegacyFeedbackToTickets(
             id: typeof r.id === 'string' && r.id ? r.id : `rep_${fb.id}_${rIdx}`,
             authorName:
               typeof r.authorName === 'string' && r.authorName ? r.authorName : 'Support Team',
+            ...(typeof r.authorRole === 'string' && r.authorRole
+              ? { authorRole: r.authorRole }
+              : {}),
             message: r.message,
             createdAt: typeof r.createdAt === 'string' && r.createdAt ? r.createdAt : updatedStr,
           }))
@@ -735,7 +739,7 @@ export function mergeFeedbackTicketsIntoStore(
     // Merge replies deduplicated by id
     const replyMap = new Map<
       string,
-      { id: string; authorName: string; message: string; createdAt: string }
+      { id: string; authorName: string; authorRole?: string; message: string; createdAt: string }
     >();
     for (const r of existing.replies || []) {
       if (r && r.id) replyMap.set(r.id, r);
