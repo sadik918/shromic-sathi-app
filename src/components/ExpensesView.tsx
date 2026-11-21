@@ -12,6 +12,7 @@ import {
   ShoppingBag,
   Trash2,
   Wallet,
+  X,
   Zap,
 } from 'lucide-react';
 import { useData } from '../context/DataContext';
@@ -50,6 +51,7 @@ import {
   buildMonthlyRentUtilityTableRows,
   getNextMonthISO,
   toBengaliDigits,
+  validateNotBeforeJoiningDate,
   type RentRuleConfig,
   type MonthlyRentRuleEntry,
   type RentBillItemType,
@@ -59,6 +61,14 @@ import { formatDateReadable, formatDateShortBn, formatDateSlashDMY, formatMonthL
 import { DateInputDMY } from './DateInputDMY';
 import { ExpenseCashflowAnalyticsCard, ExpenseRentTrendChartCard } from './AnalyticsChartCards';
 import { buildExpenseRentTrend, buildHomeOverviewAnalytics } from '../utils/homeAnalytics';
+import { evaluateSavingsGoalPlan } from '../utils/featureHelpers';
+
+const SAVINGS_SURPLUS_FLAGS_KEY = 'shromik_sathi_savings_surplus_flags_v1';
+const SAVINGS_GOAL_PRESETS: Array<{ id: string; bn: string; en: string }> = [
+  { id: 'eid', bn: 'ঈদের খরচ', en: 'Eid Expenses' },
+  { id: 'home', bn: 'বাড়ির জন্য', en: 'For Family / Home' },
+  { id: 'custom', bn: 'কাস্টম', en: 'Custom' },
+];
 
 const EXPENSE_CATEGORIES: Array<{
   id: ExpenseCategory;
@@ -521,7 +531,12 @@ export const ExpensesView: React.FC = () => {
     setRuleTargetMonth(selectedMonth);
     setRuleDraft(resolveRentRuleForMonth(loadedRule, selectedMonth));
     loadMonthRentFormState(selectedMonth, loadedRule);
-  }, [selectedMonth, profile.userId]);
+    const defaultDateForMonth = todayISO.startsWith(selectedMonth)
+      ? todayISO
+      : `${selectedMonth}-01`;
+    setExpDate(defaultDateForMonth);
+    setIncomeDate(defaultDateForMonth);
+  }, [selectedMonth, profile.userId, todayISO]);
 
   useEffect(() => {
     loadMonthRentFormState(rentTargetMonth, rentRule);
@@ -530,8 +545,11 @@ export const ExpensesView: React.FC = () => {
   // Collapse Rent & Bills form when saved regular rent records already exist for rentTargetMonth and user is not editing
   const isRentBillsFormCollapsed = activeTargetRegularRecords.length > 0 && !isEditingRentBills;
 
+  const initialDefaultMonthDate = todayISO.startsWith(selectedMonth)
+    ? todayISO
+    : `${selectedMonth}-01`;
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
-  const [expDate, setExpDate] = useState(`${selectedMonth}-15`);
+  const [expDate, setExpDate] = useState(initialDefaultMonthDate);
   const [expCategory, setExpCategory] = useState<ExpenseCategory>('food');
   const [expAmount, setExpAmount] = useState<number>(0);
   const [expDescription, setExpDescription] = useState('');
@@ -541,7 +559,7 @@ export const ExpensesView: React.FC = () => {
   const [incomeEntryMode, setIncomeEntryMode] = useState<'other_income' | 'salary'>('other_income');
   const [incomeSource, setIncomeSource] = useState<string>(OTHER_INCOME_SOURCES[0].id);
   const [incomeAmount, setIncomeAmount] = useState<number>(0);
-  const [incomeDate, setIncomeDate] = useState<string>(`${selectedMonth}-12`);
+  const [incomeDate, setIncomeDate] = useState<string>(initialDefaultMonthDate);
   const [incomeNote, setIncomeNote] = useState<string>('');
 
   // Savings Goals & Schedule state
@@ -555,8 +573,43 @@ export const ExpensesView: React.FC = () => {
   const [goalCommissionAmount, setGoalCommissionAmount] = useState<number>(0);
   const [goalFrequency, setGoalFrequency] = useState<SavingsFrequency>('monthly');
   const [goalDepositDate, setGoalDepositDate] = useState<string>(todayISO);
+  const [goalCountMonthlySurplus, setGoalCountMonthlySurplus] = useState<boolean>(false);
+  const [goalDeadlineError, setGoalDeadlineError] = useState<string>('');
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [confirmDeleteGoalId, setConfirmDeleteGoalId] = useState<string | null>(null);
   const [isSavingsFormOpen, setIsSavingsFormOpen] = useState<boolean>(false);
+  const [surplusFlagsMap, setSurplusFlagsMap] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem(SAVINGS_SURPLUS_FLAGS_KEY);
+      return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [dismissedBehindReminder, setDismissedBehindReminder] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(`shromik_sathi_savings_behind_dismissed_${todayISO.slice(0, 7)}`) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const persistSurplusFlag = (goalId: string, enabled: boolean) => {
+    setSurplusFlagsMap((prev) => {
+      const next = { ...prev, [goalId]: enabled };
+      try {
+        localStorage.setItem(SAVINGS_SURPLUS_FLAGS_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const currentMonthSurplusAmount = Math.max(
+    0,
+    roundCurrency(financeSummary.salaryIncome + financeSummary.otherIncome - financeSummary.totalExpenses)
+  );
 
   // Check if any saved goal has reached or passed its scheduled nextDueDate
   const dueSavingsGoals = savings.filter(
@@ -1136,6 +1189,12 @@ export const ExpensesView: React.FC = () => {
     e.preventDefault();
     if (expAmount <= 0) return;
 
+    const joiningGuard = validateNotBeforeJoiningDate(expDate, profile.joiningDate, lang);
+    if (!joiningGuard.valid) {
+      showToast(joiningGuard.error || '');
+      return;
+    }
+
     await saveExpense(
       {
         date: expDate,
@@ -1173,6 +1232,12 @@ export const ExpensesView: React.FC = () => {
   const handleSaveIncome = async (e: React.FormEvent) => {
     e.preventDefault();
     if (incomeAmount <= 0) return;
+
+    const joiningGuard = validateNotBeforeJoiningDate(incomeDate, profile.joiningDate, lang);
+    if (!joiningGuard.valid) {
+      showToast(joiningGuard.error || '');
+      return;
+    }
 
     const formattedRefNote =
       incomeEntryMode === 'other_income'
@@ -1230,12 +1295,24 @@ export const ExpensesView: React.FC = () => {
     setGoalCommissionAmount(g.commissionAmount ?? 0);
     setGoalFrequency(g.frequency || 'monthly');
     setGoalDepositDate(g.lastDepositDate || todayISO);
+    setGoalCountMonthlySurplus(Boolean(g.countMonthlySurplus || surplusFlagsMap[g.id]));
+    setGoalDeadlineError('');
     setIsSavingsFormOpen(true);
   };
 
   const handleSaveGoal = async (e: React.FormEvent) => {
     e.preventDefault();
+    setGoalDeadlineError('');
     if (!goalTitle.trim() || goalTarget <= 0) return;
+
+    if (goalDeadline && goalDeadline < todayISO) {
+      setGoalDeadlineError(
+        lang === 'bn'
+          ? 'টার্গেট তারিখ আজকের পরের হতে হবে।'
+          : 'Target date must be today or in the future.'
+      );
+      return;
+    }
 
     const depositDateToUse = goalDepositDate || todayISO;
     const computedNextDue = computeNextSavingsDueDate(depositDateToUse, goalFrequency);
@@ -1261,16 +1338,25 @@ export const ExpensesView: React.FC = () => {
       editingGoalId || undefined
     );
 
+    if (editingGoalId) {
+      persistSurplusFlag(editingGoalId, goalCountMonthlySurplus);
+    } else if (goalCountMonthlySurplus) {
+      // Persist flag by title fallback key as well for newly created goals
+      persistSurplusFlag(`title:${goalTitle.trim()}`, true);
+    }
+
     setGoalTitle('');
     setGoalTarget(0);
     setGoalSaved(0);
     setGoalBudget(0);
     setGoalCommissionAmount(0);
+    setGoalCountMonthlySurplus(false);
+    setGoalDeadlineError('');
     setEditingGoalId(null);
     setIsSavingsFormOpen(false);
     showToast(
       lang === 'bn'
-        ? `সঞ্চয় লক্ষ্য সংরক্ষিত হয়েছে! পরবর্তী জমার তারিখ: ${formatDateSlashDMY(computedNextDue, 'bn')}`
+        ? `সঞ্চয় লক্ষ্য সংরক্ষিত হয়েছে! পরবর্তী জমার তারিখ: ${formatDateSlashDMY(computedNextDue, 'bn')}`
         : `Savings goal saved! Next deposit date: ${computedNextDue}`
     );
   };
@@ -1349,6 +1435,22 @@ export const ExpensesView: React.FC = () => {
                 </span>
               </div>
             </div>
+
+            {/* Negative Remaining Cash Warning Banner */}
+            {netCashInHand < 0 && (
+              <div
+                data-testid="negative-cash-warning-banner"
+                role="alert"
+                className="mt-2 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-xs font-bold text-rose-700 dark:text-rose-300 flex items-center gap-2"
+              >
+                <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                <span>
+                  {lang === 'bn'
+                    ? 'আপনার হাতে টাকা শেষের পথে — এই মাসে রেকর্ডকৃত আয়ের চেয়ে খরচ বেশি হয়েছে। অনুগ্রহ করে প্রাপ্ত বেতন বা প্রারম্ভিক জমা আপডেট করুন।'
+                    : 'Low cash balance alert — expenses exceed recorded cash inflow this month. Please update opening cash or received salary.'}
+                </span>
+              </div>
+            )}
 
             {/* Line 2: "প্রারম্ভিক জমা" BELOW "currently in hand" */}
             <div className="pt-0.5">
@@ -3575,6 +3677,60 @@ export const ExpensesView: React.FC = () => {
             </div>
           )}
 
+          {/* Soft Dismissible Mid-Month Behind-Plan Reminder */}
+          {!dismissedBehindReminder &&
+            (() => {
+              const behindGoal = savings.find((g) => {
+                const plan = evaluateSavingsGoalPlan({
+                  goal: {
+                    ...g,
+                    countMonthlySurplus: Boolean(
+                      surplusFlagsMap[g.id] || surplusFlagsMap[`title:${g.title}`]
+                    ),
+                  },
+                  todayISO,
+                  currentMonthSurplus: currentMonthSurplusAmount,
+                });
+                return plan.isBehindMidMonth;
+              });
+              if (!behindGoal) return null;
+              const behindPlan = evaluateSavingsGoalPlan({
+                goal: behindGoal,
+                todayISO,
+                currentMonthSurplus: currentMonthSurplusAmount,
+              });
+              return (
+                <div
+                  data-testid="savings-midmonth-reminder"
+                  className="p-3 rounded-xl bg-amber-50/80 dark:bg-amber-950/35 border border-amber-300 dark:border-amber-800 flex items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200"
+                >
+                  <span className="font-bold">
+                    {lang === 'bn'
+                      ? `${behindGoal.title} — এই মাসে ${formatBDT(behindPlan.monthlyTargetNeeded, 'bn')} রাখার পরিকল্পনা আছে`
+                      : `${behindGoal.title} — planned ${formatBDT(behindPlan.monthlyTargetNeeded, 'en')} for this month`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDismissedBehindReminder(true);
+                      try {
+                        localStorage.setItem(
+                          `shromik_sathi_savings_behind_dismissed_${todayISO.slice(0, 7)}`,
+                          '1'
+                        );
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                    aria-label={lang === 'bn' ? 'বন্ধ করুন' : 'Dismiss'}
+                    className="p-1 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/50 cursor-pointer shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })()}
+
           {shouldShowSavingsForm && (
             <form
               onSubmit={handleSaveGoal}
@@ -3585,11 +3741,11 @@ export const ExpensesView: React.FC = () => {
                 <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
                   {editingGoalId
                     ? lang === 'bn'
-                      ? 'সঞ্চয় তথ্য ও কিস্তি আপডেট করুন'
+                      ? 'সঞ্চয় লক্ষ্য আপডেট করুন'
                       : 'Update Savings Goal'
                     : lang === 'bn'
-                    ? 'নতুন সঞ্চয় ও বাজেট যোগ করুন'
-                    : 'Add New Savings Goal'}
+                    ? 'নতুন সঞ্চয় লক্ষ্য'
+                    : 'New Savings Goal'}
                 </h4>
                 {savings.length > 0 && (
                   <button
@@ -3605,11 +3761,43 @@ export const ExpensesView: React.FC = () => {
                 )}
               </div>
 
+              {/* Quick Goal Presets */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                {SAVINGS_GOAL_PRESETS.map((preset) => {
+                  const label = lang === 'bn' ? preset.bn : preset.en;
+                  const active = preset.id !== 'custom' && goalTitle === label;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      data-testid={`savings-preset-${preset.id}`}
+                      onClick={() => setGoalTitle(preset.id === 'custom' ? '' : label)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-emerald-400'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {goalDeadlineError && (
+                <div
+                  role="alert"
+                  className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-bold text-rose-700 dark:text-rose-300"
+                >
+                  {goalDeadlineError}
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Goal Title */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    {lang === 'bn' ? 'সঞ্চয় লক্ষ্যের নাম' : 'Savings Goal Title'}
+                    {lang === 'bn' ? 'সঞ্চয় লক্ষ্যের নাম' : 'Savings Goal Title'}
                   </label>
                   <input
                     data-testid="input-savings-title"
@@ -3618,8 +3806,8 @@ export const ExpensesView: React.FC = () => {
                     onChange={(e) => setGoalTitle(e.target.value)}
                     placeholder={
                       lang === 'bn'
-                        ? 'যেমন: জরুরি তহবিল, ঈদের সঞ্চয়, ভবিষ্যৎ ডিপিএস...'
-                        : 'Goal title (e.g. Emergency fund)'
+                        ? 'যেমন: ঈদের খরচ, বাড়ির জন্য, জরুরি তহবিল'
+                        : 'e.g. Eid expenses, Family support'
                     }
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-900 dark:text-white"
                     required
@@ -3814,10 +4002,74 @@ export const ExpensesView: React.FC = () => {
                 )}
               </div>
 
+              {/* Target Deadline + Auto Monthly Required Plan + Optional Monthly Surplus Toggle */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    {lang === 'bn' ? 'টার্গেট তারিখ' : 'Target Date'}
+                  </label>
+                  <DateInputDMY
+                    dataTestId="input-savings-deadline"
+                    value={goalDeadline}
+                    lang={lang}
+                    onChange={(d) => {
+                      setGoalDeadline(d);
+                      setGoalDeadlineError('');
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="flex items-end">
+                  {goalTarget > 0 && (
+                    <div
+                      data-testid="savings-monthly-plan-preview"
+                      className="w-full px-3 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-extrabold text-emerald-800 dark:text-emerald-300 tabular-nums"
+                    >
+                      {(() => {
+                        const previewPlan = evaluateSavingsGoalPlan({
+                          goal: {
+                            id: 'draft',
+                            userId: '',
+                            title: goalTitle || 'draft',
+                            targetAmount: goalTarget,
+                            savedAmount: goalSaved,
+                            monthlyBudget: goalBudget,
+                            deadline: goalDeadline,
+                            countMonthlySurplus: goalCountMonthlySurplus,
+                            notes: '',
+                            updatedAt: '',
+                          },
+                          todayISO,
+                          currentMonthSurplus: currentMonthSurplusAmount,
+                        });
+                        return lang === 'bn'
+                          ? `প্রতি মাসে রাখতে হবে ${formatBDT(previewPlan.monthlyTargetNeeded, 'bn')}`
+                          : `Save ${formatBDT(previewPlan.monthlyTargetNeeded, 'en')} per month`;
+                      })()}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="toggle-savings-monthly-surplus"
+                  checked={goalCountMonthlySurplus}
+                  onChange={(e) => setGoalCountMonthlySurplus(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
+                />
+                <span>
+                  {lang === 'bn'
+                    ? 'হিসাবের মাসিক উদ্বৃত্ত (আয় − খরচ) যুক্ত করুন'
+                    : 'Include monthly surplus (income − expenses)'}
+                </span>
+              </label>
+
               {/* Next Scheduled Date Preview & Save Button */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <span className="text-[11px] text-slate-600 dark:text-slate-400">
-                  {lang === 'bn' ? 'পরবর্তী জমার নির্ধারিত তারিখ হবে: ' : 'Next scheduled deposit date: '}
+                  {lang === 'bn' ? 'পরবর্তী জমার তারিখ: ' : 'Next deposit date: '}
                   <strong className="text-emerald-700 dark:text-emerald-400">
                     {formatDateSlashDMY(
                       computeNextSavingsDueDate(goalDepositDate || todayISO, goalFrequency),
@@ -3829,15 +4081,15 @@ export const ExpensesView: React.FC = () => {
                 <button
                   type="submit"
                   data-testid="save-savings-goal-btn"
-                  className="py-2 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all cursor-pointer shadow-xs"
+                  className="py-2 px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs transition-all cursor-pointer shadow-xs"
                 >
                   {editingGoalId
                     ? lang === 'bn'
-                      ? 'সঞ্চয় লক্ষ্য আপডেট করুন'
-                      : 'Update Savings Goal'
+                      ? 'আপডেট করুন'
+                      : 'Update Goal'
                     : lang === 'bn'
-                    ? 'সঞ্চয় লক্ষ্য সংরক্ষণ করুন'
-                    : 'Save Savings Goal'}
+                    ? 'সংরক্ষণ করুন'
+                    : 'Save Goal'}
                 </button>
               </div>
             </form>
@@ -3847,10 +4099,17 @@ export const ExpensesView: React.FC = () => {
           {savings.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {savings.map((g) => {
-                const pct =
-                  g.targetAmount > 0
-                    ? Math.min(100, Math.round((g.savedAmount / g.targetAmount) * 100))
-                    : 0;
+                const useSurplus = Boolean(
+                  g.countMonthlySurplus ||
+                    surplusFlagsMap[g.id] ||
+                    surplusFlagsMap[`title:${g.title}`]
+                );
+                const plan = evaluateSavingsGoalPlan({
+                  goal: { ...g, countMonthlySurplus: useSurplus },
+                  todayISO,
+                  currentMonthSurplus: currentMonthSurplusAmount,
+                });
+                const pct = plan.progressPct;
                 const isDueNow = Boolean(g.nextDueDate && todayISO >= g.nextDueDate);
 
                 return (
@@ -3877,19 +4136,13 @@ export const ExpensesView: React.FC = () => {
                           <span className="px-2 py-0.5 rounded-md bg-blue-100/80 dark:bg-blue-950 text-blue-800 dark:text-blue-300 text-[10px] font-bold">
                             {getFrequencyLabel(g.frequency)}
                           </span>
-                          <span className="px-2 py-0.5 rounded-md bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-300 text-[10px] font-bold">
-                            {g.commissionType === 'non_commission'
-                              ? lang === 'bn'
-                                ? 'নন-কমিশন'
-                                : 'Non-Commission'
-                              : lang === 'bn'
-                              ? `কমিশন যুক্ত${
-                                  g.commissionAmount && g.commissionAmount > 0
-                                    ? ` (+${formatBDT(g.commissionAmount, 'bn')})`
-                                    : ''
-                                }`
-                              : 'With Commission'}
-                          </span>
+                          {!plan.isCompleted && plan.monthlyTargetNeeded > 0 && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold tabular-nums">
+                              {lang === 'bn'
+                                ? `প্রতি মাসে ${formatBDT(plan.monthlyTargetNeeded, 'bn')}`
+                                : `${formatBDT(plan.monthlyTargetNeeded, 'en')}/mo`}
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -3901,22 +4154,44 @@ export const ExpensesView: React.FC = () => {
                           className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:border-emerald-500 inline-flex items-center gap-1 cursor-pointer"
                         >
                           <Edit2 className="w-3 h-3" />
-                          <span>{lang === 'bn' ? 'এডিট করুন' : 'Edit'}</span>
+                          <span>{lang === 'bn' ? 'এডিট' : 'Edit'}</span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteSavingsGoal(g.id)}
-                          className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
-                          title={dict.delete}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {confirmDeleteGoalId === g.id ? (
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void deleteSavingsGoal(g.id);
+                                setConfirmDeleteGoalId(null);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-bold cursor-pointer"
+                            >
+                              {lang === 'bn' ? 'নিশ্চিত' : 'Confirm'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteGoalId(null)}
+                              className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                            >
+                              {lang === 'bn' ? 'না' : 'No'}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteGoalId(g.id)}
+                            className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
+                            title={dict.delete}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
                     <div className="flex items-center justify-between text-xs pt-1">
                       <span className="text-emerald-700 dark:text-emerald-400 font-extrabold tabular-nums">
-                        {formatBDT(g.savedAmount, lang)} / {formatBDT(g.targetAmount, lang)}
+                        {formatBDT(plan.effectiveSaved, lang)} / {formatBDT(g.targetAmount, lang)}
                       </span>
                       <span className="font-extrabold text-slate-700 dark:text-slate-300 tabular-nums">
                         {formatNumber(pct, lang)}%
@@ -3925,17 +4200,17 @@ export const ExpensesView: React.FC = () => {
 
                     <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-emerald-500 rounded-full"
+                        className="h-full bg-emerald-600 rounded-full"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
 
-                    {(g.lastDepositDate || g.nextDueDate) && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
-                        {g.lastDepositDate && (
+                    {(g.deadline || g.nextDueDate) && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-200/60 dark:border-slate-700/60 tabular-nums">
+                        {g.deadline && (
                           <span>
-                            {lang === 'bn' ? 'সর্বশেষ জমা: ' : 'Last deposit: '}
-                            <strong>{formatDateSlashDMY(g.lastDepositDate, lang)}</strong>
+                            {lang === 'bn' ? 'টার্গেট: ' : 'Target: '}
+                            <strong>{formatDateSlashDMY(g.deadline, lang)}</strong>
                           </span>
                         )}
                         {g.nextDueDate && (
@@ -3946,7 +4221,7 @@ export const ExpensesView: React.FC = () => {
                                 : 'text-emerald-700 dark:text-emerald-400 font-semibold'
                             }
                           >
-                            {lang === 'bn' ? 'পরবর্তী জমার তারিখ: ' : 'Next due: '}
+                            {lang === 'bn' ? 'পরবর্তী জমা: ' : 'Next due: '}
                             <strong>{formatDateSlashDMY(g.nextDueDate, lang)}</strong>
                           </span>
                         )}

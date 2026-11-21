@@ -405,7 +405,9 @@ export const CalendarDateReminderSection: React.FC<CalendarDateReminderSectionPr
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-bold">
                                 <Bell className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                                 <span>
-                                  {lang === 'bn' ? parsed.offsetLabelBn : parsed.offsetLabelEn}
+                                  {lang === 'bn'
+                                    ? `অ্যালার্ম: নির্ধারিত সময়ের ${parsed.offsetLabelBn}`
+                                    : `Alarm: ${parsed.offsetLabelEn}`}
                                 </span>
                               </span>
                             )}
@@ -472,7 +474,9 @@ export const CalendarDateReminderSection: React.FC<CalendarDateReminderSectionPr
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-pink-50 dark:bg-pink-950/60 text-pink-800 dark:text-pink-300 border border-pink-200 dark:border-pink-800 text-[10px] font-bold">
                                 <Bell className="w-3 h-3 text-pink-600 dark:text-pink-400" />
                                 <span>
-                                  {lang === 'bn' ? parsed.offsetLabelBn : parsed.offsetLabelEn}
+                                  {lang === 'bn'
+                                    ? `অ্যালার্ম: নির্ধারিত সময়ের ${parsed.offsetLabelBn}`
+                                    : `Alarm: ${parsed.offsetLabelEn}`}
                                 </span>
                               </span>
                             )}
@@ -551,7 +555,9 @@ export const CalendarDateReminderSection: React.FC<CalendarDateReminderSectionPr
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-[10px] font-bold">
                                 <Bell className="w-3 h-3 text-sky-600 dark:text-sky-400" />
                                 <span>
-                                  {lang === 'bn' ? parsed.offsetLabelBn : parsed.offsetLabelEn}
+                                  {lang === 'bn'
+                                    ? `অ্যালার্ম: নির্ধারিত সময়ের ${parsed.offsetLabelBn}`
+                                    : `Alarm: ${parsed.offsetLabelEn}`}
                                 </span>
                               </span>
                             )}
@@ -608,7 +614,9 @@ export const CalendarDateReminderSection: React.FC<CalendarDateReminderSectionPr
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[10px] font-bold">
                                 <Bell className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                                 <span>
-                                  {lang === 'bn' ? parsed.offsetLabelBn : parsed.offsetLabelEn}
+                                  {lang === 'bn'
+                                    ? `অ্যালার্ম: নির্ধারিত সময়ের ${parsed.offsetLabelBn}`
+                                    : `Alarm: ${parsed.offsetLabelEn}`}
                                 </span>
                               </span>
                             )}

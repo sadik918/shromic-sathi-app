@@ -113,7 +113,7 @@ export async function notifyAlarmRingingViaServiceWorker(alarm: AlarmItem): Prom
     if ('Notification' in window && Notification.permission === 'granted') {
       new Notification(`⏰ ${alarm.label || 'ডিউটি অ্যালার্ম'}`, {
         body: `সময়: ${alarm.time} — শ্রমিক সাথী অ্যালার্ম বাজছে!`,
-        icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+        icon: '/pwa-192x192.png',
         requireInteraction: true,
       });
     }
@@ -179,7 +179,7 @@ function startSilentMediaKeepAliveLoop(): void {
           album: 'Shromik Sathi',
           artwork: [
             {
-              src: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+              src: '/pwa-192x192.png',
               sizes: '512x512',
               type: 'image/png',
             },

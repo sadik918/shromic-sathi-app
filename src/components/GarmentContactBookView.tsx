@@ -709,7 +709,7 @@ export const GarmentContactBookView: React.FC = () => {
     setCtIsPinned(false);
     setCtIsFavorite(false);
     setCtIsEmergency(false);
-    setSaveToGoogleAccount(true); // Default to saving to Google as requested by user
+    setSaveToGoogleAccount(false);
     setContactModalOpen(true);
   };
 

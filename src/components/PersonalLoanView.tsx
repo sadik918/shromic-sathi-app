@@ -50,6 +50,7 @@ import { formatDateReadable, formatDateSlashDMY } from '../utils/i18n';
 import { DateInputDMY } from './DateInputDMY';
 import { LoanPortfolioChartsCard } from './AnalyticsChartCards';
 import { buildLoanPortfolioAnalytics } from '../utils/homeAnalytics';
+import { printElementSafely } from '../utils/printHelper';
 
 export const PersonalLoanView: React.FC = () => {
   const {
@@ -249,6 +250,8 @@ export const PersonalLoanView: React.FC = () => {
     return list;
   }, [loans, showArchived, searchQuery]);
 
+  const [loanFormError, setLoanFormError] = useState('');
+
   // Handlers
   const handleOpenAddModal = (dir: PersonalLoanDirection) => {
     setEditingLoanId(null);
@@ -261,6 +264,7 @@ export const PersonalLoanView: React.FC = () => {
     setReason('');
     setRepaymentArrangement('lump_sum');
     setNotes('');
+    setLoanFormError('');
     setShowLoanModal(true);
   };
 
@@ -275,12 +279,37 @@ export const PersonalLoanView: React.FC = () => {
     setReason(l.reason || '');
     setRepaymentArrangement((l.repaymentArrangement as LoanRepaymentFrequency) || 'lump_sum');
     setNotes(l.notes || '');
+    setLoanFormError('');
     setShowLoanModal(true);
   };
 
   const handleSaveLoanSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!personName.trim() || amount <= 0) return;
+    setLoanFormError('');
+    if (!personName.trim()) {
+      setLoanFormError(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে ব্যক্তির নাম লিখুন।'
+          : 'Please enter the person name.'
+      );
+      return;
+    }
+    if (!amount || amount <= 0) {
+      setLoanFormError(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে টাকার সঠিক পরিমাণ (১ বা তার বেশি) লিখুন।'
+          : 'Please enter a valid amount greater than 0.'
+      );
+      return;
+    }
+    if (!transactionDate) {
+      setLoanFormError(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে লেনদেনের তারিখ নির্বাচন করুন।'
+          : 'Please select the transaction date.'
+      );
+      return;
+    }
 
     await saveLoan(
       {
@@ -1163,7 +1192,15 @@ export const PersonalLoanView: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={() => {
+                  printElementSafely({
+                    elementId: 'printable-personal-loan-ledger',
+                    title:
+                      lang === 'bn'
+                        ? 'শ্রমিক সাথী - ধার-দেনা হিসাব'
+                        : 'Shromik Sathi - Loan Ledger',
+                  });
+                }}
                 className="w-full sm:w-auto justify-center px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
@@ -1172,7 +1209,10 @@ export const PersonalLoanView: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl">
+          <div
+            id="printable-personal-loan-ledger"
+            className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl"
+          >
             <div>
               <span className="text-slate-400 block font-semibold">
                 {lang === 'bn' ? 'মোট পাওনা (অন্যদের কাছে)' : 'Total Receivable'}
@@ -1240,7 +1280,16 @@ export const PersonalLoanView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSaveLoanSubmit} className="space-y-3.5">
+            <form onSubmit={handleSaveLoanSubmit} noValidate className="space-y-3.5">
+              {loanFormError && (
+                <div
+                  role="alert"
+                  className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300 flex items-center gap-2"
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{loanFormError}</span>
+                </div>
+              )}
               {/* Direction Switcher */}
               <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
                 <button
@@ -1278,17 +1327,20 @@ export const PersonalLoanView: React.FC = () => {
                       : lang === 'bn'
                       ? 'দাতাদের নাম (যার থেকে টাকা নিয়েছি)'
                       : 'Lender Name'}
+                    <span className="text-rose-500 ml-0.5">*</span>
                   </label>
                   <input
                     type="text"
                     data-testid="modal-person-name"
                     value={personName}
-                    onChange={(e) => setPersonName(e.target.value)}
+                    onChange={(e) => {
+                      setPersonName(e.target.value);
+                      if (loanFormError) setLoanFormError('');
+                    }}
                     placeholder={
                       lang === 'bn' ? 'যেমন: রফিক (সুইং সেকশন)' : 'e.g. Rafiq (Sewing)'
                     }
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-900 dark:text-white font-bold"
-                    required
                   />
                 </div>
 
@@ -1312,6 +1364,7 @@ export const PersonalLoanView: React.FC = () => {
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                     {lang === 'bn' ? 'মূল টাকার পরিমাণ (৳)' : 'Original Amount (৳)'}
+                    <span className="text-rose-500 ml-0.5">*</span>
                   </label>
                   <input
                     type="number"
@@ -1319,22 +1372,24 @@ export const PersonalLoanView: React.FC = () => {
                     min={1}
                     value={amount || ''}
                     placeholder="2000"
-                    onChange={(e) => setAmount(Number(e.target.value))}
+                    onChange={(e) => {
+                      setAmount(Number(e.target.value));
+                      if (loanFormError) setLoanFormError('');
+                    }}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-black text-slate-900 dark:text-white"
-                    required
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     {lang === 'bn' ? 'লেনদেনের তারিখ' : 'Transaction Date'}
+                    <span className="text-rose-500 ml-0.5">*</span>
                   </label>
                   <DateInputDMY
                     value={transactionDate}
                     lang={lang}
                     onChange={setTransactionDate}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-900 dark:text-white"
-                    required
                   />
                 </div>
               </div>

@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Banknote,
@@ -24,13 +24,29 @@ import { AuthWelcomeView } from './components/AuthWelcomeView';
 import { OnboardingView } from './components/OnboardingView';
 import { DashboardView } from './components/DashboardView';
 import { AlarmRingingOverlay, loadSavedAlarms } from './components/AlarmView';
-import { OvertimeView } from './components/OvertimeView';
-import { SalaryView } from './components/SalaryView';
-import { AttendanceView } from './components/AttendanceView';
-import { ExpensesView } from './components/ExpensesView';
-import { MoreHubView } from './components/MoreHubView';
-import { AdminDashboardView } from './components/AdminDashboardView';
-import { VoiceEntryModal } from './components/VoiceEntryModal';
+import { PWAInstallButton } from './components/PWAInstallButton';
+
+const OvertimeView = lazy(() =>
+  import('./components/OvertimeView').then((m) => ({ default: m.OvertimeView }))
+);
+const SalaryView = lazy(() =>
+  import('./components/SalaryView').then((m) => ({ default: m.SalaryView }))
+);
+const AttendanceView = lazy(() =>
+  import('./components/AttendanceView').then((m) => ({ default: m.AttendanceView }))
+);
+const ExpensesView = lazy(() =>
+  import('./components/ExpensesView').then((m) => ({ default: m.ExpensesView }))
+);
+const MoreHubView = lazy(() =>
+  import('./components/MoreHubView').then((m) => ({ default: m.MoreHubView }))
+);
+const AdminDashboardView = lazy(() =>
+  import('./components/AdminDashboardView').then((m) => ({ default: m.AdminDashboardView }))
+);
+const VoiceEntryModal = lazy(() =>
+  import('./components/VoiceEntryModal').then((m) => ({ default: m.VoiceEntryModal }))
+);
 
 const TabLoadingFallback: React.FC<{ lang: 'bn' | 'en' }> = ({ lang }) => (
   <div
@@ -54,12 +70,12 @@ import {
   syncAlarmsWithServiceWorker,
 } from './utils/alarmKeepAlive';
 import { getAccurateBstNow, syncOnlineAccurateTime } from './utils/networkTime';
-import { useOnlineStatus } from './hooks/useOnlineStatus';
 import type { AlarmItem, MoreSubView, NavTab } from './types';
-import { formatShortMonthName, T } from './utils/i18n';
+import { formatDateReadable, formatMonthLabel, T } from './utils/i18n';
 import { parseCalendarReminderMeta } from './utils/calendarReminders';
 import { toBengaliDigits } from './utils/subscriptionLogic';
 import { resolveHeaderSyncStatus } from './utils/syncStatusDisplay';
+import type { PlatformAnnouncement } from './utils/adminLogic';
 
 const VALID_NAV_TABS: NavTab[] = [
   'dashboard',
@@ -82,29 +98,24 @@ const VALID_MORE_SUBVIEWS: MoreSubView[] = [
   'reports',
   'reminders',
   'support',
+  'announcements',
   'alarm',
   'calculator',
   'subscriptions',
   'admin_panel',
 ];
 
-const AVAILABLE_MONTHS = [
-  '2027-03',
-  '2027-02',
-  '2027-01',
-  '2026-12',
-  '2026-11',
-  '2026-10',
-  '2026-09',
-  '2026-08',
-  '2026-07',
-  '2026-06',
-  '2026-05',
-  '2026-04',
-  '2026-03',
-  '2026-02',
-  '2026-01',
-];
+function buildRecentMonthsList(anchorMonthISO: string, count = 12): string[] {
+  const [yStr, mStr] = (anchorMonthISO || '2026-11').split('-');
+  const baseYear = Number(yStr) || 2026;
+  const baseMonth = Number(mStr) || 11;
+  const list: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const d = new Date(baseYear, baseMonth - 1 - i, 1);
+    list.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return list;
+}
 
 const WorkspaceShell: React.FC = () => {
   const {
@@ -117,6 +128,8 @@ const WorkspaceShell: React.FC = () => {
     needsOnboarding,
     pendingWritesCount,
     offlinePendingCount,
+    isOnline,
+    syncState,
     syncOfflineDataToCloud,
     currentMonthISO,
     selectedMonth,
@@ -138,7 +151,6 @@ const WorkspaceShell: React.FC = () => {
   } = useData();
 
   const totalPendingSyncCount = pendingWritesCount + offlinePendingCount;
-  const { syncState } = useOnlineStatus(totalPendingSyncCount);
   const syncStatusUI = resolveHeaderSyncStatus({
     syncState,
     pendingCount: totalPendingSyncCount,
@@ -146,7 +158,7 @@ const WorkspaceShell: React.FC = () => {
   });
 
   const monthOptions = React.useMemo(() => {
-    const set = new Set<string>(AVAILABLE_MONTHS);
+    const set = new Set<string>(buildRecentMonthsList(currentMonthISO, 12));
     if (currentMonthISO) set.add(currentMonthISO);
     if (selectedMonth) set.add(selectedMonth);
     for (const o of overtime) if (o.month) set.add(o.month);
@@ -196,16 +208,19 @@ const WorkspaceShell: React.FC = () => {
   const [renewalModalTrigger, setRenewalModalTrigger] = useState(0);
   const [attendanceFocusDate, setAttendanceFocusDate] = useState<string | undefined>(undefined);
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
-  const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>(() => {
+  // Permanently ignored announcement popups (still remain saved in Admin Notices)
+  const [permDismissedAnnouncementIds, setPermDismissedAnnouncementIds] = useState<string[]>(() => {
     if (typeof window === 'undefined') return [];
     try {
-      const raw = sessionStorage.getItem('shromik_sathi_dismissed_announcements_v1');
+      const raw = localStorage.getItem('shromik_sathi_perm_dismissed_announcements_v1');
       const parsed = raw ? JSON.parse(raw) : [];
       return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
   });
+  // Dismissed for current visit only (reappears next time user reopens the app)
+  const [sessionDismissedAnnouncementIds, setSessionDismissedAnnouncementIds] = useState<string[]>([]);
   const [toastMsg, setToastMsg] = useState('');
   const toastTimerRef = React.useRef<number | null>(null);
   const [ringingAlarm, setRingingAlarm] = useState<AlarmItem | null>(null);
@@ -215,22 +230,40 @@ const WorkspaceShell: React.FC = () => {
   remindersRef.current = reminders;
   syncedAlarmsRef.current = syncedAlarms;
 
-  const activeTopAnnouncement = React.useMemo(
-    () =>
-      publishedAnnouncements.find((ann) => !dismissedAnnouncementIds.includes(ann.id)) || null,
-    [publishedAnnouncements, dismissedAnnouncementIds]
-  );
+  const activePopupAnnouncement = React.useMemo<PlatformAnnouncement | null>(() => {
+    if (!isOnline || publishedAnnouncements.length === 0) return null;
+    return (
+      publishedAnnouncements.find(
+        (ann) =>
+          !permDismissedAnnouncementIds.includes(ann.id) &&
+          !sessionDismissedAnnouncementIds.includes(ann.id)
+      ) || null
+    );
+  }, [
+    isOnline,
+    publishedAnnouncements,
+    permDismissedAnnouncementIds,
+    sessionDismissedAnnouncementIds,
+  ]);
 
-  const handleDismissAnnouncement = (id: string) => {
-    setDismissedAnnouncementIds((prev) => {
+  const handleSessionDismissAnnouncement = (id: string) => {
+    setSessionDismissedAnnouncementIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
+
+  const handlePermanentDismissAnnouncement = (id: string) => {
+    setPermDismissedAnnouncementIds((prev) => {
       const next = prev.includes(id) ? prev : [...prev, id];
       try {
-        sessionStorage.setItem('shromik_sathi_dismissed_announcements_v1', JSON.stringify(next));
+        localStorage.setItem(
+          'shromik_sathi_perm_dismissed_announcements_v1',
+          JSON.stringify(next)
+        );
       } catch {
-        // ignore
+        // ignore storage errors
       }
       return next;
     });
+    setSessionDismissedAnnouncementIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
   };
 
 
@@ -524,7 +557,7 @@ const WorkspaceShell: React.FC = () => {
       <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-300 text-sm font-medium">
         <div className="w-16 h-16 rounded-full bg-white p-1 shadow-xs border border-emerald-100 dark:border-slate-700 flex items-center justify-center">
           <img
-            src="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png"
+            src="/logo-128.png"
             alt="শ্রমিক সাথী লোগো"
             width={60}
             height={60}
@@ -622,7 +655,7 @@ const WorkspaceShell: React.FC = () => {
             >
               <span className="w-7 h-7 min-[410px]:w-8 min-[410px]:h-8 sm:w-9 sm:h-9 rounded-full bg-emerald-50 dark:bg-emerald-950/80 p-0.5 border border-emerald-200/80 dark:border-emerald-800/80 shadow-2xs flex items-center justify-center shrink-0 overflow-hidden">
                 <img
-                  src="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png"
+                  src="/logo-128.png"
                   alt="শ্রমিক সাথী লোগো"
                   data-testid="header-brand-logo"
                   width={32}
@@ -640,13 +673,12 @@ const WorkspaceShell: React.FC = () => {
                 data-testid="header-offline-status-badge"
                 title={syncStatusUI.tooltip}
                 aria-label={syncStatusUI.accessibleLabel}
-                className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-full border border-amber-300/90 dark:border-amber-700/80 bg-amber-50 dark:bg-amber-950/75 text-amber-800 dark:text-amber-200 text-[11px] sm:text-xs font-bold inline-flex items-center gap-1 whitespace-nowrap shrink-0 shadow-2xs select-none"
+                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-amber-300/80 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/75 inline-flex items-center justify-center shrink-0 select-none"
               >
                 <WifiOff
-                  className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-600 dark:text-amber-400 shrink-0"
+                  className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-600 dark:text-amber-400 shrink-0"
                   aria-hidden="true"
                 />
-                <span>{syncStatusUI.label}</span>
               </span>
             ) : (
               <button
@@ -719,7 +751,7 @@ const WorkspaceShell: React.FC = () => {
                     value={m}
                     className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
                   >
-                    {formatShortMonthName(m, lang)}
+                    {formatMonthLabel(m, lang)}
                   </option>
                 ))}
               </select>
@@ -747,6 +779,9 @@ const WorkspaceShell: React.FC = () => {
                 </span>
               </button>
             )}
+
+            {/* Smart PWA Install Button (Auto-hides once installed) */}
+            <PWAInstallButton lang={lang} variant="header" />
 
             {/* 2. Language Toggle (Icon Only) */}
             <button
@@ -905,59 +940,120 @@ const WorkspaceShell: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-5 overflow-x-clip">
-        {activeTopAnnouncement && !(activeTab === 'more' && moreSubView === 'support') && (
-          <div
-            role="region"
-            aria-label={lang === 'bn' ? 'অ্যাডমিন নোটিশ' : 'Admin Notice'}
-            data-testid="live-admin-announcement-banner"
-            className="mb-3 rounded-2xl border border-emerald-200/90 dark:border-emerald-800/70 bg-emerald-50/75 dark:bg-emerald-950/40 px-3.5 py-2.5 text-xs text-slate-800 dark:text-slate-100 flex items-start justify-between gap-3 no-print"
-          >
-            <div className="flex items-start gap-2.5 min-w-0">
-              <span className="w-7 h-7 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0 mt-0.5">
-                <Megaphone className="w-3.5 h-3.5" />
-              </span>
-              <div className="min-w-0 space-y-0.5">
-                <p className="font-extrabold text-slate-900 dark:text-white leading-snug">
-                  {lang === 'bn'
-                    ? activeTopAnnouncement.titleBn
-                    : activeTopAnnouncement.titleEn || activeTopAnnouncement.titleBn}
-                </p>
-                <p className="text-slate-700 dark:text-slate-200 leading-relaxed">
-                  {lang === 'bn'
-                    ? activeTopAnnouncement.messageBn
-                    : activeTopAnnouncement.messageEn || activeTopAnnouncement.messageBn}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              data-testid="dismiss-announcement-btn"
-              onClick={() => handleDismissAnnouncement(activeTopAnnouncement.id)}
-              aria-label={lang === 'bn' ? 'নোটিশ বন্ধ করুন' : 'Dismiss notice'}
-              className="w-7 h-7 rounded-lg text-slate-500 dark:text-slate-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/60 flex items-center justify-center shrink-0 cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-        {cloudSyncError && (
+        {cloudSyncError && isOnline && (
           <div
             role="alert"
             data-testid="cloud-sync-error-banner"
-            className="mb-3 rounded-2xl border border-rose-200 dark:border-rose-800/80 bg-rose-50 dark:bg-rose-950/50 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200 flex items-center justify-between gap-2.5 no-print"
+            className="mb-3 rounded-2xl border border-amber-200 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/50 px-3.5 py-2.5 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between gap-2.5 no-print"
           >
             <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
               <span className="font-medium leading-snug">{cloudSyncError}</span>
             </div>
             <button
               type="button"
               onClick={clearCloudSyncError}
               aria-label={lang === 'bn' ? 'সতর্কবার্তা বন্ধ করুন' : 'Dismiss sync error'}
-              className="w-7 h-7 rounded-lg text-rose-600 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 flex items-center justify-center shrink-0 cursor-pointer"
+              className="w-7 h-7 rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/60 flex items-center justify-center shrink-0 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
+          </div>
+        )}
+
+        {/* Live Admin Notice Popup (Online only, Clean & Subtitle-Free, Session Close vs Permanent Ignore) */}
+        {activePopupAnnouncement && !ringingAlarm && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="live-admin-notice-title"
+            data-testid="live-admin-announcement-popup"
+            className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 no-print"
+          >
+            <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                    <Megaphone className="w-4 h-4" />
+                  </span>
+                  <h2
+                    id="live-admin-notice-title"
+                    className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white truncate"
+                  >
+                    {lang === 'bn' ? 'অ্যাডমিন নোটিশ' : 'Admin Notice'}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  data-testid="announcement-popup-close-btn"
+                  onClick={() => handleSessionDismissAnnouncement(activePopupAnnouncement.id)}
+                  aria-label={lang === 'bn' ? 'বন্ধ করুন' : 'Close'}
+                  className="w-9 h-9 rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center shrink-0 cursor-pointer transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-3 max-h-[55dvh] overflow-y-auto">
+                <div className="space-y-1">
+                  <h3 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white leading-snug">
+                    {lang === 'bn'
+                      ? activePopupAnnouncement.titleBn || activePopupAnnouncement.titleEn
+                      : activePopupAnnouncement.titleEn || activePopupAnnouncement.titleBn}
+                  </h3>
+                  {(activePopupAnnouncement.publishedAt || activePopupAnnouncement.createdAt) && (
+                    <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 tabular-nums">
+                      {formatDateReadable(
+                        (
+                          activePopupAnnouncement.publishedAt ||
+                          activePopupAnnouncement.createdAt
+                        ).slice(0, 10),
+                        lang
+                      )}
+                    </p>
+                  )}
+                </div>
+
+                <p className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-line leading-relaxed">
+                  {lang === 'bn'
+                    ? activePopupAnnouncement.messageBn || activePopupAnnouncement.messageEn
+                    : activePopupAnnouncement.messageEn || activePopupAnnouncement.messageBn}
+                </p>
+              </div>
+
+              <div className="px-5 py-3.5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/80 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  data-testid="announcement-popup-permanent-ignore-btn"
+                  onClick={() => handlePermanentDismissAnnouncement(activePopupAnnouncement.id)}
+                  className="min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  {lang === 'bn' ? 'আর দেখাবেন না' : "Don't show again"}
+                </button>
+
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    type="button"
+                    data-testid="announcement-popup-later-btn"
+                    onClick={() => handleSessionDismissAnnouncement(activePopupAnnouncement.id)}
+                    className="min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    {lang === 'bn' ? 'পরে দেখব' : 'Later'}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="announcement-popup-view-all-btn"
+                    onClick={() => {
+                      handleSessionDismissAnnouncement(activePopupAnnouncement.id);
+                      handleNavigate('more', 'announcements');
+                    }}
+                    className="min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shadow-xs"
+                  >
+                    {lang === 'bn' ? 'সব নোটিশ' : 'All Notices'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
         {(activeTab === 'dashboard' || (activeTab === 'admin' && !isAdminUser)) && (

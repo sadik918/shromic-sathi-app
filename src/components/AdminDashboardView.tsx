@@ -404,10 +404,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       return;
     }
     setDirectorySyncStatus('loading');
+    let hasDirectorySnapshot = false;
     let latestDirectoryEntries: AdminUserDirectoryEntry[] = [];
     let latestProfileEntries: AdminUserDirectoryEntry[] = [];
 
     const applyCombinedUsers = () => {
+      if (!hasDirectorySnapshot) return;
       const combinedRemote = mergeUserDirectories(
         latestDirectoryEntries,
         latestProfileEntries,
@@ -426,6 +428,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     const unsubDirectory = onSnapshot(
       collection(db, 'userDirectory'),
       (snapshot) => {
+        hasDirectorySnapshot = true;
         latestDirectoryEntries = snapshot.docs.map((d) =>
           mapFirestoreUserDirectoryDoc(d.id, d.data() as Record<string, unknown>, todayISO)
         );
@@ -761,6 +764,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
   const [selectedUserDetail, setSelectedUserDetail] = useState<AdminUserDirectoryEntry | null>(null);
   const [suspendModalUser, setSuspendModalUser] = useState<AdminUserDirectoryEntry | null>(null);
   const [suspendReasonInput, setSuspendReasonInput] = useState('');
+  const [updatingStatusUid, setUpdatingStatusUid] = useState<string | null>(null);
 
   const availableRegistrationMonths = useMemo(
     () => extractAvailableRegistrationMonths(store.users, todayISO.slice(0, 7)),
@@ -812,63 +816,126 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
     setUserPage(1);
   };
 
-  const handleConfirmUserStatusChange = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!suspendModalUser) return;
-
+  const executeUserStatusChange = async (
+    targetUser: AdminUserDirectoryEntry,
+    targetStatus: 'active' | 'suspended',
+    rawReason?: string
+  ) => {
     if (!canAdminPerform(effectiveRole, 'suspend_users')) {
       showError(
         lang === 'bn'
-          ? 'অ্যাক্সেস প্রত্যাখ্যাত: ইউজার সাসপেন্ড করার অনুমতি আপনার রোলে নেই।'
+          ? 'অ্যাক্সেস প্রত্যাখ্যাত: ইউজার স্ট্যাটাস পরিবর্তন করার অনুমতি আপনার রোলে নেই।'
           : 'Permission denied: Your role cannot suspend or reactivate accounts.'
       );
-      return;
+      return false;
     }
 
-    const trimmedReason = suspendReasonInput.trim();
-    if (trimmedReason.length < 5) {
-      showError(
-        lang === 'bn'
-          ? 'অনুগ্রহ করে কমপক্ষে ৫ অক্ষরের সুস্পষ্ট কারণ উল্লেখ করুন।'
-          : 'Please provide a clear reason (at least 5 characters).'
-      );
-      return;
-    }
+    const defaultReason =
+      targetStatus === 'suspended'
+        ? lang === 'bn'
+          ? 'অ্যাডমিন কর্তৃক অ্যাকাউন্ট সাসপেন্ড করা হয়েছে'
+          : 'Account suspended by admin'
+        : lang === 'bn'
+        ? 'অ্যাডমিন কর্তৃক অ্যাকাউন্ট পুনরায় সক্রিয় করা হয়েছে'
+        : 'Account reactivated by admin';
 
-    const targetStatus: 'active' | 'suspended' =
-      suspendModalUser.accountStatus === 'active' ? 'suspended' : 'active';
+    const trimmedReason = (rawReason || '').trim().slice(0, 300) || defaultReason;
     const actionType: AuditActionType =
       targetStatus === 'suspended' ? 'user_suspended' : 'user_reactivated';
 
+    setUpdatingStatusUid(targetUser.uid);
+
+    if (user && !isDemoMode) {
+      try {
+        await updateDoc(doc(db, 'userDirectory', targetUser.uid), {
+          accountStatus: targetStatus,
+          suspensionReason: targetStatus === 'suspended' ? trimmedReason : '',
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err: any) {
+        if (err?.code === 'not-found') {
+          try {
+            const safeRole =
+              targetUser.role &&
+              ['user', 'support_moderator', 'admin', 'super_admin'].includes(targetUser.role)
+                ? targetUser.role
+                : 'user';
+            const safeOfflineState = ['synced', 'pending', 'error'].includes(
+              targetUser.offlineSyncState
+            )
+              ? targetUser.offlineSyncState
+              : 'synced';
+            await setDoc(doc(db, 'userDirectory', targetUser.uid), {
+              uid: targetUser.uid,
+              displayName:
+                (targetUser.displayName || 'Garment Worker').trim().slice(0, 120) ||
+                'Garment Worker',
+              email: (targetUser.email || '').trim().slice(0, 150),
+              registeredAt: (targetUser.registeredAt || todayISO).slice(0, 25),
+              lastSeenDate: (targetUser.lastSeenDate || todayISO).slice(0, 25),
+              accountStatus: targetStatus,
+              ...(targetStatus === 'suspended' ? { suspensionReason: trimmedReason } : {}),
+              role: safeRole,
+              authProvider:
+                targetUser.authProvider === 'google.com' ? 'google.com' : 'password',
+              language: targetUser.language === 'en' ? 'en' : 'bn',
+              emailVerified: Boolean(targetUser.emailVerified),
+              offlineSyncState: safeOfflineState,
+              appVersion: (targetUser.appVersion || 'v2.4.0-pwa').slice(0, 40),
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          } catch (createErr) {
+            if (!isOfflineOrTransientFirestoreError(createErr)) {
+              setUpdatingStatusUid(null);
+              showError(
+                lang === 'bn'
+                  ? 'ফায়ারবেসে অ্যাকাউন্ট স্ট্যাটাস সংরক্ষণ করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
+                  : 'Failed to save user status in Firestore. Please try again.'
+              );
+              return false;
+            }
+          }
+        } else if (!isOfflineOrTransientFirestoreError(err)) {
+          setUpdatingStatusUid(null);
+          showError(
+            lang === 'bn'
+              ? 'ফায়ারবেসে অ্যাকাউন্ট স্ট্যাটাস আপডেট করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
+              : 'Failed to update user status in Firestore. Please try again.'
+          );
+          return false;
+        }
+      }
+    }
+
     const auditEntry = recordAudit({
       actionType,
-      targetId: suspendModalUser.uid,
-      targetLabel: `${suspendModalUser.displayName} (${suspendModalUser.email})`,
+      targetId: targetUser.uid,
+      targetLabel: `${targetUser.displayName} (${targetUser.email})`,
       reason: trimmedReason,
       metadata: {
-        previousStatus: suspendModalUser.accountStatus,
+        previousStatus: targetUser.accountStatus,
         newStatus: targetStatus,
       },
     });
 
+    const updatedStatusEntry = {
+      status: targetStatus,
+      reason: trimmedReason,
+      changedBy: actorName,
+      changedAt: todayISO,
+    };
+
     setStore((prev) => {
       const nextUsers = prev.users.map((u) => {
-        if (u.uid !== suspendModalUser.uid) return u;
+        if (u.uid !== targetUser.uid) return u;
         return {
           ...u,
           accountStatus: targetStatus,
           suspensionReason: targetStatus === 'suspended' ? trimmedReason : undefined,
           suspendedAt: targetStatus === 'suspended' ? todayISO : undefined,
           suspendedBy: targetStatus === 'suspended' ? actorEmail : undefined,
-          statusHistory: [
-            {
-              status: targetStatus,
-              reason: trimmedReason,
-              changedBy: actorName,
-              changedAt: todayISO,
-            },
-            ...u.statusHistory,
-          ],
+          statusHistory: [updatedStatusEntry, ...u.statusHistory],
         };
       });
       const nextState = {
@@ -880,61 +947,44 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
       return nextState;
     });
 
-    if (user && !isDemoMode) {
-      try {
-        await updateDoc(doc(db, 'userDirectory', suspendModalUser.uid), {
-          accountStatus: targetStatus,
-          suspensionReason: targetStatus === 'suspended' ? trimmedReason : '',
-          updatedAt: serverTimestamp(),
-        });
-      } catch (err: any) {
-        if (err?.code === 'not-found') {
-          try {
-            await setDoc(doc(db, 'userDirectory', suspendModalUser.uid), {
-              uid: suspendModalUser.uid,
-              displayName: (suspendModalUser.displayName || 'Garment Worker').slice(0, 120),
-              email: suspendModalUser.email,
-              registeredAt: suspendModalUser.registeredAt,
-              lastSeenDate: suspendModalUser.lastSeenDate,
-              accountStatus: targetStatus,
-              ...(targetStatus === 'suspended' ? { suspensionReason: trimmedReason } : {}),
-              role: suspendModalUser.role || 'user',
-              authProvider: suspendModalUser.authProvider,
-              language: suspendModalUser.language,
-              emailVerified: suspendModalUser.emailVerified,
-              offlineSyncState: suspendModalUser.offlineSyncState,
-              appVersion: suspendModalUser.appVersion,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          } catch (createErr) {
-            if (!isOfflineOrTransientFirestoreError(createErr)) {
-              showError(
-                lang === 'bn'
-                  ? 'ফায়ারবেসে অ্যাকাউন্ট স্ট্যাটাস সংরক্ষণ করা যায়নি।'
-                  : 'Failed to save user status in Firestore.'
-              );
-            }
+    setSelectedUserDetail((prev) =>
+      prev && prev.uid === targetUser.uid
+        ? {
+            ...prev,
+            accountStatus: targetStatus,
+            suspensionReason: targetStatus === 'suspended' ? trimmedReason : undefined,
+            suspendedAt: targetStatus === 'suspended' ? todayISO : undefined,
+            suspendedBy: targetStatus === 'suspended' ? actorEmail : undefined,
+            statusHistory: [updatedStatusEntry, ...prev.statusHistory],
           }
-        } else if (!isOfflineOrTransientFirestoreError(err)) {
-          showError(
-            lang === 'bn'
-              ? 'ফায়ারবেসে অ্যাকাউন্ট স্ট্যাটাস আপডেট করা যায়নি।'
-              : 'Failed to update user status in Firestore.'
-          );
-        }
-      }
-    }
+        : prev
+    );
 
-    setSuspendModalUser(null);
-    setSuspendReasonInput('');
+    setUpdatingStatusUid(null);
     showToast(
       lang === 'bn'
         ? targetStatus === 'suspended'
-          ? 'অ্যাকাউন্ট সাসপেন্ড করা হয়েছে এবং অডিট লগে রেকর্ড হয়েছে।'
-          : 'অ্যাকাউন্ট পুনরায় সক্রিয় (Reactivate) করা হয়েছে।'
-        : `Account ${targetStatus} and logged in audit history.`
+          ? 'অ্যাকাউন্ট সাসপেন্ড করা হয়েছে।'
+          : 'অ্যাকাউন্ট পুনরায় সক্রিয় করা হয়েছে।'
+        : targetStatus === 'suspended'
+        ? 'Account suspended successfully.'
+        : 'Account reactivated successfully.'
     );
+    return true;
+  };
+
+  const handleConfirmUserStatusChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!suspendModalUser || updatingStatusUid) return;
+
+    const targetStatus: 'active' | 'suspended' =
+      suspendModalUser.accountStatus === 'active' ? 'suspended' : 'active';
+
+    const ok = await executeUserStatusChange(suspendModalUser, targetStatus, suspendReasonInput);
+    if (ok) {
+      setSuspendModalUser(null);
+      setSuspendReasonInput('');
+    }
   };
 
   const handleTriggerSafeRecovery = (targetUser: AdminUserDirectoryEntry) => {
@@ -1998,7 +2048,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="w-9 h-9 rounded-full bg-indigo-50 dark:bg-indigo-950/80 p-0.5 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center shrink-0 overflow-hidden">
               <img
-                src="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png"
+                src="/logo-128.png"
                 alt={lang === 'bn' ? 'শ্রমিক সাথী লোগো' : 'Shromik Sathi Logo'}
                 width={32}
                 height={32}
@@ -2972,17 +3022,26 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                             </button>
                             <button
                               type="button"
+                              disabled={updatingStatusUid === u.uid}
                               onClick={() => {
-                                setSuspendModalUser(u);
-                                setSuspendReasonInput('');
+                                if (u.accountStatus === 'suspended') {
+                                  void executeUserStatusChange(u, 'active');
+                                } else {
+                                  setSuspendModalUser(u);
+                                  setSuspendReasonInput('');
+                                }
                               }}
-                              className={`min-h-[36px] px-3 rounded-xl font-bold cursor-pointer ${
+                              className={`min-h-[36px] px-3 rounded-xl font-bold cursor-pointer disabled:opacity-60 ${
                                 u.accountStatus === 'active'
                                   ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300'
                                   : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
                               }`}
                             >
-                              {u.accountStatus === 'active'
+                              {updatingStatusUid === u.uid
+                                ? lang === 'bn'
+                                  ? 'আপডেট হচ্ছে...'
+                                  : 'Updating...'
+                                : u.accountStatus === 'active'
                                 ? lang === 'bn'
                                   ? 'সাসপেন্ড'
                                   : 'Suspend'
@@ -3183,17 +3242,26 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                                     <button
                                       type="button"
                                       data-testid={`toggle-suspend-${u.uid}`}
+                                      disabled={updatingStatusUid === u.uid}
                                       onClick={() => {
-                                        setSuspendModalUser(u);
-                                        setSuspendReasonInput('');
+                                        if (u.accountStatus === 'suspended') {
+                                          void executeUserStatusChange(u, 'active');
+                                        } else {
+                                          setSuspendModalUser(u);
+                                          setSuspendReasonInput('');
+                                        }
                                       }}
-                                      className={`px-2.5 py-1.5 rounded-lg font-semibold cursor-pointer ${
+                                      className={`px-2.5 py-1.5 rounded-lg font-semibold cursor-pointer disabled:opacity-60 ${
                                         u.accountStatus === 'active'
                                           ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 dark:bg-rose-950/50 dark:text-rose-300'
                                           : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300'
                                       }`}
                                     >
-                                      {u.accountStatus === 'active'
+                                      {updatingStatusUid === u.uid
+                                        ? lang === 'bn'
+                                          ? 'আপডেট হচ্ছে...'
+                                          : 'Updating...'
+                                        : u.accountStatus === 'active'
                                         ? lang === 'bn'
                                           ? 'সাসপেন্ড'
                                           : 'Suspend'
@@ -3381,19 +3449,18 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                       <div>
                         <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                           {lang === 'bn'
-                            ? 'প্রশাসনিক পদক্ষেপের কারণ *'
-                            : 'Reason for administrative action *'}
+                            ? 'কারণ / নোট (ঐচ্ছিক)'
+                            : 'Reason / Note (Optional)'}
                         </label>
                         <textarea
                           rows={3}
-                          required
                           data-testid="suspend-reason-input"
                           value={suspendReasonInput}
                           onChange={(e) => setSuspendReasonInput(e.target.value)}
                           placeholder={
                             lang === 'bn'
-                              ? 'সুনির্দিষ্ট কারণ লিখুন...'
-                              : 'Enter explicit justification...'
+                              ? 'চাইলে সংক্ষিপ্ত কারণ লিখুন (না লিখলেও চলবে)...'
+                              : 'Optional short note...'
                           }
                           className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 text-xs sm:text-sm"
                         />
@@ -3402,21 +3469,27 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onExitAd
                       <div className="flex items-center justify-end gap-2 pt-2">
                         <button
                           type="button"
+                          disabled={Boolean(updatingStatusUid)}
                           onClick={() => setSuspendModalUser(null)}
-                          className="min-h-[38px] px-4 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-semibold"
+                          className="min-h-[38px] px-4 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
                         >
                           {lang === 'bn' ? 'বাতিল' : 'Cancel'}
                         </button>
                         <button
                           type="submit"
+                          disabled={Boolean(updatingStatusUid)}
                           data-testid="confirm-suspend-submit"
-                          className={`min-h-[38px] px-4 rounded-xl text-white text-xs font-bold cursor-pointer ${
+                          className={`min-h-[38px] px-4 rounded-xl text-white text-xs font-bold cursor-pointer disabled:opacity-60 ${
                             suspendModalUser.accountStatus === 'active'
                               ? 'bg-rose-600 hover:bg-rose-700'
                               : 'bg-emerald-700 hover:bg-emerald-800'
                           }`}
                         >
-                          {suspendModalUser.accountStatus === 'active'
+                          {updatingStatusUid
+                            ? lang === 'bn'
+                              ? 'সংরক্ষণ হচ্ছে...'
+                              : 'Saving...'
+                            : suspendModalUser.accountStatus === 'active'
                             ? lang === 'bn'
                               ? 'সাসপেন্ড নিশ্চিত করুন'
                               : 'Confirm Suspend'

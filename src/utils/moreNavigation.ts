@@ -107,6 +107,12 @@ export const MORE_NAV_ITEMS: ReadonlyArray<MoreNavMetaItem> = [
     labelEn: 'Reminders & Law',
   },
   {
+    id: 'announcements',
+    group: 'rules_account',
+    labelBn: 'অ্যাডমিন নোটিশ',
+    labelEn: 'Announcements',
+  },
+  {
     id: 'support',
     group: 'rules_account',
     labelBn: 'সহায়তা ও নীতিমালা',

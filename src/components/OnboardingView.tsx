@@ -25,6 +25,7 @@ import {
   deriveBangladeshRMGBreakdownFromGross,
   formatBDT,
   formatTakaPaisaLabel,
+  getSalaryStructure,
   roundCurrency,
   toBengaliDigits,
   validateOnboardingStepTransition,
@@ -71,6 +72,9 @@ export const OnboardingView: React.FC = () => {
     profile.houseRentAllowance && profile.houseRentAllowance > 0
       ? String(profile.houseRentAllowance)
       : ''
+  );
+  const [isHouseRentManuallyEdited, setIsHouseRentManuallyEdited] = useState<boolean>(
+    Boolean(profile.houseRentAllowance && profile.houseRentAllowance > 0)
   );
   const [salaryGrade, setSalaryGrade] = useState<string>(profile.salaryGrade || '');
   const [otRateInput, setOtRateInput] = useState<string>(
@@ -182,16 +186,22 @@ export const OnboardingView: React.FC = () => {
     const numGross = Math.max(0, Number(val) || 0);
     if (numGross > 0) {
       setGrossSalaryError('');
-      const derivedBasic =
+      const derivedSplit =
         numGross >= 2450
-          ? deriveBangladeshRMGBreakdownFromGross(numGross).basicSalary
-          : Math.round(numGross * 0.55);
+          ? deriveBangladeshRMGBreakdownFromGross(numGross)
+          : {
+              basicSalary: Math.round(numGross * 0.55),
+              houseRentAllowance: Math.max(0, Math.round(numGross * 0.275)),
+            };
       if (!isBasicManuallyEdited) {
-        setBasicSalaryInput(String(derivedBasic));
+        setBasicSalaryInput(String(derivedSplit.basicSalary));
+      }
+      if (!isHouseRentManuallyEdited) {
+        setHouseRentAllowanceInput(String(derivedSplit.houseRentAllowance));
       }
       if (!isOtRateManuallyEdited) {
         const nextBasic =
-          isBasicManuallyEdited && parsedBasic > 0 ? parsedBasic : derivedBasic;
+          isBasicManuallyEdited && parsedBasic > 0 ? parsedBasic : derivedSplit.basicSalary;
         const exactOt = roundCurrency((nextBasic / 208) * 2);
         setOtRateInput(exactOt.toFixed(2));
         setIsOtRateConfirmed(false);
@@ -200,6 +210,9 @@ export const OnboardingView: React.FC = () => {
     } else {
       if (!isBasicManuallyEdited) {
         setBasicSalaryInput('');
+      }
+      if (!isHouseRentManuallyEdited) {
+        setHouseRentAllowanceInput('');
       }
       if (!isOtRateManuallyEdited) {
         setOtRateInput('');
@@ -248,6 +261,14 @@ export const OnboardingView: React.FC = () => {
   };
 
   const handleNextStep = () => {
+    if (step === 1 && !joiningDate.trim()) {
+      setJoiningDateError(
+        isBn ? 'এখানে আপনার যোগদানের তারিখ সিলেক্ট করুন' : 'Please select your joining date here'
+      );
+      document.getElementById('onb-joining-date')?.focus();
+      return;
+    }
+
     const check = validateOnboardingStepTransition({
       step,
       isManualSetupMode,
@@ -316,20 +337,14 @@ export const OnboardingView: React.FC = () => {
     }
     setSaving(true);
     try {
-      const split =
-        parsedGross >= 2450
-          ? deriveBangladeshRMGBreakdownFromGross(parsedGross)
-          : {
-              basicSalary: parsedBasic > 0 ? parsedBasic : Math.round(parsedGross * 0.55),
-              houseRentAllowance: 0,
-              medicalAllowance: 0,
-              transportAllowance: 0,
-              foodAllowance: 0,
-            };
+      const canonical = getSalaryStructure({
+        grossSalary: parsedGross,
+        basicSalary: parsedBasic > 0 ? parsedBasic : undefined,
+        houseRentAllowance: parsedHouseRent > 0 ? parsedHouseRent : undefined,
+      });
 
-      const finalBasic = parsedBasic > 0 ? parsedBasic : split.basicSalary;
       const finalOtRate =
-        parsedOtRate > 0 ? otBreakdown.hourlyOtRate : DEFAULT_RMG_HOURLY_OT_RATE;
+        parsedOtRate > 0 ? roundCurrency(otBreakdown.hourlyOtRate) : DEFAULT_RMG_HOURLY_OT_RATE;
 
       const resolvedPayDay =
         payDayMode === 'custom'
@@ -337,12 +352,12 @@ export const OnboardingView: React.FC = () => {
           : expectedPayDay;
 
       await completeOnboarding({
-        grossSalary: parsedGross,
-        basicSalary: finalBasic,
-        houseRentAllowance: parsedHouseRent,
-        medicalAllowance: parsedGross >= 2450 ? split.medicalAllowance : 0,
-        transportAllowance: parsedGross >= 2450 ? split.transportAllowance : 0,
-        foodAllowance: parsedGross >= 2450 ? split.foodAllowance : 0,
+        grossSalary: canonical.grossSalary,
+        basicSalary: canonical.basicSalary,
+        houseRentAllowance: canonical.houseRentAllowance,
+        medicalAllowance: canonical.medicalAllowance,
+        transportAllowance: canonical.transportAllowance,
+        foodAllowance: canonical.foodAllowance,
         hasAttendanceBonus: attendanceBonusEnabled,
         attendanceBonus: attendanceBonusEnabled ? parsedBonus : 0,
         attendanceBonusAmount: attendanceBonusEnabled ? parsedBonus : 0,
@@ -431,7 +446,7 @@ export const OnboardingView: React.FC = () => {
             <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
               <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-emerald-50 dark:bg-slate-800 p-1.5 border border-emerald-100 dark:border-slate-700 flex items-center justify-center shrink-0">
                 <img
-                  src="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png"
+                  src="/logo-128.png"
                   alt="শ্রমিক সাথী"
                   width={32}
                   height={32}
@@ -624,8 +639,11 @@ export const OnboardingView: React.FC = () => {
                         type="number"
                         min={0}
                         value={houseRentAllowanceInput}
-                        onChange={(e) => setHouseRentAllowanceInput(e.target.value)}
-                        placeholder={isBn ? '০ (ডিফল্ট ০ - নিজে লিখুন)' : '0 (Default 0 - Enter manually)'}
+                        onChange={(e) => {
+                          setHouseRentAllowanceInput(e.target.value);
+                          setIsHouseRentManuallyEdited(e.target.value.trim().length > 0);
+                        }}
+                        placeholder={isBn ? 'মোট বেতন থেকে অটো বসবে' : 'Auto from gross (editable)'}
                         className="w-full min-h-[42px] sm:min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-xs sm:text-sm font-bold text-slate-900 dark:text-white tabular-nums placeholder:font-normal placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-600"
                       />
                     </div>
@@ -1138,25 +1156,44 @@ export const OnboardingView: React.FC = () => {
                           </div>
 
                           {latePenaltyEnabled && (
-                            <div className="grid grid-cols-3 gap-2 pt-1">
-                              {[1, 2, 3].map((days) => {
-                                const active = maxLateDays === days;
-                                return (
-                                  <button
-                                    key={days}
-                                    type="button"
-                                    data-testid={`onboarding-late-days-${days}`}
-                                    onClick={() => setMaxLateDays(days)}
-                                    className={`min-h-[38px] px-2 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                                      active
-                                        ? 'bg-emerald-600 text-white border-emerald-600'
-                                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
-                                    }`}
-                                  >
-                                    {isBn ? `${toBengaliDigits(days)} দিন লেট` : `${days} Day(s)`}
-                                  </button>
-                                );
-                              })}
+                            <div className="space-y-2 pt-1">
+                              <div className="grid grid-cols-4 gap-1.5">
+                                {[1, 2, 3, 5].map((days) => {
+                                  const active = maxLateDays === days;
+                                  return (
+                                    <button
+                                      key={days}
+                                      type="button"
+                                      data-testid={`onboarding-late-days-${days}`}
+                                      onClick={() => setMaxLateDays(days)}
+                                      className={`min-h-[38px] px-2 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                                        active
+                                          ? 'bg-emerald-600 text-white border-emerald-600'
+                                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                      }`}
+                                    >
+                                      {isBn ? `${toBengaliDigits(days)} দিন` : `${days}d`}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                                  {isBn ? 'অন্য দিন:' : 'Custom days:'}
+                                </label>
+                                <input
+                                  type="number"
+                                  data-testid="onboarding-late-days-custom"
+                                  min={1}
+                                  max={31}
+                                  value={maxLateDays}
+                                  onChange={(e) => {
+                                    const val = Math.max(1, Math.min(31, Number(e.target.value) || 1));
+                                    setMaxLateDays(val);
+                                  }}
+                                  className="w-20 min-h-[34px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 text-xs font-bold text-slate-900 dark:text-white"
+                                />
+                              </div>
                             </div>
                           )}
                         </div>

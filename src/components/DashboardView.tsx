@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -13,16 +13,17 @@ import {
   ChevronRight,
   Clock,
   Edit2,
-  Mic,
   PiggyBank,
-  Plus,
+  Share2,
   Star,
   TrendingUp,
   Trash2,
   Wallet,
+  X,
 } from 'lucide-react';
 import { useData } from '../context/DataContext';
 import type { AttendanceStatus, MoreSubView, NavTab } from '../types';
+import { HomeSmartSearchBar } from './HomeSmartSearchBar';
 import {
   calculateAttendanceBonusEligibility,
   calculateOvertimeEstimate,
@@ -30,6 +31,7 @@ import {
   calculateSmartSalaryComparison,
   computeDailyEarnedSalary,
   evaluateBudgetAlert,
+  evaluateMonthlyBonusLockForDate,
   formatBDT,
   formatNumber,
   getDefaultDateForMonth,
@@ -37,6 +39,7 @@ import {
   getPreviousMonth,
   getPublicHolidayForDate,
   getPublicHolidaysForMonth,
+  getSalaryStructure,
   isDailyQuickEntryCompleted,
   isFutureDate,
   isFutureMonth,
@@ -47,6 +50,7 @@ import {
   summarizePersonalFinances,
   summarizePersonalLoans,
   toBengaliDigits,
+  willDraftCrossLateBonusLimit,
 } from '../utils/calculations';
 import {
   formatDateReadable,
@@ -63,7 +67,9 @@ import {
 } from '../utils/calendarReminders';
 import { CalendarDateReminderSection } from './CalendarDateReminderSection';
 import { DateInputDMY } from './DateInputDMY';
-import { HomeAnalyticsSection } from './HomeAnalyticsSection';
+const HomeAnalyticsSection = lazy(() =>
+  import('./HomeAnalyticsSection').then((m) => ({ default: m.HomeAnalyticsSection }))
+);
 import { EarnedSalarySummaryPieCard, RecentActivityPieChartCard } from './AnalyticsChartCards';
 import { MissingRecordsSection } from './MissingRecordsSection';
 import { getAccurateBstNow } from '../utils/networkTime';
@@ -72,6 +78,12 @@ import {
   getTimeOfDayGreeting,
   resolveWorkerDisplayName,
 } from '../utils/homeAnalytics';
+import { FamilyShareModal } from './FamilyShareModal';
+import {
+  evaluateBonusRiskWarning,
+  evaluateSalaryDayReminder,
+  evaluateSavingsGoalPlan,
+} from '../utils/featureHelpers';
 
 interface DashboardViewProps {
   onNavigateTab: (tab: NavTab, sub?: MoreSubView, targetDateISO?: string) => void;
@@ -118,6 +130,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     loans,
     workplaces,
     reminders,
+    anonymousBenchmark,
     isReadOnlyDemo,
     isProfileSetupIncomplete,
     reopenOnboarding,
@@ -129,6 +142,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     deleteReminder,
     seedSampleDemoData,
   } = useData();
+
+  const handleSeedSampleData = useCallback(() => {
+    void seedSampleDemoData();
+  }, [seedSampleDemoData]);
 
   const dict = T[lang];
   const bstHour = Number(getAccurateBstNow().hh);
@@ -153,6 +170,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [quickDraftOtHours, setQuickDraftOtHours] = useState<number>(0);
   const [quickDraftBonus, setQuickDraftBonus] = useState<boolean>(true);
   const [quickOtResetNotice, setQuickOtResetNotice] = useState<string>('');
+  const [showFamilyShareModal, setShowFamilyShareModal] = useState<boolean>(false);
+  const [dismissedAlerts, setDismissedAlerts] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem('shromik_sathi_dismissed_alerts_v1');
+      return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const dismissAlert = (key: string) => {
+    setDismissedAlerts((prev) => {
+      const next = { ...prev, [key]: true };
+      try {
+        localStorage.setItem('shromik_sathi_dismissed_alerts_v1', JSON.stringify(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!quickDate.startsWith(selectedMonth)) {
@@ -190,23 +228,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     [salaryRecords, selectedMonth]
   );
 
+  const canonicalSalary = useMemo(
+    () => getSalaryStructure(profile, savedSalaryRecord),
+    [profile, savedSalaryRecord]
+  );
+
   const computedSalary = useMemo(
     () =>
       calculateSalaryTotals({
-        basicSalary: savedSalaryRecord ? savedSalaryRecord.basicSalary : profile.basicSalary,
-        houseRentAllowance: savedSalaryRecord
-          ? savedSalaryRecord.houseRentAllowance
-          : profile.houseRentAllowance,
-        medicalAllowance: savedSalaryRecord
-          ? savedSalaryRecord.medicalAllowance
-          : profile.medicalAllowance,
-        transportAllowance: savedSalaryRecord
-          ? savedSalaryRecord.transportAllowance
-          : profile.transportAllowance,
-        foodAllowance: savedSalaryRecord ? savedSalaryRecord.foodAllowance : profile.foodAllowance,
+        basicSalary: canonicalSalary.basicSalary,
+        houseRentAllowance: canonicalSalary.houseRentAllowance,
+        medicalAllowance: canonicalSalary.medicalAllowance,
+        transportAllowance: canonicalSalary.transportAllowance,
+        foodAllowance: canonicalSalary.foodAllowance,
         attendanceBonus: savedSalaryRecord
           ? savedSalaryRecord.attendanceBonus
-          : profile.attendanceBonus,
+          : profile.hasAttendanceBonus !== false
+          ? profile.attendanceBonus
+          : 0,
         overtimeEarnings: otSummary.monthlyEarnings,
         festivalBonus: savedSalaryRecord ? savedSalaryRecord.festivalBonus : 0,
         otherAllowances: savedSalaryRecord ? savedSalaryRecord.otherAllowances : 0,
@@ -215,14 +254,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         otherDeductions: savedSalaryRecord ? savedSalaryRecord.otherDeductions : 0,
         adjustments: savedSalaryRecord ? savedSalaryRecord.adjustments : 0,
       }),
-    [savedSalaryRecord, profile, otSummary.monthlyEarnings]
+    [canonicalSalary, savedSalaryRecord, profile.hasAttendanceBonus, profile.attendanceBonus, otSummary.monthlyEarnings]
   );
 
-  const monthlyWageBase =
-    (profile.grossSalary > 0 ? profile.grossSalary : 0) ||
-    computedSalary.baseGross ||
-    profile.basicSalary ||
-    12500;
+  const monthlyWageBase = canonicalSalary.grossSalary || computedSalary.baseGross || 12500;
 
   const attBonusEval = useMemo(
     () =>
@@ -282,53 +317,116 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
   const loanSummary = useMemo(() => summarizePersonalLoans(loans), [loans]);
 
+  const bonusRisk = useMemo(
+    () =>
+      evaluateBonusRiskWarning({
+        profile,
+        attendanceForMonth: monthAttendance,
+      }),
+    [profile, monthAttendance]
+  );
+
+  const salaryDayReminder = useMemo(
+    () =>
+      evaluateSalaryDayReminder({
+        profile,
+        payments,
+        todayISO,
+      }),
+    [profile, payments, todayISO]
+  );
+
+  const activeSavingsGoalCard = useMemo(() => {
+    if (!savings || savings.length === 0) return null;
+    let surplusFlags: Record<string, boolean> = {};
+    try {
+      const raw = localStorage.getItem('shromik_sathi_savings_surplus_flags_v1');
+      if (raw) surplusFlags = JSON.parse(raw) as Record<string, boolean>;
+    } catch {
+      surplusFlags = {};
+    }
+    const monthlySurplus = Math.max(0, paymentSummary.totalReceived - financeSummary.totalExpenses);
+    for (const g of savings) {
+      if ((Number(g.targetAmount) || 0) <= 0) continue;
+      const mergedGoal = {
+        ...g,
+        countMonthlySurplus: Boolean(g.countMonthlySurplus || surplusFlags[g.id]),
+      };
+      const plan = evaluateSavingsGoalPlan({
+        goal: mergedGoal,
+        todayISO,
+        currentMonthSurplus: monthlySurplus,
+      });
+      if (!plan.isCompleted) {
+        return { goal: mergedGoal, plan };
+      }
+    }
+    return null;
+  }, [savings, paymentSummary.totalReceived, financeSummary.totalExpenses, todayISO]);
+
   // Previous month comparison for Smart Salary Comparison & Financial Insights
   const prevMonth = useMemo(() => getPreviousMonth(selectedMonth), [selectedMonth]);
   const prevOtSummary = useMemo(
     () => summarizeOvertimeRecords(overtime, prevMonth),
     [overtime, prevMonth]
   );
+  const prevMonthAttendance = useMemo(
+    () => attendance.filter((a) => a.month === prevMonth),
+    [attendance, prevMonth]
+  );
+  const prevMonthPayments = useMemo(
+    () => payments.filter((p) => p.month === prevMonth),
+    [payments, prevMonth]
+  );
   const prevSalaryRecord = useMemo(
     () => salaryRecords.find((s) => s.month === prevMonth),
     [salaryRecords, prevMonth]
   );
-  const prevComputedSalary = useMemo(
-    () =>
-      calculateSalaryTotals({
-        basicSalary: prevSalaryRecord ? prevSalaryRecord.basicSalary : profile.basicSalary,
-        houseRentAllowance: prevSalaryRecord
-          ? prevSalaryRecord.houseRentAllowance
-          : profile.houseRentAllowance,
-        medicalAllowance: prevSalaryRecord
-          ? prevSalaryRecord.medicalAllowance
-          : profile.medicalAllowance,
-        transportAllowance: prevSalaryRecord
-          ? prevSalaryRecord.transportAllowance
-          : profile.transportAllowance,
-        foodAllowance: prevSalaryRecord ? prevSalaryRecord.foodAllowance : profile.foodAllowance,
-        attendanceBonus: prevSalaryRecord
-          ? prevSalaryRecord.attendanceBonus
-          : profile.attendanceBonus,
-        overtimeEarnings: prevSalaryRecord
-          ? prevSalaryRecord.overtimeEarnings
-          : prevOtSummary.monthlyEarnings,
-        festivalBonus: prevSalaryRecord ? prevSalaryRecord.festivalBonus : 0,
-        otherAllowances: prevSalaryRecord ? prevSalaryRecord.otherAllowances : 0,
-        advanceDeduction: prevSalaryRecord ? prevSalaryRecord.advanceDeduction : 0,
-        absenceDeduction: prevSalaryRecord ? prevSalaryRecord.absenceDeduction : 0,
-        otherDeductions: prevSalaryRecord ? prevSalaryRecord.otherDeductions : 0,
-        adjustments: prevSalaryRecord ? prevSalaryRecord.adjustments : 0,
-      }),
-    [prevSalaryRecord, profile, prevOtSummary.monthlyEarnings]
+  const hasPreviousMonthData = Boolean(
+    prevSalaryRecord ||
+      prevMonthAttendance.length > 0 ||
+      prevOtSummary.monthlyHours > 0 ||
+      prevMonthPayments.length > 0
   );
+  const prevEarnedBreakdown = useMemo(
+    () =>
+      hasPreviousMonthData
+        ? computeDailyEarnedSalary({
+            monthlyWage: getSalaryStructure(profile, prevSalaryRecord).grossSalary || monthlyWageBase,
+            attendanceRecords: prevMonthAttendance,
+            overtimeEarnings: prevSalaryRecord
+              ? prevSalaryRecord.overtimeEarnings
+              : prevOtSummary.monthlyEarnings,
+            attendanceBonus: prevSalaryRecord
+              ? prevSalaryRecord.attendanceBonus
+              : profile.hasAttendanceBonus !== false
+              ? profile.attendanceBonus
+              : 0,
+            isAttendanceBonusEligible: true,
+          })
+        : null,
+    [
+      hasPreviousMonthData,
+      profile,
+      prevSalaryRecord,
+      monthlyWageBase,
+      prevMonthAttendance,
+      prevOtSummary.monthlyEarnings,
+    ]
+  );
+  const previousMonthNetValue = prevSalaryRecord
+    ? prevSalaryRecord.estimatedNetPayable
+    : prevEarnedBreakdown
+    ? prevEarnedBreakdown.totalEarnedSalary
+    : 0;
+  const effectiveAttendanceBonusAmount =
+    profile.hasAttendanceBonus !== false ? Math.max(0, Number(profile.attendanceBonus || 0)) : 0;
 
   const smartComparison = useMemo(
     () =>
       calculateSmartSalaryComparison({
         currentMonthNet: expectedNetSalary,
-        previousMonthNet: prevSalaryRecord
-          ? prevSalaryRecord.estimatedNetPayable
-          : prevComputedSalary.estimatedNetPayable,
+        previousMonthNet: previousMonthNetValue,
         currentOtHours: otSummary.monthlyHours,
         previousOtHours: prevSalaryRecord
           ? prevSalaryRecord.overtimeHours
@@ -339,19 +437,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           : prevOtSummary.monthlyEarnings,
         absentDays: attendanceSummary.absentDays,
         lateDays: attendanceSummary.lateDays,
-        attendanceBonusAmount: profile.attendanceBonus,
+        attendanceBonusAmount: effectiveAttendanceBonusAmount,
       }),
     [
       expectedNetSalary,
+      previousMonthNetValue,
       prevSalaryRecord,
-      prevComputedSalary.estimatedNetPayable,
       otSummary.monthlyHours,
       otSummary.monthlyEarnings,
       prevOtSummary.monthlyHours,
       prevOtSummary.monthlyEarnings,
       attendanceSummary.absentDays,
       attendanceSummary.lateDays,
-      profile.attendanceBonus,
+      effectiveAttendanceBonusAmount,
     ]
   );
 
@@ -404,15 +502,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     isEditing: isEditingQuickCalc,
   });
 
+  const quickBonusLock = useMemo(() => {
+    const targetMonth = quickDate.slice(0, 7);
+    const recordsForQuickMonth = attendance.filter((a) => a.month === targetMonth || a.date.startsWith(targetMonth));
+    return evaluateMonthlyBonusLockForDate({
+      targetDate: quickDate,
+      recordsForMonth: recordsForQuickMonth,
+      profile,
+    });
+  }, [quickDate, attendance, profile]);
+
+  const quickDraftCrossesLateLimit = useMemo(
+    () =>
+      willDraftCrossLateBonusLimit({
+        lock: quickBonusLock,
+        draftStatus: quickDraftStatus,
+        targetDate: quickDate,
+        profile,
+      }),
+    [quickBonusLock, quickDraftStatus, quickDate, profile]
+  );
+
   const handleSelectQuickStatus = (st: AttendanceStatus) => {
     setQuickDraftStatus(st);
 
-    if (st === 'present') {
+    if (st === 'present' || st === 'late') {
       setQuickDraftBonus(true);
       setQuickHasBonus(true);
-    } else if (st === 'late') {
-      setQuickDraftBonus(false);
-      setQuickHasBonus(false);
     } else if (st === 'absent') {
       setQuickDraftBonus(false);
       setQuickHasBonus(false);
@@ -497,7 +613,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       computedEndTime = '17:00';
     }
 
-    // 1. Save Attendance
+    // 1. Save Attendance (keep hasAttendanceBonus neutral=true when another date already locked the month, so editing that original date restores eligibility cleanly)
+    const effectiveBonusToSave = isWorkingStatus
+      ? quickBonusLock.isAlreadyMissedInMonth || quickDraftCrossesLateLimit
+        ? true
+        : quickDraftBonus
+      : undefined;
+
     await saveAttendance(
       {
         date: quickDate,
@@ -506,7 +628,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         leaveCategory: quickDraftStatus === 'approved_leave' ? 'casual' : 'none',
         checkIn: isWorkingStatus ? '08:00' : '',
         checkOut: computedEndTime,
-        hasAttendanceBonus: quickDraftBonus,
+        hasAttendanceBonus: effectiveBonusToSave,
         notes:
           quickDraftStatus === 'public_holiday' && pubHol
             ? pubHol.titleBn
@@ -899,14 +1021,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               >
                 {workerDisplayName}
               </h1>
-              {user?.email && !user.email.endsWith('@shromiksathi.app') && (
-                <p
-                  data-testid="dashboard-user-email"
-                  className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 truncate"
-                >
-                  {user.email}
-                </p>
-              )}
             </div>
           </div>
 
@@ -942,40 +1056,121 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:gap-2.5 w-full lg:w-auto shrink-0">
-          <button
-            type="button"
-            data-testid="open-voice-modal-btn"
-            onClick={() => {
-              if (isProfileSetupIncomplete) {
-                reopenOnboarding();
-                return;
-              }
-              onOpenVoiceModal();
-            }}
-            className="min-h-[40px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/70 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap"
-          >
-            <Mic className="w-4 h-4 shrink-0" />
-            <span>{dict.voiceEntryBtn}</span>
-          </button>
-
-          <button
-            type="button"
-            data-testid="dashboard-add-overtime-btn"
-            onClick={() => {
-              if (isProfileSetupIncomplete) {
-                reopenOnboarding();
-                return;
-              }
-              onNavigateTab('overtime');
-            }}
-            className="min-h-[40px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shadow-xs"
-          >
-            <Plus className="w-4 h-4 shrink-0" />
-            <span>{lang === 'bn' ? 'ওভারটাইম যোগ করুন' : 'Add Overtime'}</span>
-          </button>
-        </div>
+        <HomeSmartSearchBar
+          onNavigateTab={onNavigateTab}
+          onOpenVoiceModal={onOpenVoiceModal}
+          isProfileSetupIncomplete={isProfileSetupIncomplete}
+          reopenOnboarding={reopenOnboarding}
+        />
       </section>
+
+      {/* Dynamic Colored Earned Salary Card (Below Voice Entry & Add Overtime) */}
+      {(() => {
+        const earnedAmount = earnedSalaryBreakdown.totalEarnedSalary;
+        const grossAmount = monthlyWageBase;
+        const otAmount = earnedSalaryBreakdown.overtimeEarnings;
+        const bonusAmount = earnedSalaryBreakdown.earnedAttendanceBonus;
+        const earnedPct =
+          grossAmount > 0 ? Math.min(100, Math.round((earnedAmount / grossAmount) * 100)) : 0;
+
+        return (
+          <section
+            data-testid="home-earned-salary-hero-card"
+            onClick={() => onNavigateTab('salary')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onNavigateTab('salary');
+              }
+            }}
+            aria-label={
+              lang === 'bn' ? 'চলতি মাসের অর্জিত বেতন বিবরণী দেখুন' : 'View current month earned salary details'
+            }
+            className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-700 dark:from-emerald-900 dark:via-emerald-800 dark:to-teal-900 text-white p-4 sm:p-5 shadow-md cursor-pointer transition-transform active:scale-[0.99] focus-visible:outline-2 focus-visible:outline-emerald-500"
+          >
+            {/* Lightweight decorative accent without costly mobile GPU blur */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -top-10 -right-10 w-36 h-36 rounded-full bg-white/10"
+            />
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -bottom-12 -left-8 w-32 h-32 rounded-full bg-teal-300/10"
+            />
+
+            <div className="relative space-y-3">
+              {/* Primary Row: Current Month Earned Salary */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <p className="text-xs sm:text-sm font-semibold text-emerald-100/95">
+                    {lang === 'bn' ? 'চলতি মাসের অর্জিত বেতন' : 'Current Month Earned Salary'}
+                  </p>
+                  <p
+                    data-testid="home-earned-salary-amount"
+                    className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white tabular-nums leading-none"
+                  >
+                    {formatBDT(earnedAmount, lang)}
+                  </p>
+                </div>
+
+                <span className="w-9 h-9 rounded-xl bg-white/15 backdrop-blur-xs flex items-center justify-center shrink-0">
+                  <ChevronRight className="w-5 h-5 text-white" aria-hidden="true" />
+                </span>
+              </div>
+
+              {/* Dynamic Progress Bar + Total Monthly Salary */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2 text-xs sm:text-sm">
+                  <span className="font-medium text-emerald-100/90">
+                    {lang === 'bn' ? 'মোট বেতন' : 'Total Salary'}
+                  </span>
+                  <span
+                    data-testid="home-gross-salary-amount"
+                    className="font-bold text-white tabular-nums"
+                  >
+                    {formatBDT(grossAmount, lang)}
+                  </span>
+                </div>
+                <div className="w-full h-1.5 rounded-full bg-black/20 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-200 via-white to-teal-200 transition-all duration-300"
+                    style={{ width: `${earnedPct}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Compact Bottom Breakdown: OT Money + Bonus Money */}
+              <div className="pt-2.5 border-t border-white/15 flex items-center justify-between gap-3 text-[11px] sm:text-xs">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-emerald-100/85 font-medium">
+                    {lang === 'bn' ? 'ওটি টাকা:' : 'OT Pay:'}
+                  </span>
+                  <span
+                    data-testid="home-card-ot-amount"
+                    className="font-bold text-white tabular-nums truncate"
+                  >
+                    {formatBDT(otAmount, lang)}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-emerald-100/85 font-medium">
+                    {lang === 'bn' ? 'বোনাস:' : 'Bonus:'}
+                  </span>
+                  <span
+                    data-testid="home-card-bonus-amount"
+                    className="font-bold text-white tabular-nums truncate"
+                  >
+                    {formatBDT(bonusAmount, lang)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+        );
+      })()}
 
       {/* Today's Record Summary Card */}
       {(() => {
@@ -1244,18 +1439,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 })}
               </div>
 
-              {/* Attendance Bonus Toggle Checkbox */}
-              <label className="flex items-center gap-2 pt-1 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  data-testid="quick-bonus-checkbox"
-                  checked={quickDraftBonus}
-                  disabled={isQuickActionLocked}
-                  onChange={(e) => setQuickDraftBonus(e.target.checked)}
-                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
-                />
-                <span>{lang === 'bn' ? 'হাজিরা বোনাস বহাল (টিক দিন)' : 'Attendance Bonus Active'}</span>
-              </label>
+              {/* Attendance Bonus Toggle Checkbox or Clean Monthly Missed Notice */}
+              {quickBonusLock.isAlreadyMissedInMonth ? (
+                <div
+                  data-testid="quick-bonus-missed-notice"
+                  className="pt-1 text-xs font-semibold text-rose-700 dark:text-rose-300"
+                >
+                  {lang === 'bn' ? quickBonusLock.noticeBn : quickBonusLock.noticeEn}
+                </div>
+              ) : quickDraftCrossesLateLimit ? (
+                <div
+                  data-testid="quick-bonus-late-limit-notice"
+                  className="pt-1 text-xs font-semibold text-rose-700 dark:text-rose-300"
+                >
+                  {lang === 'bn'
+                    ? `${toBengaliDigits(quickBonusLock.maxLateDaysLimit)} দিন দেরি হওয়ায় এই মাসের হাজিরা বোনাস মিস হয়েছে`
+                    : `Attendance bonus missed (${quickBonusLock.maxLateDaysLimit} late days reached this month)`}
+                </div>
+              ) : quickDraftStatus === 'present' || quickDraftStatus === 'late' ? (
+                <label className="flex items-center gap-2 pt-1 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="quick-bonus-checkbox"
+                    checked={quickDraftBonus}
+                    disabled={isQuickActionLocked}
+                    onChange={(e) => setQuickDraftBonus(e.target.checked)}
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
+                  />
+                  <span>{lang === 'bn' ? 'হাজিরা বোনাস বহাল (টিক দিন)' : 'Attendance Bonus Active'}</span>
+                </label>
+              ) : null}
             </div>
 
             {/* Quick Out-Time & Overtime Add / Edit */}
@@ -1374,8 +1587,133 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </section>
       )}
 
+      {/* Dismissible Smart Alerts: Hajira Bonus Risk Warning + Salary Day Reminder (Clean, No Subtitles) */}
+      {bonusRisk.status !== 'safe' &&
+        !dismissedAlerts[`bonus_risk_${selectedMonth}_${bonusRisk.status}`] && (
+          <section
+            data-testid="bonus-risk-alert-card"
+            className={`rounded-2xl p-3.5 sm:p-4 border flex items-start justify-between gap-3 ${
+              bonusRisk.status === 'at_risk'
+                ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-950 dark:text-amber-100'
+                : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200'
+            }`}
+          >
+            <div className="flex items-start gap-2.5 min-w-0">
+              <AlertCircle
+                className={`w-4 h-4 shrink-0 mt-0.5 ${
+                  bonusRisk.status === 'at_risk'
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : 'text-slate-500 dark:text-slate-400'
+                }`}
+              />
+              <p className="text-xs sm:text-sm font-bold leading-snug">
+                {bonusRisk.status === 'at_risk'
+                  ? lang === 'bn'
+                    ? `আর ১ দিন দেরি হলে হাজিরা বোনাস (${formatBDT(bonusRisk.bonusAmount, 'bn')}) বাদ পড়বে`
+                    : `1 more late day will cancel your attendance bonus (${formatBDT(bonusRisk.bonusAmount, 'en')})`
+                  : lang === 'bn'
+                  ? `এই মাসের হাজিরা বোনাস (${formatBDT(bonusRisk.bonusAmount, 'bn')}) আর প্রযোজ্য নয়`
+                  : `Attendance bonus (${formatBDT(bonusRisk.bonusAmount, 'en')}) is no longer eligible this month`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => dismissAlert(`bonus_risk_${selectedMonth}_${bonusRisk.status}`)}
+              aria-label={lang === 'bn' ? 'বন্ধ করুন' : 'Dismiss'}
+              className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 shrink-0 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </section>
+        )}
+
+      {salaryDayReminder.shouldShow && !dismissedAlerts[salaryDayReminder.dismissKey] && (
+        <section
+          data-testid="salary-day-reminder-card"
+          className="rounded-2xl p-3.5 sm:p-4 bg-emerald-50/80 dark:bg-emerald-950/35 border border-emerald-200 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-3"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Bell className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+            <p className="text-xs sm:text-sm font-bold text-emerald-950 dark:text-emerald-100">
+              {lang === 'bn'
+                ? `আগামীকাল বেতনের তারিখ (${toBengaliDigits(salaryDayReminder.expectedPayDay)} তারিখ)`
+                : `Salary day is tomorrow (Day ${salaryDayReminder.expectedPayDay})`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => onNavigateTab('more', 'salary')}
+              className="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold cursor-pointer"
+            >
+              {lang === 'bn' ? 'বেতন হিসাব দেখুন' : 'Check Salary'}
+            </button>
+            <button
+              type="button"
+              onClick={() => dismissAlert(salaryDayReminder.dismissKey)}
+              aria-label={lang === 'bn' ? 'বন্ধ করুন' : 'Dismiss'}
+              className="p-1 rounded-lg text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Compact Active Savings Goal Card (Shown only when an active goal exists) */}
+      {activeSavingsGoalCard && (
+        <section
+          data-testid="home-active-savings-goal-card"
+          onClick={() => onNavigateTab('more', 'finance')}
+          className="bg-white dark:bg-slate-900 border border-emerald-200/80 dark:border-emerald-800/70 rounded-2xl p-3.5 sm:p-4 space-y-2.5 cursor-pointer hover:border-emerald-400 transition-colors"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <PiggyBank className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+              <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                {activeSavingsGoalCard.goal.title}
+              </span>
+            </div>
+            <span className="text-xs font-black text-emerald-700 dark:text-emerald-400 tabular-nums shrink-0">
+              {formatNumber(activeSavingsGoalCard.plan.progressPct, lang)}%
+            </span>
+          </div>
+          <div className="w-full h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-emerald-600 transition-all"
+              style={{ width: `${activeSavingsGoalCard.plan.progressPct}%` }}
+            />
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
+            <span>
+              {formatBDT(activeSavingsGoalCard.plan.effectiveSaved, lang)} /{' '}
+              {formatBDT(activeSavingsGoalCard.goal.targetAmount, lang)}
+            </span>
+            <span className="text-emerald-700 dark:text-emerald-400 font-bold">
+              {lang === 'bn'
+                ? `প্রতি মাসে ${formatBDT(activeSavingsGoalCard.plan.monthlyTargetNeeded, 'bn')}`
+                : `${formatBDT(activeSavingsGoalCard.plan.monthlyTargetNeeded, 'en')}/mo`}
+            </span>
+          </div>
+        </section>
+      )}
+
       {/* 2. 6 Summary Cards Grid — Mobile-First 2-Column Compact Layout */}
-      <section aria-label={lang === 'bn' ? 'মাসিক সারসংক্ষেপ' : 'Monthly Summary'}>
+      <section aria-label={lang === 'bn' ? 'মাসিক সারসংক্ষেপ' : 'Monthly Summary'} className="space-y-3">
+        <div className="flex items-center justify-between gap-2 px-0.5">
+          <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
+            {lang === 'bn' ? 'মাসিক সারসংক্ষেপ' : 'Monthly Summary'}
+          </h2>
+          <button
+            type="button"
+            data-testid="home-family-share-btn"
+            onClick={() => setShowFamilyShareModal(true)}
+            className="min-h-[34px] px-3 py-1 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+            <span>{lang === 'bn' ? 'শেয়ার করুন' : 'Share'}</span>
+          </button>
+        </div>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           {/* Card 1: Attendance-Based Earned Salary */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between">
@@ -1680,28 +2018,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <p className="text-[11px] text-slate-500">
               {lang === 'bn' ? 'গত মাসের তুলনায় বেতন পার্থক্য' : 'Net Salary vs Last Month'}
             </p>
-            <p
-              data-testid="smart-net-diff"
-              className={`mt-1 text-base sm:text-lg font-bold tabular-nums ${
-                smartComparison.netDiff >= 0
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : 'text-amber-700 dark:text-amber-400'
-              }`}
-            >
-              {smartComparison.netDiff >= 0 ? '+' : '-'}
-              {formatBDT(Math.abs(smartComparison.netDiff), lang)} (
-              {smartComparison.netDiffPercent >= 0 ? '+' : ''}
-              {formatNumber(smartComparison.netDiffPercent, lang, 1)}%)
-            </p>
-            <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
-              {lang === 'bn' ? 'গত মাস:' : 'Prev:'}{' '}
-              {formatBDT(
-                prevSalaryRecord
-                  ? prevSalaryRecord.estimatedNetPayable
-                  : prevComputedSalary.estimatedNetPayable,
-                lang
-              )}
-            </p>
+            {hasPreviousMonthData ? (
+              <>
+                <p
+                  data-testid="smart-net-diff"
+                  className={`mt-1 text-base sm:text-lg font-bold tabular-nums ${
+                    smartComparison.netDiff >= 0
+                      ? 'text-emerald-700 dark:text-emerald-400'
+                      : 'text-amber-700 dark:text-amber-400'
+                  }`}
+                >
+                  {smartComparison.netDiff >= 0 ? '+' : '-'}
+                  {formatBDT(Math.abs(smartComparison.netDiff), lang)} (
+                  {smartComparison.netDiffPercent >= 0 ? '+' : ''}
+                  {formatNumber(smartComparison.netDiffPercent, lang, 1)}%)
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
+                  {lang === 'bn' ? 'গত মাস:' : 'Prev:'} {formatBDT(previousMonthNetValue, lang)}
+                </p>
+              </>
+            ) : (
+              <>
+                <p
+                  data-testid="smart-net-diff"
+                  className="mt-1 text-xs sm:text-sm font-bold text-slate-600 dark:text-slate-300"
+                >
+                  {lang === 'bn'
+                    ? 'তুলনা দেখতে কমপক্ষে ২ মাসের ডাটা লাগবে'
+                    : 'Need at least 2 months of data to compare'}
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  {lang === 'bn' ? 'গত মাসের কোনো রেকর্ড নেই' : 'No records found for previous month'}
+                </p>
+              </>
+            )}
           </div>
 
           {/* Comparison 2: Overtime Hours Comparison */}
@@ -1709,16 +2059,30 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <p className="text-[11px] text-slate-500">
               {lang === 'bn' ? 'ওভারটাইম ঘণ্টার তুলনা' : 'Overtime Hours Change'}
             </p>
-            <p className="mt-1 text-base sm:text-lg font-bold text-slate-900 dark:text-white tabular-nums">
-              {smartComparison.otHoursDiff >= 0 ? '+' : ''}
-              {formatNumber(smartComparison.otHoursDiff, lang, 1)}{' '}
-              {lang === 'bn' ? 'ঘণ্টা' : 'hrs'}
-            </p>
-            <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
-              {lang === 'bn' ? 'আয়ের পার্থক্য:' : 'OT Pay Diff:'}{' '}
-              {smartComparison.otEarningsDiff >= 0 ? '+' : '-'}
-              {formatBDT(Math.abs(smartComparison.otEarningsDiff), lang)}
-            </p>
+            {hasPreviousMonthData ? (
+              <>
+                <p className="mt-1 text-base sm:text-lg font-bold text-slate-900 dark:text-white tabular-nums">
+                  {smartComparison.otHoursDiff >= 0 ? '+' : ''}
+                  {formatNumber(smartComparison.otHoursDiff, lang, 1)}{' '}
+                  {lang === 'bn' ? 'ঘণ্টা' : 'hrs'}
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
+                  {lang === 'bn' ? 'আয়ের পার্থক্য:' : 'OT Pay Diff:'}{' '}
+                  {smartComparison.otEarningsDiff >= 0 ? '+' : '-'}
+                  {formatBDT(Math.abs(smartComparison.otEarningsDiff), lang)}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-1 text-base sm:text-lg font-bold text-slate-900 dark:text-white tabular-nums">
+                  {formatNumber(otSummary.monthlyHours, lang, 1)}{' '}
+                  {lang === 'bn' ? 'ঘণ্টা' : 'hrs'}
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  {lang === 'bn' ? 'চলতি মাসের মোট ওভারটাইম' : 'Total OT this month'}
+                </p>
+              </>
+            )}
           </div>
 
           {/* Comparison 3: Attendance Bonus Eligibility */}
@@ -1726,21 +2090,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <p className="text-[11px] text-slate-500">
               {lang === 'bn' ? 'হাজিরা বোনাস যোগ্যতা' : 'Attendance Bonus Status'}
             </p>
-            <p
-              className={`mt-1 text-sm sm:text-base font-bold ${
-                smartComparison.attendanceBonusSafe
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : 'text-amber-700 dark:text-amber-400'
-              }`}
-            >
-              {smartComparison.attendanceBonusSafe
-                ? lang === 'bn'
-                  ? `✓ প্রাপ্য (${formatBDT(profile.attendanceBonus, 'bn')})`
-                  : `✓ Eligible (${formatBDT(profile.attendanceBonus, 'en')})`
-                : lang === 'bn'
-                ? 'ঝুঁকিতে (অনুপস্থিতি/দেরি)'
-                : 'At Risk (Absent/Late)'}
-            </p>
+            {effectiveAttendanceBonusAmount <= 0 ? (
+              <p className="mt-1 text-sm sm:text-base font-bold text-slate-500 dark:text-slate-400">
+                {lang === 'bn' ? 'চালু নেই' : 'Disabled'}
+              </p>
+            ) : (
+              <p
+                className={`mt-1 text-sm sm:text-base font-bold ${
+                  smartComparison.attendanceBonusSafe
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-amber-700 dark:text-amber-400'
+                }`}
+              >
+                {smartComparison.attendanceBonusSafe
+                  ? lang === 'bn'
+                    ? `✓ প্রাপ্য (${formatBDT(effectiveAttendanceBonusAmount, 'bn')})`
+                    : `✓ Eligible (${formatBDT(effectiveAttendanceBonusAmount, 'en')})`
+                  : lang === 'bn'
+                  ? 'ঝুঁকিতে (অনুপস্থিতি/দেরি)'
+                  : 'At Risk (Absent/Late)'}
+              </p>
+            )}
             <p className="mt-0.5 text-[11px] text-slate-500">
               {lang === 'bn'
                 ? `অনুপস্থিত: ${formatNumber(attendanceSummary.absentDays, 'bn')} দিন · দেরি: ${formatNumber(attendanceSummary.lateDays, 'bn')} দিন`
@@ -1776,25 +2146,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </section>
 
       {/* 6. Contextual Zone 1: Monthly Salary & Financial Analytics + Factory Pie & Comparison Graph */}
-      <HomeAnalyticsSection
-        zone="salary_overview"
-        selectedMonth={selectedMonth}
-        lang={lang}
-        profile={profile}
-        attendance={attendance}
-        overtime={overtime}
-        salaryRecords={salaryRecords}
-        payments={payments}
-        expenses={expenses}
-        savings={savings}
-        loans={loans}
-        workplaces={workplaces}
-        todayISO={todayISO}
-        isReadOnlyDemo={isReadOnlyDemo}
-        onSeedSampleData={() => void seedSampleDemoData()}
-        onSelectMonth={setSelectedMonth}
-        onNavigateTab={onNavigateTab}
-      />
+      <Suspense fallback={null}>
+        <HomeAnalyticsSection
+          zone="salary_overview"
+          selectedMonth={selectedMonth}
+          lang={lang}
+          profile={profile}
+          attendance={attendance}
+          overtime={overtime}
+          salaryRecords={salaryRecords}
+          payments={payments}
+          expenses={expenses}
+          savings={savings}
+          loans={loans}
+          workplaces={workplaces}
+          anonymousBenchmark={anonymousBenchmark}
+          todayISO={todayISO}
+          isReadOnlyDemo={isReadOnlyDemo}
+          onSeedSampleData={handleSeedSampleData}
+          onSelectMonth={setSelectedMonth}
+          onNavigateTab={onNavigateTab}
+        />
+      </Suspense>
 
       {/* Dedicated Attendance & Public Holidays Overview right inside Home (হোমের ভিতরে হাজিরা ও ছুটি ওভারভিউ) */}
       <section
@@ -2338,46 +2711,48 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </section>
 
       {/* Contextual Zone 3: Attendance & Holiday Pie Chart + Overtime Analytics Pie Chart (Directly below Home Calendar) */}
-      <HomeAnalyticsSection
-        zone="attendance_overtime"
-        selectedMonth={selectedMonth}
-        lang={lang}
-        profile={profile}
-        attendance={attendance}
-        overtime={overtime}
-        salaryRecords={salaryRecords}
-        payments={payments}
-        expenses={expenses}
-        savings={savings}
-        loans={loans}
-        workplaces={workplaces}
-        todayISO={todayISO}
-        isReadOnlyDemo={isReadOnlyDemo}
-        onSeedSampleData={() => void seedSampleDemoData()}
-        onSelectMonth={setSelectedMonth}
-        onNavigateTab={onNavigateTab}
-      />
+      <Suspense fallback={null}>
+        <HomeAnalyticsSection
+          zone="attendance_overtime"
+          selectedMonth={selectedMonth}
+          lang={lang}
+          profile={profile}
+          attendance={attendance}
+          overtime={overtime}
+          salaryRecords={salaryRecords}
+          payments={payments}
+          expenses={expenses}
+          savings={savings}
+          loans={loans}
+          workplaces={workplaces}
+          todayISO={todayISO}
+          isReadOnlyDemo={isReadOnlyDemo}
+          onSeedSampleData={handleSeedSampleData}
+          onSelectMonth={setSelectedMonth}
+          onNavigateTab={onNavigateTab}
+        />
 
-      {/* Contextual Zone 4: Monthly Expenses & Rent Pie/Graph + Personal Loans Pie/Graph */}
-      <HomeAnalyticsSection
-        zone="expense_loans"
-        selectedMonth={selectedMonth}
-        lang={lang}
-        profile={profile}
-        attendance={attendance}
-        overtime={overtime}
-        salaryRecords={salaryRecords}
-        payments={payments}
-        expenses={expenses}
-        savings={savings}
-        loans={loans}
-        workplaces={workplaces}
-        todayISO={todayISO}
-        isReadOnlyDemo={isReadOnlyDemo}
-        onSeedSampleData={() => void seedSampleDemoData()}
-        onSelectMonth={setSelectedMonth}
-        onNavigateTab={onNavigateTab}
-      />
+        {/* Contextual Zone 4: Monthly Expenses & Rent Pie/Graph + Personal Loans Pie/Graph */}
+        <HomeAnalyticsSection
+          zone="expense_loans"
+          selectedMonth={selectedMonth}
+          lang={lang}
+          profile={profile}
+          attendance={attendance}
+          overtime={overtime}
+          salaryRecords={salaryRecords}
+          payments={payments}
+          expenses={expenses}
+          savings={savings}
+          loans={loans}
+          workplaces={workplaces}
+          todayISO={todayISO}
+          isReadOnlyDemo={isReadOnlyDemo}
+          onSeedSampleData={handleSeedSampleData}
+          onSelectMonth={setSelectedMonth}
+          onNavigateTab={onNavigateTab}
+        />
+      </Suspense>
 
       {/* Bottom 2-Column Section: Recent Activity (+ Recent Activity Pie Chart) & Reminders */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -2574,6 +2949,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </section>
 
 
+      <FamilyShareModal
+        isOpen={showFamilyShareModal}
+        onClose={() => setShowFamilyShareModal(false)}
+        lang={lang}
+        monthISO={selectedMonth}
+        presentDays={attendanceSummary.presentDays + attendanceSummary.lateDays}
+        otHours={otSummary.monthlyHours}
+        earnedSalary={earnedSalaryBreakdown.totalEarnedSalary}
+        receivedSalary={paymentSummary.totalReceived}
+        totalExpenses={financeSummary.totalExpenses}
+        totalSaved={savings.reduce((sum, g) => sum + (Number(g.savedAmount) || 0), 0)}
+      />
     </div>
   );
 };

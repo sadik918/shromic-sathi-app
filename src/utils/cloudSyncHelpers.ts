@@ -589,6 +589,9 @@ export function mergeUserDirectories(
           : remote.lastSeenDate
         : remote.lastSeenDate || prev?.lastSeenDate || mergedRegisteredAt;
 
+    const resolvedAccountStatus: 'active' | 'suspended' =
+      remote.accountStatus === 'suspended' ? 'suspended' : 'active';
+
     map.set(remote.uid, {
       ...prev,
       ...remote,
@@ -596,10 +599,7 @@ export function mergeUserDirectories(
       email: mergedEmail,
       registeredAt: mergedRegisteredAt,
       lastSeenDate: mergedLastSeenDate,
-      accountStatus:
-        remote.accountStatus === 'suspended' || prev?.accountStatus === 'suspended'
-          ? 'suspended'
-          : 'active',
+      accountStatus: resolvedAccountStatus,
       emailVerified: Boolean(remote.emailVerified || prev?.emailVerified),
       authProvider:
         remote.authProvider === 'google.com' || prev?.authProvider === 'google.com'
@@ -607,13 +607,18 @@ export function mergeUserDirectories(
           : remote.authProvider || prev?.authProvider || 'password',
       role: remote.role ?? prev?.role,
       createdAtMs: remote.createdAtMs ?? prev?.createdAtMs,
-      suspensionReason: remote.suspensionReason ?? prev?.suspensionReason,
+      suspensionReason:
+        resolvedAccountStatus === 'suspended'
+          ? remote.suspensionReason || prev?.suspensionReason
+          : undefined,
       statusHistory:
         remote.statusHistory && remote.statusHistory.length > 0
           ? remote.statusHistory
           : prev?.statusHistory || [],
-      suspendedAt: prev?.suspendedAt,
-      suspendedBy: prev?.suspendedBy,
+      suspendedAt:
+        resolvedAccountStatus === 'suspended' ? (remote.suspendedAt ?? prev?.suspendedAt) : undefined,
+      suspendedBy:
+        resolvedAccountStatus === 'suspended' ? (remote.suspendedBy ?? prev?.suspendedBy) : undefined,
     });
   }
 

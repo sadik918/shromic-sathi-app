@@ -1,5 +1,10 @@
-import type { EmploymentType, WorkerProfile } from '../types';
-import { roundCurrency, toBengaliDigits } from './calculations';
+import type { AttendanceRecord, EmploymentType, WorkerProfile } from '../types';
+import {
+  deriveBangladeshRMGBreakdownFromGross,
+  getSalaryStructure,
+  roundCurrency,
+  toBengaliDigits,
+} from './calculations';
 
 export type BenefitCalculatorId =
   | 'annual_leave'
@@ -10,6 +15,7 @@ export type BenefitCalculatorId =
   | 'death_compensation'
   | 'final_settlement'
   | 'monthly_salary'
+  | 'increment_calc'
   | 'daily_wage'
   | 'hourly_wage'
   | 'overtime_calc'
@@ -361,6 +367,19 @@ export const DEFAULT_CALCULATOR_CATALOG: CalculatorCatalogMeta[] = [
     legalSectionBn: 'গার্মেন্টস ন্যূনতম মজুরি গেজেট ২০২৩ ও শ্রম আইন ধারা ১২০-১২৫',
     legalSectionEn: 'RMG Minimum Wage Gazette 2023 & Labour Act Sec 120-125',
     helpTextBn: 'মাসিক গ্রস বেতন, হাজিরা বোনাস, ওভারটাইম এবং অনুপস্থিতি বা অগ্রিম কর্তন বাদ দিয়ে হাতে পাওয়ার নিট বেতন বের করুন।',
+    enabled: true,
+  },
+  {
+    id: 'increment_calc',
+    group: 'regular_wages',
+    isPrimarySix: false,
+    titleBn: 'ইনক্রিমেন্ট হিসাব',
+    titleEn: 'Increment Calculator',
+    shortDescBn: 'শতাংশ (%) বা নির্দিষ্ট টাকা ইনক্রিমেন্টে নতুন মোট বেতন, মূল বেতন, বাড়ি ভাড়া ও ওটি হার বের করুন।',
+    shortDescEn: 'Calculate new gross, basic split, house rent, and updated OT rate from % or BDT increment.',
+    legalSectionBn: 'গার্মেন্টস ন্যূনতম মজুরি গেজেট — বাৎসরিক ইনক্রিমেন্ট বিধি',
+    legalSectionEn: 'RMG Minimum Wage Gazette — Annual Increment Rule',
+    helpTextBn: 'গার্মেন্টস খাতে সাধারণত প্রতি বছর মূল বেতনের উপর ন্যূনতম ৫% (বা কারখানার নীতিমালা অনুযায়ী বেশি) ইনক্রিমেন্ট যুক্ত হয়, যার ফলে বাড়ি ভাড়া ও ওভারটাইম হারও বৃদ্ধি পায়।',
     enabled: true,
   },
   {
@@ -743,14 +762,43 @@ export function resolveStatutoryWageBasis(wages: WageComponentsInput): {
 
 export function buildWorkerPrefillInputs(
   profile: Partial<WorkerProfile>,
-  todayISO: string
+  todayISO: string,
+  attendanceRecords: AttendanceRecord[] = []
 ): Record<string, string | number | boolean> {
-  const basic = Number(profile.basicSalary) || 6700;
-  const houseRent = Number(profile.houseRentAllowance) || Math.round(basic * 0.5);
-  const medical = Number(profile.medicalAllowance) || 750;
-  const transport = Number(profile.transportAllowance) || 450;
-  const food = Number(profile.foodAllowance) || 1250;
-  const attendanceBonus = Number(profile.attendanceBonus) || 700;
+  const structure = getSalaryStructure(profile);
+  const attendanceBonus =
+    profile.hasAttendanceBonus === false
+      ? 0
+      : Math.max(0, Number(profile.attendanceBonusAmount ?? profile.attendanceBonus) || 0);
+
+  const joiningDate = (profile.joiningDate || '').trim();
+  const effectiveToday = (todayISO || '').trim();
+  const tenure = joiningDate && effectiveToday
+    ? calculateExactServiceDuration(joiningDate, effectiveToday)
+    : null;
+
+  // Derive real worked days & used leave from actual attendance records (never invent 288/4/10 for new joiners!)
+  const validAttSinceJoin = attendanceRecords.filter((r) =>
+    !joiningDate || !r.date ? true : r.date >= joiningDate
+  );
+  const recordedWorkedDays = validAttSinceJoin.filter(
+    (r) => r.status === 'present' || r.status === 'late'
+  ).length;
+  const recordedEarnedLeaveUsed = validAttSinceJoin.filter(
+    (r) => r.status === 'approved_leave' && r.leaveCategory === 'earned'
+  ).length;
+
+  let derivedDaysWorked = recordedWorkedDays;
+  if (derivedDaysWorked === 0 && tenure?.valid && tenure.totalCalendarDays >= 30) {
+    // Only estimate worked days if worker has >= 1 month of service and no attendance entries yet
+    const approxYearDays = Math.min(365, tenure.totalCalendarDays);
+    derivedDaysWorked = Math.max(0, Math.round((approxYearDays * 26) / 30));
+  }
+  const derivedEarnedLeave = Math.floor((derivedDaysWorked / 18) * 100) / 100;
+  const derivedUnusedLeave = Math.max(
+    0,
+    Math.min(40, Math.floor(derivedEarnedLeave - recordedEarnedLeaveUsed))
+  );
 
   return {
     workerName: profile.fullName || 'শ্রমিক ব্যবহারকারী',
@@ -758,22 +806,22 @@ export function buildWorkerPrefillInputs(
     department: profile.department || '',
     designation: profile.designation || '',
     employmentType: (profile.employmentType || 'permanent') as EmploymentType,
-    joiningDate: profile.joiningDate || '2021-01-01',
-    calculationDate: todayISO || '2026-10-28',
-    basicSalary: basic,
-    houseRentAllowance: houseRent,
-    medicalAllowance: medical,
-    transportAllowance: transport,
-    foodAllowance: food,
+    joiningDate: joiningDate || effectiveToday || '2026-01-01',
+    calculationDate: effectiveToday || '2026-10-28',
+    basicSalary: structure.basicSalary,
+    houseRentAllowance: structure.houseRentAllowance,
+    medicalAllowance: structure.medicalAllowance,
+    transportAllowance: structure.transportAllowance,
+    foodAllowance: structure.foodAllowance,
     attendanceBonus,
-    // Annual leave defaults
-    totalDaysWorkedInPeriod: 288,
+    // Annual leave defaults strictly derived from actual joining date + attendance
+    totalDaysWorkedInPeriod: derivedDaysWorked,
     manualLeaveEarned: 0,
-    leaveUsedDays: 4,
-    leaveWageBasisMode: 'statutory_sec119', // 'statutory_sec119' | 'gross_30' | 'basic_30'
+    leaveUsedDays: recordedEarnedLeaveUsed,
+    leaveWageBasisMode: 'gross_30', // Unified daily rate = Gross ÷ 30 across Home, Salary, Payslip & Calculators
     // Maternity defaults
-    expectedDeliveryDate: todayISO || '2026-10-28',
-    livingChildrenCount: 1,
+    expectedDeliveryDate: effectiveToday || '2026-10-28',
+    livingChildrenCount: 0,
     priorThreeMonthsTotalWages: 0,
     priorThreeMonthsDaysWorked: 78,
     noticeGivenToEmployer: true,
@@ -783,8 +831,8 @@ export function buildWorkerPrefillInputs(
     // Retrenchment / Termination / Resignation defaults
     noticeProvidedByEmployer: false,
     noticeDaysServedOrGiven: 0,
-    terminationCategory: 'employer_section_26_permanent', // 'employer_section_26_permanent' | 'employer_section_26_temporary' | 'misconduct_dismissal_sec_23' | 'discharge_incapacity_sec_22'
-    unusedAnnualLeaveDays: 10,
+    terminationCategory: 'employer_section_26_permanent',
+    unusedAnnualLeaveDays: derivedUnusedLeave,
     unpaidSalaryDays: 0,
     unpaidOvertimeHours: 0,
     otherLawfulDuesBDT: 0,
@@ -793,18 +841,23 @@ export function buildWorkerPrefillInputs(
     deathDuringEmployment: true,
     deathByWorkplaceAccident: false,
     nomineeRelation: 'স্বামী/স্ত্রী বা বৈধ নমিনি',
+    // Increment calculator defaults
+    incrementMode: 'percent', // 'percent' | 'amount'
+    incrementPercent: 5,
+    incrementAmountBDT: 0,
+    incrementEffectiveDate: effectiveToday || '2026-11-01',
     // Additional calculators defaults
-    overtimeHours: 45,
+    overtimeHours: 0,
     overtimeMinutes: 0,
     specialNightAllowancePerDay: 100,
-    specialNightDays: 10,
-    absentDays: 2,
-    holidayWorkDays: 2,
+    specialNightDays: 0,
+    absentDays: 0,
+    holidayWorkDays: 0,
     compensatoryLeaveGiven: false,
     festivalBonusPct: 100,
-    layoffDaysTotal: 30,
+    layoffDaysTotal: 0,
     medicalIncapacityCertified: true,
-    separationModeForFinalSettlement: 'resignation', // 'resignation' | 'retrenchment' | 'termination_sec26' | 'discharge_sec22'
+    separationModeForFinalSettlement: 'resignation',
   };
 }
 
@@ -2608,6 +2661,121 @@ export function executeGarmentBenefitCalculation(
           effectiveFrom: ruleVersion.effectiveFrom,
           assumptionsBn: ['ধারা ২৭ অনুযায়ী স্থায়ী শ্রমিকের জন্য ৬০ দিনের নোটিশ শর্ত বিবেচনা করা হয়েছে।'],
           limitationsBn: ['নোটিশ প্রদান না করলে মালিকপক্ষ নোটিশ মেয়াদের মূল বেতন কর্তন করার আইনগত অধিকার রাখেন।'],
+          explanationBn: catalogMeta.helpTextBn,
+        },
+      };
+    }
+
+    // =========================================================================
+    // INCREMENT CALCULATOR (ইনক্রিমেন্ট হিসাব)
+    // =========================================================================
+    case 'increment_calc': {
+      const mode = String(rawInputs.incrementMode || 'percent') === 'amount' ? 'amount' : 'percent';
+      const incrementPct = Math.max(0, Number(rawInputs.incrementPercent) || 0);
+      const incrementAmt = Math.max(0, Number(rawInputs.incrementAmountBDT) || 0);
+      const effectiveDate = String(rawInputs.incrementEffectiveDate || calculationDate).trim();
+
+      const oldBasic = Math.round(wages.basicSalary);
+      const oldMedical = Math.round(medicalAllowance || 750);
+      const oldTransport = Math.round(transportAllowance || 450);
+      const oldFood = Math.round(foodAllowance || 1250);
+      const fixedAllowances = oldMedical + oldTransport + oldFood;
+
+      let newBasic = oldBasic;
+      let newHouseRent = Math.round(houseRentAllowance);
+      const newMedical = oldMedical;
+      const newTransport = oldTransport;
+      let newFood = oldFood;
+      let newGross = Math.round(wages.grossSalary);
+
+      if (mode === 'amount' && incrementAmt > 0) {
+        newGross = Math.round(wages.grossSalary + incrementAmt);
+        if (newGross > fixedAllowances) {
+          newBasic = Math.round((newGross - fixedAllowances) / 1.5);
+          newHouseRent = Math.round(newBasic * 0.5);
+          const diff = newGross - (newBasic + newHouseRent + newMedical + newTransport + newFood);
+          if (Math.abs(diff) <= 2) {
+            newFood = Math.max(0, newFood + diff);
+          } else {
+            newGross = newBasic + newHouseRent + newMedical + newTransport + newFood;
+          }
+        }
+      } else {
+        newBasic = Math.round(oldBasic * (1 + incrementPct / 100));
+        newHouseRent = Math.round(newBasic * 0.5);
+        newGross = newBasic + newHouseRent + newMedical + newTransport + newFood;
+      }
+
+      const monthlyRaise = roundCurrency(Math.max(0, newGross - wages.grossSalary));
+      const yearlyRaise = roundCurrency(monthlyRaise * 12);
+      const oldOtRate = roundCurrency((oldBasic / p.overtimeStandardDivisor) * p.overtimeStandardMultiplier);
+      const newOtRate = roundCurrency((newBasic / p.overtimeStandardDivisor) * p.overtimeStandardMultiplier);
+      const newDailyRate = roundCurrency(newGross / 30);
+
+      return {
+        calculatorId,
+        calculatorTitleBn: catalogMeta.titleBn,
+        calculatorTitleEn: catalogMeta.titleEn,
+        calculationDate: effectiveDate,
+        workerName,
+        factoryName,
+        department,
+        designation,
+        isComplete: true,
+        isEligible: monthlyRaise > 0,
+        eligibilityStatusBn:
+          monthlyRaise > 0
+            ? `কার্যকর তারিখ: ${effectiveDate}`
+            : 'ইনক্রিমেন্টের শতাংশ (%) বা টাকার পরিমাণ দিন',
+        eligibilityExplanationBn:
+          'বার্ষিক ইনক্রিমেন্ট মূল বেতনের উপর হিসাব হয়',
+        wageBasisLabelBn: 'নতুন মোট বেতন (দৈনিক হার = মোট বেতন ÷ ৩০)',
+        wageBasisAmountBDT: newGross,
+        dailyRateUsedBDT: newDailyRate,
+        totalEstimatedPayableBDT: newGross,
+        breakdownItems: [
+          {
+            labelBn: 'মূল বেতন (আগে → পরে)',
+            labelEn: 'Basic Salary (Before → After)',
+            formulaBn: `৳ ${toBengaliDigits(oldBasic)} → ৳ ${toBengaliDigits(newBasic)}`,
+            amountBDT: newBasic,
+          },
+          {
+            labelBn: 'বাড়ি ভাড়া (৫০%)',
+            labelEn: 'House Rent (50%)',
+            formulaBn: `৳ ${toBengaliDigits(Math.round(houseRentAllowance))} → ৳ ${toBengaliDigits(newHouseRent)}`,
+            amountBDT: newHouseRent,
+          },
+          {
+            labelBn: 'চিকিৎসা, যাতায়াত ও খাদ্য ভাতা',
+            labelEn: 'Medical, Transport & Food',
+            formulaBn: `৳ ${toBengaliDigits(newMedical)} + ৳ ${toBengaliDigits(newTransport)} + ৳ ${toBengaliDigits(newFood)}`,
+            amountBDT: roundCurrency(newMedical + newTransport + newFood),
+          },
+          {
+            labelBn: 'মাসিক বৃদ্ধি',
+            labelEn: 'Monthly Increase',
+            formulaBn: `ওটি রেট: ৳ ${toBengaliDigits(oldOtRate.toFixed(2))} → ৳ ${toBengaliDigits(newOtRate.toFixed(2))}/ঘণ্টা`,
+            amountBDT: monthlyRaise,
+          },
+        ],
+        summaryHighlights: [
+          { labelBn: 'নতুন মোট বেতন', valueBn: `৳ ${toBengaliDigits(newGross)}` },
+          { labelBn: 'মাসিক বৃদ্ধি', valueBn: `+৳ ${toBengaliDigits(monthlyRaise)}` },
+          { labelBn: 'বার্ষিক বৃদ্ধি', valueBn: `+৳ ${toBengaliDigits(yearlyRaise)}` },
+          { labelBn: 'নতুন ওটি রেট', valueBn: `৳ ${toBengaliDigits(newOtRate.toFixed(2))}` },
+        ],
+        legalInfo: {
+          sectionBn: catalogMeta.legalSectionBn,
+          ruleVersionId: ruleVersion.versionId,
+          effectiveFrom: ruleVersion.effectiveFrom,
+          assumptionsBn: [
+            'বার্ষিক ইনক্রিমেন্ট মূল বেতনের উপর হিসাব হয়।',
+            'নতুন ওভারটাইম হার = (নতুন মূল বেতন ÷ ২০৮) × ২।',
+          ],
+          limitationsBn: [
+            'কারখানার গ্রেড ও নীতিমালা অনুযায়ী চূড়ান্ত হার ভিন্ন হতে পারে।',
+          ],
           explanationBn: catalogMeta.helpTextBn,
         },
       };

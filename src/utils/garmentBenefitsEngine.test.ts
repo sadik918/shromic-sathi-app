@@ -217,10 +217,47 @@ describe('Garments Salary, Wage & Employee Benefits Calculation Engine', () => {
     assert.equal(invalid.isComplete, false);
     assert.equal(invalid.incompleteMessageBn, INSUFFICIENT_INFO_MESSAGE_BN);
     assert.ok(EXPORT_DISCLAIMER_BN.includes('আনুমানিক হিসাব'));
-    assert.equal(DEFAULT_CALCULATOR_CATALOG.length, 20);
+    assert.equal(DEFAULT_CALCULATOR_CATALOG.length, 21);
     assert.ok(DEFAULT_LEGAL_RULE_VERSIONS.length >= 2);
 
     const prefill = buildWorkerPrefillInputs({ fullName: 'রহিমা আক্তার', basicSalary: 6700 }, '2026-10-28');
     assert.equal(prefill.workerName, 'রহিমা আক্তার');
+  });
+
+  it('Increment Calculator computes 5% annual basic increment and new gross salary', () => {
+    const res = executeGarmentBenefitCalculation('increment_calc', {
+      basicSalary: 6700,
+      houseRentAllowance: 3350,
+      medicalAllowance: 750,
+      transportAllowance: 450,
+      foodAllowance: 1250,
+      incrementPercent: 5,
+      incrementFixedBDT: 0,
+    });
+    assert.equal(res.isComplete, true);
+    assert.equal(res.isEligible, true);
+    // 5% of 6700 = 335 basic raise + 167.5 house rent raise = 502.5 total monthly gross raise
+    assert.ok(res.totalEstimatedPayableBDT >= 335);
+  });
+
+  it('New joiner joining today with 0 attendance prefills 0 working days for annual leave', () => {
+    const prefill = buildWorkerPrefillInputs(
+      {
+        fullName: 'নতুন শ্রমিক',
+        grossSalary: 12000,
+        basicSalary: 6366,
+        houseRentAllowance: 0,
+        medicalAllowance: 750,
+        transportAllowance: 450,
+        foodAllowance: 1250,
+        joiningDate: '2026-11-20',
+      },
+      '2026-11-20',
+      []
+    );
+    assert.equal(prefill.totalDaysWorkedInPeriod, 0);
+    assert.equal(prefill.houseRentAllowance, 3184);
+    const leaveRes = executeGarmentBenefitCalculation('annual_leave', prefill);
+    assert.equal(leaveRes.totalEstimatedPayableBDT, 0);
   });
 });

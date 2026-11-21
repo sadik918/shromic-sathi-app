@@ -22,12 +22,12 @@
     font-kerning: normal;
     height: auto;
     min-height: 100%;
-    overflow-x: hidden;
     overflow-x: clip;
-    overflow-y: visible;
+    overflow-y: auto;
     scroll-behavior: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: auto;
+    touch-action: pan-x pan-y;
   }
 
   body {
@@ -41,32 +41,16 @@
     -webkit-tap-highlight-color: transparent;
     height: auto;
     min-height: 100%;
-    overflow: visible;
-    touch-action: auto;
+    overflow-x: clip;
+    overflow-y: visible;
+    touch-action: pan-x pan-y;
     -webkit-overflow-scrolling: touch;
   }
 
   #root {
     min-height: 100%;
-    overflow: visible;
-  }
-
-  /* Hide visual scrollbars cleanly across all browsers & WebViews while keeping native wheel and touch scrolling 100% active */
-  html,
-  body,
-  *,
-  *::before,
-  *::after {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  html::-webkit-scrollbar,
-  body::-webkit-scrollbar,
-  *::-webkit-scrollbar {
-    display: none;
-    width: 0;
-    height: 0;
+    overflow-x: clip;
+    overflow-y: visible;
   }
 
   /* Ensure smooth hardware momentum scrolling on internal scroll containers (modals, horizontal tabs, desktop admin pane) */
@@ -122,6 +106,29 @@
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
+}
+
+/* Unlayered global scrollbar suppression so Tailwind v4 cascade never shows scrollbars on desktop, mobile, or WebView while preserving native touch & wheel scrolling */
+:root,
+html,
+body,
+*,
+*::before,
+*::after,
+.no-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+:root::-webkit-scrollbar,
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+*::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
 }
 
 @media print {

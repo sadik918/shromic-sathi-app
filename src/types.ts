@@ -170,6 +170,76 @@ export interface AttendanceRecord {
   updatedAt?: unknown;
 }
 
+export type LeaveApplicationType = 'casual' | 'sick' | 'festival' | 'earned' | 'maternity';
+export type LeaveApplicationStatus =
+  | 'planned'
+  | 'taken'
+  | 'pending'
+  | 'approved'
+  | 'rejected';
+
+export interface LeaveApplication {
+  id: string;
+  userId: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  totalDays: number;
+  leaveType: LeaveApplicationType;
+  reason: string;
+  status: LeaveApplicationStatus;
+  createdAt: string; // ISO string
+  updatedAt?: string;
+}
+
+export interface PayslipParsedFields {
+  grossSalary: number | null;
+  basicSalary: number | null;
+  houseRentAllowance: number | null;
+  medicalAllowance: number | null;
+  transportAllowance: number | null;
+  foodAllowance: number | null;
+  presentDays: number | null;
+  absentDays: number | null;
+  otHours: number | null;
+  otAmount: number | null;
+  attendanceBonus: number | null;
+  otherAllowances: number | null;
+  advanceDeduction: number | null;
+  absentDeduction: number | null;
+  otherDeductions: number | null;
+  netPayable: number | null;
+}
+
+export interface PayslipCheckRecord {
+  id: string;
+  userId: string;
+  month: string; // YYYY-MM
+  checkedAtISO: string;
+  parsed: PayslipParsedFields;
+  appNetPayable: number;
+  payslipNetPayable: number;
+  netDifference: number; // payslip - app (negative means payslip paid less)
+  savedToVaultDocId?: string;
+  notes?: string;
+}
+
+export interface AnonymousGradeAreaBenchmark {
+  bucketKey: string;
+  salaryGrade: string;
+  area: string;
+  sampleCount: number;
+  medianGrossSalary: number;
+  medianMonthlyOtHours: number;
+  medianAttendanceBonus: number;
+  updatedAtISO?: string;
+}
+
+export interface PasswordResetResult {
+  status: 'email_sent' | 'needs_support_recovery';
+  messageBn: string;
+  messageEn: string;
+}
+
 export type ExpenseCategory =
   | 'food'
   | 'rent'
@@ -203,6 +273,7 @@ export interface SavingsGoal {
   monthlyBudget: number;
   deadline: string;
   notes: string;
+  countMonthlySurplus?: boolean;
   storageLocation?: string;
   commissionType?: SavingsCommissionType;
   commissionAmount?: number;
@@ -457,6 +528,7 @@ export type MoreSubView =
   | 'documents'
   | 'reports'
   | 'reminders'
+  | 'announcements'
   | 'support'
   | 'alarm'
   | 'calculator'

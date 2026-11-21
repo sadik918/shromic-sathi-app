@@ -17,6 +17,7 @@ import {
   computeDailyEarnedSalary,
   computeWorkplaceTenureAnalytics,
   formatNumber,
+  getSalaryStructure,
   getLoanDirection,
   getLoanOriginalAmount,
   getLoanPersonName,
@@ -125,16 +126,22 @@ function computeMonthSnapshot(params: {
   const otSum = summarizeOvertimeRecords(overtime, month);
   const savedSal = salaryRecords.find((s) => s.month === month);
 
-  const basic = savedSal ? savedSal.basicSalary : profile.basicSalary || 0;
-  const houseRent = savedSal ? savedSal.houseRentAllowance : profile.houseRentAllowance || 0;
-  const medical = savedSal ? savedSal.medicalAllowance : profile.medicalAllowance || 0;
-  const transport = savedSal ? savedSal.transportAllowance : profile.transportAllowance || 0;
-  const food = savedSal ? savedSal.foodAllowance : profile.foodAllowance || 0;
-  const attBonusAmount = savedSal ? savedSal.attendanceBonus : profile.attendanceBonus || 0;
+  const salaryStruct = getSalaryStructure(profile, savedSal);
+  const basic = salaryStruct.basicSalary;
+  const houseRent = salaryStruct.houseRentAllowance;
+  const medical = salaryStruct.medicalAllowance;
+  const transport = salaryStruct.transportAllowance;
+  const food = salaryStruct.foodAllowance;
+  const attBonusAmount =
+    profile.hasAttendanceBonus === false
+      ? 0
+      : savedSal
+      ? savedSal.attendanceBonus
+      : profile.attendanceBonusAmount ?? profile.attendanceBonus ?? 0;
   const festivalBonus = savedSal ? savedSal.festivalBonus || 0 : 0;
   const otherAllowances = savedSal ? savedSal.otherAllowances || 0 : 0;
 
-  const computed = calculateSalaryTotals({
+  calculateSalaryTotals({
     basicSalary: basic,
     houseRentAllowance: houseRent,
     medicalAllowance: medical,
@@ -155,11 +162,7 @@ function computeMonthSnapshot(params: {
     profile,
   });
 
-  const monthlyWageBase =
-    (profile.grossSalary > 0 ? profile.grossSalary : 0) ||
-    computed.baseGross ||
-    profile.basicSalary ||
-    12500;
+  const monthlyWageBase = salaryStruct.grossSalary;
 
   const earnedBreakdown = computeDailyEarnedSalary({
     monthlyWage: monthlyWageBase,
@@ -706,18 +709,21 @@ export function buildFactoryComparisonAnalytics(params: {
     currentWp?.factoryName || profile.factoryName || 'বর্তমান কারখানা';
   const previousFactoryName = latestPast
     ? latestPast.factoryName
-    : 'ন্যূনতম মজুরি মানদণ্ড';
+    : 'সরকারি ন্যূনতম বেতনের সাথে তুলনা';
 
-  const currGross =
-    profile.grossSalary || currentWp?.grossSalary || 12500;
-  const currBasic =
-    profile.basicSalary || currentWp?.basicSalary || Math.round(currGross * 0.536);
+  const canonicalSalary = getSalaryStructure({
+    ...profile,
+    grossSalary: profile.grossSalary || currentWp?.grossSalary || 12500,
+    basicSalary: profile.basicSalary || currentWp?.basicSalary || 0,
+  });
+  const currGross = canonicalSalary.grossSalary;
+  const currBasic = canonicalSalary.basicSalary;
 
   const currentTenure = computeWorkplaceTenureAnalytics({
     workplace: {
       ...(currentWp || {}),
       isCurrent: true,
-      joiningDate: profile.joiningDate || currentWp?.joiningDate || '2025-01-01',
+      joiningDate: profile.joiningDate || currentWp?.joiningDate || todayISO,
       grossSalary: currGross,
       basicSalary: currBasic,
     },
@@ -762,7 +768,7 @@ export function buildFactoryComparisonAnalytics(params: {
   const attendanceRateCurrentPct =
     currTotalWorkOpp > 0
       ? Math.round((currentTenure.totalPresentDays / currTotalWorkOpp) * 100)
-      : 96;
+      : 0;
 
   const prevTotalWorkOpp = prevTenure
     ? prevTenure.totalPresentDays + prevTenure.totalAbsentDays
@@ -770,44 +776,49 @@ export function buildFactoryComparisonAnalytics(params: {
   const attendanceRatePreviousPct = prevTenure
     ? prevTotalWorkOpp > 0
       ? Math.round((prevTenure.totalPresentDays / prevTotalWorkOpp) * 100)
-      : 94
-    : 95;
+      : 0
+    : 0;
 
   const grossDeltaAmount = Math.round(currGross - prevGross);
   const grossGrowthPct =
     prevGross > 0 ? Math.round(((currGross - prevGross) / prevGross) * 100) : 0;
 
-  const otherFixed =
-    (profile.medicalAllowance || 0) +
-    (profile.transportAllowance || 0) +
-    (profile.foodAllowance || 0);
+  const otherFixed = roundCurrency(
+    canonicalSalary.medicalAllowance +
+      canonicalSalary.transportAllowance +
+      canonicalSalary.foodAllowance
+  );
+  const effectiveAttBonus =
+    profile.hasAttendanceBonus === false
+      ? 0
+      : Number(profile.attendanceBonusAmount ?? profile.attendanceBonus) || 0;
   const salaryCompositionSlices = attachPercents([
     {
       key: 'basic',
       nameBn: 'মূল বেতন',
       nameEn: 'Basic Salary',
-      value: currBasic,
+      value: canonicalSalary.basicSalary,
       color: '#059669',
     },
     {
       key: 'house_rent',
       nameBn: 'বাড়ি ভাড়া',
       nameEn: 'House Rent',
-      value: profile.houseRentAllowance || Math.round(currBasic * 0.5),
+      value: canonicalSalary.houseRentAllowance,
       color: '#0D9488',
     },
     {
       key: 'allowances',
       nameBn: 'ভাতা (চিকিৎসা/যাতায়াত/খাদ্য)',
       nameEn: 'Allowances',
-      value: otherFixed || Math.max(0, currGross - currBasic - Math.round(currBasic * 0.5)),
+      value: otherFixed,
       color: '#2563EB',
     },
     {
       key: 'att_bonus',
       nameBn: 'হাজিরা বোনাস',
       nameEn: 'Attendance Bonus',
-      value: profile.attendanceBonus || 0,
+      value: effectiveAttBonus,
       color: '#D97706',
     },
   ]);

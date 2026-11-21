@@ -25,6 +25,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import type {
+  AnonymousGradeAreaBenchmark,
   AttendanceRecord,
   ExpenseRecord,
   GarmentWorkplace,
@@ -38,7 +39,8 @@ import type {
   SavingsGoal,
   WorkerProfile,
 } from '../types';
-import { formatBDT, formatNumber, toBengaliDigits } from '../utils/calculations';
+import { formatBDT, formatNumber, getSalaryStructure, toBengaliDigits } from '../utils/calculations';
+import { buildAnonymousComparisonData } from '../utils/featureHelpers';
 import { formatMonthLabel } from '../utils/i18n';
 import {
   buildExpenseRentTrend,
@@ -76,6 +78,7 @@ interface HomeAnalyticsSectionProps {
   savings: SavingsGoal[];
   loans: PersonalLoan[];
   workplaces?: GarmentWorkplace[];
+  anonymousBenchmark?: AnonymousGradeAreaBenchmark | null;
   todayISO?: string;
   isReadOnlyDemo?: boolean;
   onSeedSampleData?: () => void;
@@ -223,7 +226,7 @@ function isDefaultZoneOrder(layout: HomeChartLayoutItem[]): boolean {
   return layout.every((item, index) => item.id === DEFAULT_HOME_CHART_LAYOUT[index].id);
 }
 
-export const HomeAnalyticsSection: React.FC<HomeAnalyticsSectionProps> = ({
+const HomeAnalyticsSectionImpl: React.FC<HomeAnalyticsSectionProps> = ({
   zone = 'salary_overview',
   selectedMonth,
   lang,
@@ -236,6 +239,7 @@ export const HomeAnalyticsSection: React.FC<HomeAnalyticsSectionProps> = ({
   savings,
   loans,
   workplaces = [],
+  anonymousBenchmark = null,
   todayISO,
   isReadOnlyDemo = false,
   onSeedSampleData,
@@ -376,6 +380,18 @@ export const HomeAnalyticsSection: React.FC<HomeAnalyticsSectionProps> = ({
       attendance,
       effectiveTodayISO,
     ]
+  );
+
+  const anonymousComparison = useMemo(
+    () =>
+      buildAnonymousComparisonData({
+        benchmark: anonymousBenchmark,
+        userGross: getSalaryStructure(profile).grossSalary,
+        userMonthlyOtHours: analytics.kpis.otHours,
+        userAttendanceBonus:
+          profile.hasAttendanceBonus !== false ? Number(profile.attendanceBonus) || 0 : 0,
+      }),
+    [anonymousBenchmark, profile, analytics.kpis.otHours]
   );
 
   const { kpis, monthlyTrend } = analytics;
@@ -695,6 +711,7 @@ export const HomeAnalyticsSection: React.FC<HomeAnalyticsSectionProps> = ({
         <FactoryComparisonChartsCard
           lang={lang}
           analytics={factoryAnalytics}
+          anonymousComparison={anonymousComparison}
           dataTestId="home-factory-comparison-charts-card"
         />
       </div>
@@ -992,3 +1009,5 @@ export const HomeAnalyticsSection: React.FC<HomeAnalyticsSectionProps> = ({
     </section>
   );
 };
+
+export const HomeAnalyticsSection = React.memo(HomeAnalyticsSectionImpl);

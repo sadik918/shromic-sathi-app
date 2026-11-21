@@ -17,17 +17,27 @@ export function useOnlineStatus(pendingWritesCount = 0): {
         setIsOnline(navigator.onLine);
       }
     };
+    const handleVisibility = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        syncFromNavigator();
+      }
+    };
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
+    syncFromNavigator();
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     window.addEventListener('focus', syncFromNavigator);
+    window.addEventListener('pageshow', syncFromNavigator);
+    document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('focus', syncFromNavigator);
+      window.removeEventListener('pageshow', syncFromNavigator);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 

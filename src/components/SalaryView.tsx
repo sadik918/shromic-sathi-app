@@ -5,15 +5,19 @@ import {
   Calendar,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Download,
   Edit2,
   Eye,
+  FileSearch,
   FileText,
   Lock,
   Plus,
   Printer,
   RefreshCw,
+  Share2,
   Sparkles,
   Trash2,
   TrendingUp,
@@ -40,17 +44,27 @@ import {
   formatNumber,
   getPreviousMonth,
   getRecentMonthsList,
+  getSalaryStructure,
   isFutureMonth,
   isOtherIncomePayment,
   roundCurrency,
   summarizeAttendanceForMonth,
   summarizeMonthlyPayments,
   summarizeOvertimeRecords,
+  validateNotBeforeJoiningDate,
 } from '../utils/calculations';
 import { formatDateReadable, formatDateSlashDMY, formatMonthLabel, T } from '../utils/i18n';
 import { DateInputDMY } from './DateInputDMY';
 import { SalaryMixPieChartCard } from './AnalyticsChartCards';
 import { buildHomeOverviewAnalytics } from '../utils/homeAnalytics';
+import { printElementSafely } from '../utils/printHelper';
+import { PayslipCheckModal } from './PayslipCheckModal';
+import { FamilyShareModal } from './FamilyShareModal';
+import {
+  buildSalaryHistoryShareText,
+  buildYearlySalaryReceivedHistory,
+  formatShortDelayText,
+} from '../utils/featureHelpers';
 
 const PAYMENT_METHODS: Array<{ id: PaymentMethod; labelBn: string; labelEn: string }> = [
   { id: 'bkash', labelBn: 'বিকাশ (bKash)', labelEn: 'bKash' },
@@ -63,6 +77,7 @@ const PAYMENT_METHODS: Array<{ id: PaymentMethod; labelBn: string; labelEn: stri
 export const SalaryView: React.FC = () => {
   const {
     profile,
+    todayISO,
     selectedMonth,
     setSelectedMonth,
     currentMonthISO,
@@ -71,6 +86,10 @@ export const SalaryView: React.FC = () => {
     overtime,
     salaryRecords,
     payments,
+    expenses,
+    savings,
+    payslipChecks,
+    deletePayslipCheck,
     saveSalaryRecord,
     savePayment,
     deletePayment,
@@ -104,24 +123,17 @@ export const SalaryView: React.FC = () => {
     .filter((p) => p.month === selectedMonth && !isOtherIncomePayment(p))
     .sort((a, b) => b.paymentDate.localeCompare(a.paymentDate));
 
-  // Salary Breakdown state (automatically populated from saved record or user's onboarding/profile)
-  const [basicSalary, setBasicSalary] = useState(
-    existingSalaryRec?.basicSalary || profile.basicSalary
-  );
-  const [houseRentAllowance, setHouseRentAllowance] = useState(
-    existingSalaryRec?.houseRentAllowance ?? profile.houseRentAllowance ?? 0
-  );
-  const [medicalAllowance, setMedicalAllowance] = useState(
-    existingSalaryRec?.medicalAllowance || profile.medicalAllowance
-  );
-  const [transportAllowance, setTransportAllowance] = useState(
-    existingSalaryRec?.transportAllowance || profile.transportAllowance
-  );
-  const [foodAllowance, setFoodAllowance] = useState(
-    existingSalaryRec?.foodAllowance || profile.foodAllowance
-  );
+  const canonicalInit = getSalaryStructure(profile, existingSalaryRec);
+
+  // Salary Breakdown state (automatically populated from canonical salary structure so Gross = sum of components)
+  const [basicSalary, setBasicSalary] = useState(canonicalInit.basicSalary);
+  const [houseRentAllowance, setHouseRentAllowance] = useState(canonicalInit.houseRentAllowance);
+  const [medicalAllowance, setMedicalAllowance] = useState(canonicalInit.medicalAllowance);
+  const [transportAllowance, setTransportAllowance] = useState(canonicalInit.transportAllowance);
+  const [foodAllowance, setFoodAllowance] = useState(canonicalInit.foodAllowance);
   const [attendanceBonus, setAttendanceBonus] = useState(
-    existingSalaryRec?.attendanceBonus ?? profile.attendanceBonus
+    existingSalaryRec?.attendanceBonus ??
+      (profile.hasAttendanceBonus !== false ? profile.attendanceBonus : 0)
   );
   const [overtimeHours, setOvertimeHours] = useState(
     otSummary.monthlyHours > 0
@@ -152,6 +164,54 @@ export const SalaryView: React.FC = () => {
   const [showDeductionsSection, setShowDeductionsSection] = useState(true);
   const [isEditingSalaryStatement, setIsEditingSalaryStatement] = useState(false);
   const [showPayslipReportModal, setShowPayslipReportModal] = useState(false);
+  const [showPayslipCheckModal, setShowPayslipCheckModal] = useState(false);
+  const [showFamilyShareModal, setShowFamilyShareModal] = useState(false);
+  const [confirmDeletePaymentId, setConfirmDeletePaymentId] = useState<string | null>(null);
+  const [historyYear, setHistoryYear] = useState<number>(
+    () => Number(selectedMonth.slice(0, 4)) || Number(currentMonthISO.slice(0, 4)) || 2026
+  );
+  const [sharedHistoryToast, setSharedHistoryToast] = useState(false);
+
+  useEffect(() => {
+    const y = Number(selectedMonth.slice(0, 4));
+    if (Number.isFinite(y) && y > 2000) setHistoryYear(y);
+  }, [selectedMonth]);
+
+  const yearlyPaymentHistory = useMemo(
+    () =>
+      buildYearlySalaryReceivedHistory({
+        year: historyYear,
+        profile,
+        payments,
+        salaryRecords,
+        currentMonthISO,
+      }),
+    [historyYear, profile, payments, salaryRecords, currentMonthISO]
+  );
+
+  const handleShareYearlySalaryHistory = async () => {
+    const text = buildSalaryHistoryShareText(yearlyPaymentHistory, lang);
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: lang === 'bn' ? 'বেতন পাওয়ার ইতিহাস' : 'Salary Payment History',
+          text,
+        });
+        return;
+      }
+      await navigator.clipboard.writeText(text);
+      setSharedHistoryToast(true);
+      setTimeout(() => setSharedHistoryToast(false), 2500);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(text);
+        setSharedHistoryToast(true);
+        setTimeout(() => setSharedHistoryToast(false), 2500);
+      } catch {
+        // ignore clipboard denial
+      }
+    }
+  };
 
   // Past Month Salary Record Entry Modal State & Handlers
   const [showPastMonthModal, setShowPastMonthModal] = useState(false);
@@ -182,9 +242,12 @@ export const SalaryView: React.FC = () => {
   );
   const [historyPeriodCount, setHistoryPeriodCount] = useState<3 | 6 | 12 | 'all'>(6);
 
+  const [isPrintingPayslip, setIsPrintingPayslip] = useState(false);
   // Actual Payment Form state
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
-  const [paymentDate, setPaymentDate] = useState(`${selectedMonth}-10`);
+  const [paymentDate, setPaymentDate] = useState(
+    todayISO.startsWith(selectedMonth) ? todayISO : `${selectedMonth}-01`
+  );
   const [amountReceived, setAmountReceived] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bkash');
   const [referenceNote, setReferenceNote] = useState('');
@@ -361,12 +424,13 @@ export const SalaryView: React.FC = () => {
       setAdjustments(rec.adjustments);
       setNotes(rec.notes);
     } else {
-      setBasicSalary(profile.basicSalary);
-      setHouseRentAllowance(profile.houseRentAllowance ?? 0);
-      setMedicalAllowance(profile.medicalAllowance);
-      setTransportAllowance(profile.transportAllowance);
-      setFoodAllowance(profile.foodAllowance);
-      setAttendanceBonus(profile.attendanceBonus);
+      const canonical = getSalaryStructure(profile);
+      setBasicSalary(canonical.basicSalary);
+      setHouseRentAllowance(canonical.houseRentAllowance);
+      setMedicalAllowance(canonical.medicalAllowance);
+      setTransportAllowance(canonical.transportAllowance);
+      setFoodAllowance(canonical.foodAllowance);
+      setAttendanceBonus(profile.hasAttendanceBonus !== false ? profile.attendanceBonus : 0);
       setOvertimeHours(otSummary.monthlyHours);
       setOvertimeEarnings(otSummary.monthlyEarnings);
       setFestivalBonus(0);
@@ -377,7 +441,8 @@ export const SalaryView: React.FC = () => {
       setAdjustments(0);
       setNotes('');
     }
-  }, [selectedMonth, salaryRecords, profile, otSummary.monthlyHours, otSummary.monthlyEarnings]);
+    setPaymentDate(todayISO.startsWith(selectedMonth) ? todayISO : `${selectedMonth}-01`);
+  }, [selectedMonth, todayISO, salaryRecords, profile, otSummary.monthlyHours, otSummary.monthlyEarnings]);
 
   const totals = calculateSalaryTotals({
     basicSalary,
@@ -504,6 +569,11 @@ export const SalaryView: React.FC = () => {
       );
       return;
     }
+    const joiningCheck = validateNotBeforeJoiningDate(paymentDate, profile.joiningDate, lang);
+    if (!joiningCheck.valid) {
+      setStatusMessage(joiningCheck.error || '');
+      return;
+    }
     const isPartial = amountReceived < effectiveNetPayable;
     const finalNote = shortfallReason.trim()
       ? `[কর্তন/কম: ${shortfallReason.trim()}] ${referenceNote.trim()}`.trim()
@@ -555,7 +625,7 @@ export const SalaryView: React.FC = () => {
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white p-0.5 border border-emerald-100 dark:border-slate-700 shadow-2xs flex items-center justify-center shrink-0">
               <img
-                src="/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png"
+                src="/logo-128.png"
                 alt="শ্রমিক সাথী লোগো"
                 data-testid="salary-brand-logo"
                 width={40}
@@ -573,24 +643,38 @@ export const SalaryView: React.FC = () => {
                     : `Salary & Payslip — ${formatMonthLabel(selectedMonth, 'en')}`}
                 </span>
               </h1>
-              <p className="text-[11px] text-slate-500 truncate">
-                {lang === 'bn'
-                  ? 'চলতি ও পূর্বের যেকোনো মাসের বেতন বিবরণী ও হিসাব'
-                  : 'Monthly salary records & performance'}
-              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto no-print">
+          <div className="flex flex-wrap items-center gap-2 shrink-0 self-end sm:self-auto no-print">
+            <button
+              type="button"
+              data-testid="open-payslip-check-btn"
+              onClick={() => setShowPayslipCheckModal(true)}
+              className="min-h-[36px] sm:min-h-[40px] px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+            >
+              <FileSearch className="w-3.5 h-3.5 shrink-0" />
+              <span>{lang === 'bn' ? 'পে-স্লিপ যাচাই' : 'Verify Payslip'}</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="salary-family-share-btn"
+              onClick={() => setShowFamilyShareModal(true)}
+              className="min-h-[36px] sm:min-h-[40px] px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+            >
+              <Share2 className="w-3.5 h-3.5 shrink-0" />
+              <span>{lang === 'bn' ? 'শেয়ার করুন' : 'Share'}</span>
+            </button>
+
             <button
               type="button"
               data-testid="header-add-past-salary-btn"
               onClick={() => handleOpenPastMonthModal()}
-              className="min-h-[36px] sm:min-h-[40px] px-3 sm:px-3.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs shrink-0"
-              title={lang === 'bn' ? 'জয়েনিং বা পূর্বের মাসের বেতন যোগ করুন' : 'Add past month salary record'}
+              className="min-h-[36px] sm:min-h-[40px] px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
             >
               <Plus className="w-3.5 h-3.5 shrink-0" />
-              <span>{lang === 'bn' ? 'পূর্বের মাসের রেকর্ড' : 'Add Past Month'}</span>
+              <span>{lang === 'bn' ? 'পূর্বের মাস' : 'Past Month'}</span>
             </button>
 
             <button
@@ -699,14 +783,17 @@ export const SalaryView: React.FC = () => {
               {formatBDT(paymentSummary.totalReceived, lang)}
             </p>
             <p className="mt-0.5 text-[11px] text-emerald-800/80 dark:text-emerald-300/80">
-              {paymentSummary.status === 'paid'
+              {paymentSummary.totalReceived > 0 &&
+              (paymentSummary.status === 'paid' ||
+                paymentSummary.outstandingBalance <= 0 ||
+                paidPercent >= 100)
                 ? lang === 'bn'
                   ? 'সম্পূর্ণ বেতন পরিশোধিত'
                   : 'Paid in full'
                 : paymentSummary.status === 'partial'
                 ? lang === 'bn'
-                  ? `${formatNumber(paidPercent, 'bn')}% প্রাপ্ত (আংশিক পরিশোধিত)`
-                  : `${paidPercent}% received (Partial)`
+                  ? `${formatNumber(Math.min(99, paidPercent), 'bn')}% প্রাপ্ত (আংশিক পরিশোধিত)`
+                  : `${Math.min(99, paidPercent)}% received (Partial)`
                 : lang === 'bn'
                 ? 'এখনো পেমেন্ট এন্ট্রি করা হয়নি'
                 : 'No payment recorded yet'}
@@ -978,7 +1065,7 @@ export const SalaryView: React.FC = () => {
                 <span className="font-semibold text-slate-600 dark:text-slate-300">
                   {lang === 'bn' ? '৩. অগ্রিম ও মোট কর্তন:' : '3. Total Deductions:'}{' '}
                   <strong className="text-rose-600 dark:text-rose-400">
-                    -{formatBDT(totals.totalDeductions, lang)}
+                    {formatBDT(totals.totalDeductions, lang)}
                   </strong>
                 </span>
                 {adjustments !== 0 && (
@@ -1756,14 +1843,36 @@ export const SalaryView: React.FC = () => {
                       >
                         <Edit2 className="w-4 h-4" />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => deletePayment(pay.id)}
-                        aria-label={`Delete payment ${pay.id}`}
-                        className="min-h-[36px] min-w-[36px] rounded-xl flex items-center justify-center text-slate-500 hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {confirmDeletePaymentId === pay.id ? (
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void deletePayment(pay.id);
+                              setConfirmDeletePaymentId(null);
+                            }}
+                            className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-bold cursor-pointer"
+                          >
+                            {lang === 'bn' ? 'মুছুন' : 'Delete'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeletePaymentId(null)}
+                            className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-bold cursor-pointer"
+                          >
+                            {lang === 'bn' ? 'না' : 'No'}
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeletePaymentId(pay.id)}
+                          aria-label={`Delete payment ${pay.id}`}
+                          className="min-h-[36px] min-w-[36px] rounded-xl flex items-center justify-center text-slate-500 hover:bg-red-50 hover:text-red-600 cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1772,6 +1881,252 @@ export const SalaryView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Saved Payslip Check History (shown only when saved checks exist) */}
+      {payslipChecks.length > 0 && (
+        <section
+          data-testid="saved-payslip-checks-section"
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3 no-print"
+        >
+          <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+            <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+              <FileSearch className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+              <span>{lang === 'bn' ? 'সংরক্ষিত পে-স্লিপ যাচাই' : 'Saved Payslip Checks'}</span>
+            </h2>
+            <button
+              type="button"
+              onClick={() => setShowPayslipCheckModal(true)}
+              className="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold cursor-pointer"
+            >
+              {lang === 'bn' ? 'নতুন যাচাই' : 'New Check'}
+            </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {payslipChecks.slice(0, 6).map((chk) => {
+              const isMatched = Math.abs(chk.netDifference) <= 5;
+              const isShort = chk.netDifference < -5;
+              return (
+                <div
+                  key={chk.id}
+                  className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                        {formatMonthLabel(chk.month, lang)}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold tabular-nums ${
+                          isMatched
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                            : isShort
+                            ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                            : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                        }`}
+                      >
+                        {isMatched
+                          ? lang === 'bn'
+                            ? 'সঠিক মিলেছে'
+                            : 'Matched'
+                          : isShort
+                          ? lang === 'bn'
+                            ? `${formatBDT(Math.abs(chk.netDifference), 'bn')} কম`
+                            : `-${formatBDT(Math.abs(chk.netDifference), 'en')}`
+                          : lang === 'bn'
+                          ? `+${formatBDT(chk.netDifference, 'bn')} বেশি`
+                          : `+${formatBDT(chk.netDifference, 'en')}`}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-300 tabular-nums">
+                      {lang === 'bn' ? 'পে-স্লিপ:' : 'Slip:'} {formatBDT(chk.payslipNetPayable, lang)} ·{' '}
+                      {lang === 'bn' ? 'অ্যাপ:' : 'App:'} {formatBDT(chk.appNetPayable, lang)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deletePayslipCheck(chk.id)}
+                    aria-label={lang === 'bn' ? 'মুছুন' : 'Delete'}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer shrink-0"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Yearly Salary Received History & On-Time Tracker (Clean, No Subtitles) */}
+      <section
+        data-testid="yearly-salary-received-history"
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 no-print"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
+            {lang === 'bn' ? 'বেতন পাওয়ার ইতিহাস' : 'Salary Payment History'}
+          </h2>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setHistoryYear((y) => y - 1)}
+                aria-label={lang === 'bn' ? 'আগের বছর' : 'Previous year'}
+                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span className="px-2 text-xs font-extrabold text-slate-900 dark:text-white tabular-nums">
+                {formatNumber(historyYear, lang)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setHistoryYear((y) => y + 1)}
+                aria-label={lang === 'bn' ? 'পরের বছর' : 'Next year'}
+                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <button
+              type="button"
+              data-testid="share-salary-history-btn"
+              onClick={() => void handleShareYearlySalaryHistory()}
+              className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>
+                {sharedHistoryToast
+                  ? lang === 'bn'
+                    ? 'কপি হয়েছে'
+                    : 'Copied'
+                  : lang === 'bn'
+                  ? 'সারাংশ শেয়ার করুন'
+                  : 'Share Summary'}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Yearly Summary KPI Strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/60">
+            <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 block">
+              {lang === 'bn' ? 'বছরে মোট প্রাপ্ত' : 'Total Received'}
+            </span>
+            <span className="text-base font-black text-emerald-950 dark:text-white tabular-nums">
+              {formatBDT(yearlyPaymentHistory.totalReceivedYear, lang)}
+            </span>
+          </div>
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80">
+            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
+              {lang === 'bn' ? 'সময়মতো পেয়েছেন' : 'On-Time Months'}
+            </span>
+            <span className="text-base font-black text-emerald-700 dark:text-emerald-400 tabular-nums">
+              {formatNumber(yearlyPaymentHistory.onTimeMonthsCount, lang)}{' '}
+              {lang === 'bn' ? 'মাস' : 'mo'}
+            </span>
+          </div>
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80">
+            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
+              {lang === 'bn' ? 'দেরিতে পেয়েছেন' : 'Late Months'}
+            </span>
+            <span className="text-base font-black text-amber-700 dark:text-amber-400 tabular-nums">
+              {formatNumber(yearlyPaymentHistory.lateMonthsCount, lang)}{' '}
+              {lang === 'bn' ? 'মাস' : 'mo'}
+            </span>
+          </div>
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80">
+            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
+              {lang === 'bn' ? 'গড় দেরি' : 'Avg Delay'}
+            </span>
+            <span className="text-base font-black text-slate-900 dark:text-white tabular-nums">
+              {formatNumber(yearlyPaymentHistory.avgDelayDays, lang, 1)}{' '}
+              {lang === 'bn' ? 'দিন' : 'd'}
+            </span>
+          </div>
+        </div>
+
+        {/* Month-by-Month Payment Rows */}
+        {yearlyPaymentHistory.rows.length === 0 ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400 text-center py-4">
+            {lang === 'bn' ? 'এই বছরের কোনো রেকর্ড নেই।' : 'No records for this year.'}
+          </p>
+        ) : (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {yearlyPaymentHistory.rows.map((row) => (
+              <div
+                key={row.month}
+                className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
+                      {formatMonthLabel(row.month, lang)}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                        row.status === 'on_time'
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                          : row.status === 'late'
+                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                      }`}
+                    >
+                      {formatShortDelayText(row.delayDays, row.status, lang)}
+                    </span>
+                    {row.primaryMethod && (
+                      <span className="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
+                        · {row.primaryMethod}
+                      </span>
+                    )}
+                  </div>
+                  {row.latestPaymentDate && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                      {formatDateReadable(row.latestPaymentDate, lang)}
+                    </p>
+                  )}
+                  <div className="w-full max-w-xs h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${
+                        row.coveragePct >= 100 ? 'bg-emerald-600' : 'bg-amber-500'
+                      }`}
+                      style={{ width: `${row.coveragePct}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                  <div className="text-left sm:text-right">
+                    <span className="text-sm font-black text-slate-900 dark:text-white tabular-nums block">
+                      {formatBDT(row.totalReceived, lang)}
+                    </span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+                      {formatNumber(row.coveragePct, lang)}%
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedMonth(row.month);
+                      if (row.payments[0]) handleEditPayment(row.payments[0]);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                  >
+                    {row.payments.length > 0
+                      ? lang === 'bn'
+                        ? 'এডিট'
+                        : 'Edit'
+                      : lang === 'bn'
+                      ? 'যোগ'
+                      : 'Add'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Section 4: Overall Monthly Salary & Overtime Performance History + Custom Month Comparison & 3/6/7/12-Month Range */}
       {(() => {
@@ -2260,7 +2615,9 @@ export const SalaryView: React.FC = () => {
                 <div className="p-2 rounded-lg bg-white/80 dark:bg-slate-900/70 border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
                   <span className="text-slate-500">{lang === 'bn' ? 'উপস্থিত দিন:' : 'Present:'}</span>
                   <span className="font-bold text-slate-800 dark:text-slate-200 tabular-nums">
-                    {formatNumber(perfA.attendance.presentDays, lang)} / {formatNumber(perfB.attendance.presentDays, lang)} {lang === 'bn' ? 'দিন' : 'd'}
+                    {lang === 'bn'
+                      ? `${formatNumber(perfA.attendance.presentDays, 'bn')} বনাম ${formatNumber(perfB.attendance.presentDays, 'bn')} দিন`
+                      : `${perfA.attendance.presentDays} vs ${perfB.attendance.presentDays} d`}
                   </span>
                 </div>
               </div>
@@ -2433,7 +2790,10 @@ export const SalaryView: React.FC = () => {
                     {formatBDT(periodTotalNetPayable, lang)}
                   </span>
                   <span className="text-[10px] text-slate-500 tabular-nums">
-                    {lang === 'bn' ? 'মাসিক গড়:' : 'Avg/mo:'} {formatBDT(periodAvgNetPayable, lang)}
+                    {lang === 'bn'
+                      ? `${formatNumber(Math.max(1, recordedPerfList.length), 'bn')} মাসের গড়:`
+                      : `${Math.max(1, recordedPerfList.length)}-mo avg:`}{' '}
+                    {formatBDT(periodAvgNetPayable, lang)}
                   </span>
                 </div>
 
@@ -2798,11 +3158,27 @@ export const SalaryView: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => window.print()}
-                  className="px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                  disabled={isPrintingPayslip}
+                  onClick={() =>
+                    printElementSafely({
+                      elementId: 'printable-payslip-report',
+                      title: `${profile.fullName || 'Payslip'} - ${formatMonthLabel(selectedMonth, lang)}`,
+                      onStart: () => setIsPrintingPayslip(true),
+                      onComplete: () => setIsPrintingPayslip(false),
+                    })
+                  }
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>{lang === 'bn' ? 'প্রিন্ট / PDF ডাউনলোড' : 'Print / Save PDF'}</span>
+                  <span>
+                    {isPrintingPayslip
+                      ? lang === 'bn'
+                        ? 'পিডিএফ তৈরি হচ্ছে...'
+                        : 'Preparing PDF...'
+                      : lang === 'bn'
+                      ? 'প্রিন্ট / PDF ডাউনলোড'
+                      : 'Print / Save PDF'}
+                  </span>
                 </button>
 
                 <button
@@ -2859,7 +3235,7 @@ export const SalaryView: React.FC = () => {
                 </div>
                 <div>
                   <span className="text-slate-500 block">{lang === 'bn' ? 'বেতন গ্রেড:' : 'Grade:'}</span>
-                  <strong>{profile.salaryGrade || 'গ্রেড-৪'}</strong>
+                  <strong>{profile.salaryGrade?.trim() || '—'}</strong>
                 </div>
                 <div>
                   <span className="text-slate-500 block">{lang === 'bn' ? 'মোবাইল নম্বর:' : 'Phone:'}</span>
@@ -2989,7 +3365,9 @@ export const SalaryView: React.FC = () => {
                     )}
                     <div className="flex justify-between pt-1.5 border-t border-rose-200 dark:border-rose-800 font-bold text-rose-800 dark:text-rose-300">
                       <span>{lang === 'bn' ? 'মোট কর্তন:' : 'Total Deductions:'}</span>
-                      <strong className="tabular-nums">-{formatBDT(totals.totalDeductions, lang)}</strong>
+                      <strong className="tabular-nums">
+                        {formatBDT(Math.abs(totals.totalDeductions), lang)}
+                      </strong>
                     </div>
                   </div>
                 </div>
@@ -3398,6 +3776,27 @@ export const SalaryView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <PayslipCheckModal
+        isOpen={showPayslipCheckModal}
+        onClose={() => setShowPayslipCheckModal(false)}
+        defaultMonth={selectedMonth}
+      />
+
+      <FamilyShareModal
+        isOpen={showFamilyShareModal}
+        onClose={() => setShowFamilyShareModal(false)}
+        lang={lang}
+        monthISO={selectedMonth}
+        presentDays={monthAttendance.filter((a) => a.status === 'present' || a.status === 'late').length}
+        otHours={overtimeHours || otSummary.monthlyHours}
+        earnedSalary={effectiveNetPayable}
+        receivedSalary={paymentSummary.totalReceived}
+        totalExpenses={expenses
+          .filter((e) => e.month === selectedMonth)
+          .reduce((sum, e) => sum + (Number(e.amount) || 0), 0)}
+        totalSaved={savings.reduce((sum, s) => sum + (Number(s.savedAmount) || 0), 0)}
+      />
     </div>
   );
 };

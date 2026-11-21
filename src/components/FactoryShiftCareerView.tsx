@@ -421,11 +421,11 @@ export const FactoryShiftCareerView: React.FC<FactoryShiftCareerViewProps> = ({
                     ? `যোগদানের তারিখ: ${formatDateReadable(
                         profile.joiningDate || '2023-01-15',
                         'bn'
-                      )} (${formatNumber(currentTenureAnalytics.monthsWorked, 'bn')} মাস কর্মরত)`
+                      )} (${currentTenureAnalytics.formattedTenureBn})`
                     : `Joined: ${formatDateReadable(
                         profile.joiningDate || '2023-01-15',
                         'en'
-                      )} (${currentTenureAnalytics.monthsWorked} months)`}
+                      )} (${currentTenureAnalytics.formattedTenureEn})`}
                 </p>
               </div>
             </div>

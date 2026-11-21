@@ -1,13 +1,16 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import {
+  disableNetwork,
   doc,
+  enableNetwork,
   getDocFromServer,
   getFirestore,
   initializeFirestore,
   memoryLocalCache,
   persistentLocalCache,
   persistentSingleTabManager,
+  type FirestoreSettings,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -47,12 +50,27 @@ function purgeLegacyFirestoreWebStorageKeys() {
 
 function initPersistentFirestore() {
   purgeLegacyFirestoreWebStorageKeys();
+  const isBrowser = typeof window !== 'undefined';
+
+  // Force HTTP long-polling in browsers to avoid stalled WebChannel streams behind
+  // sandboxed iframes, reverse proxies, and mobile ISP gateways (prevents 10s backend timeouts).
+  const transportSettings: Partial<FirestoreSettings> = {
+    ignoreUndefinedProperties: true,
+    ...(isBrowser
+      ? {
+          experimentalForceLongPolling: true,
+          experimentalLongPollingOptions: { timeoutSeconds: 20 },
+        }
+      : {}),
+  };
+
   try {
     // Use IndexedDB-backed single-tab persistence so pending mutations live in
     // IndexedDB instead of 5MB localStorage (eliminating WebStorage QuotaExceededError).
     return initializeFirestore(
       app,
       {
+        ...transportSettings,
         localCache: persistentLocalCache({
           tabManager: persistentSingleTabManager({ forceOwnership: true }),
         }),
@@ -64,6 +82,7 @@ function initPersistentFirestore() {
       return initializeFirestore(
         app,
         {
+          ...transportSettings,
           localCache: memoryLocalCache(),
         },
         dbId
@@ -77,6 +96,30 @@ function initPersistentFirestore() {
 export const db = initPersistentFirestore();
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Keep Firestore network state synchronized with browser online/offline transitions
+// so offline sessions serve immediately from IndexedDB cache without 10s timeout errors,
+// and returning online immediately wakes Firestore without waiting on exponential backoff.
+if (typeof window !== 'undefined') {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    void disableNetwork(db).catch(() => {});
+  }
+  window.addEventListener('offline', () => {
+    void disableNetwork(db).catch(() => {});
+  });
+  window.addEventListener('online', () => {
+    void enableNetwork(db).catch(() => {});
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (
+      document.visibilityState === 'visible' &&
+      typeof navigator !== 'undefined' &&
+      navigator.onLine
+    ) {
+      void enableNetwork(db).catch(() => {});
+    }
+  });
+}
 
 export enum OperationType {
   CREATE = 'create',

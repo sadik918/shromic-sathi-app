@@ -24,6 +24,7 @@ import {
   KeyRound,
   Lock,
   LogOut,
+  Megaphone,
   Menu,
   PhoneCall,
   Printer,
@@ -31,6 +32,7 @@ import {
   RotateCcw,
   Scale,
   Send,
+  Share2,
   ShieldAlert,
   ShieldCheck,
   Smartphone,
@@ -52,11 +54,15 @@ import { AlarmView } from './AlarmView';
 import { CalculatorView } from './CalculatorView';
 import { PersonalLoanView } from './PersonalLoanView';
 import { AdminDashboardView } from './AdminDashboardView';
+import { PWAInstallButton } from './PWAInstallButton';
+import { ShareAppModal } from './ShareAppModal';
 import { UserSubscriptionView } from './UserSubscriptionView';
 import { ReportsView } from './ReportsView';
 import { SupportFeedbackView } from './SupportFeedbackView';
 import { parseCalendarReminderMeta } from '../utils/calendarReminders';
 import { buildGroupedMoreNav } from '../utils/moreNavigation';
+import { answerLabourLawQuestion } from '../utils/labourLawHelper';
+import { resolveHeaderSyncStatus } from '../utils/syncStatusDisplay';
 import type {
   DocumentCategory,
   EmploymentType,
@@ -67,9 +73,11 @@ import type {
   WorkShiftPattern,
 } from '../types';
 import {
+  computeWorkplaceTenureAnalytics,
   deriveBangladeshRMGBreakdownFromGross,
   formatBDT,
   formatNumber,
+  getSalaryStructure,
   getTodayISO,
   resolveWorkerShiftForDate,
   shiftDateISO,
@@ -128,14 +136,45 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     changeUserPassword,
     logout,
     syncOfflineDataToCloud,
+    pendingWritesCount,
     offlinePendingCount,
+    syncState,
   } = useData();
+
+  const [selectedAnnouncementId, setSelectedAnnouncementId] = useState<string | null>(null);
+  const selectedAnnouncement = publishedAnnouncements.find((a) => a.id === selectedAnnouncementId) || null;
+
+  const headerSyncMeta = resolveHeaderSyncStatus({
+    syncState,
+    pendingCount: pendingWritesCount + offlinePendingCount,
+    lang,
+  });
+  const profileTenure = computeWorkplaceTenureAnalytics({
+    workplace: {
+      id: 'current-profile-workplace',
+      factoryName: profile.factoryName || '',
+      designation: profile.designation || '',
+      joiningDate: profile.joiningDate || todayISO,
+      isCurrent: true,
+      grossSalary: profile.grossSalary,
+      basicSalary: profile.basicSalary,
+      createdAt: todayISO,
+    },
+    profile,
+    payments,
+    overtime,
+    attendance,
+    salaryRecords,
+    todayISO,
+  });
+  const canonicalSalary = getSalaryStructure(profile);
 
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isDrawerOpen, setIsDrawerOpen] = useState(
     () => openDrawerTrigger > 0 && typeof window !== 'undefined' && window.innerWidth < 768
   );
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
 
@@ -165,11 +204,11 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       return;
     }
 
-    if (newPassword.length < 4) {
+    if (newPassword.length < 8) {
       setChangePassError(
         lang === 'bn'
-          ? 'নতুন পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে।'
-          : 'New password must be at least 4 characters long.'
+          ? 'নতুন পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে।'
+          : 'New password must be at least 8 characters long.'
       );
       return;
     }
@@ -256,6 +295,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
   );
 
   useEffect(() => {
+    const resolved = getSalaryStructure(profile);
     setFullName(profile.fullName || '');
     setPhone(profile.phone || '');
     setAddress(profile.address || '');
@@ -266,21 +306,21 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
     setDesignation(profile.designation || '');
     setEmployeeId(profile.employeeId || '');
     setEmploymentType(profile.employmentType || 'permanent');
-    setJoiningDate(profile.joiningDate || '2025-01-01');
+    setJoiningDate(profile.joiningDate || todayISO);
     setSalaryGrade(profile.salaryGrade || '');
-    setBasicSalary(profile.basicSalary || 0);
-    setGrossSalary(profile.grossSalary || 0);
-    setHouseRentAllowance(profile.houseRentAllowance || 0);
-    setMedicalAllowance(profile.medicalAllowance || 0);
-    setTransportAllowance(profile.transportAllowance || 0);
-    setFoodAllowance(profile.foodAllowance || 0);
+    setBasicSalary(resolved.basicSalary);
+    setGrossSalary(resolved.grossSalary);
+    setHouseRentAllowance(resolved.houseRentAllowance);
+    setMedicalAllowance(resolved.medicalAllowance);
+    setTransportAllowance(resolved.transportAllowance);
+    setFoodAllowance(resolved.foodAllowance);
     setAttendanceBonus(profile.attendanceBonus || 0);
     setOtCustomHourlyRate(profile.otCustomHourlyRate || 0);
     setShiftPattern(profile.shiftPattern || 'day');
     setDayShiftStartTime(profile.dayShiftStartTime || '08:00');
     setNightShiftStartTime(profile.nightShiftStartTime || '20:00');
     setRotationStartDate(profile.rotationStartDate || '2026-10-01');
-  }, [profile]);
+  }, [profile, todayISO]);
 
   // Document Vault state
   const [docTitle, setDocTitle] = useState('');
@@ -683,9 +723,25 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
 
   const handleAskAdvisor = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!advisorQuery.trim()) return;
+    const trimmedQuery = advisorQuery.trim();
+    if (!trimmedQuery) return;
     setAdvisorLoading(true);
     setAdvisorAnswer('');
+
+    // First compute deterministic exact answer for numeric/statutory Labour Law queries
+    const localResult = answerLabourLawQuestion(trimmedQuery, profile, lang);
+    const localAnswerText = lang === 'bn' ? localResult.answerBn : localResult.answerEn;
+    const hasNumericIntent =
+      localResult.usedQuestionNumbers ||
+      /[\d০-৯]/.test(trimmedQuery) ||
+      /ot|ওভারটাইম|overtime|ইনক্রিমেন্ট|increment|ছুটি|leave|মাতৃত্ব|maternity|বোনাস|bonus|সার্ভিস|gratuity/i.test(
+        trimmedQuery
+      );
+    if (hasNumericIntent && localAnswerText) {
+      setAdvisorAnswer(localAnswerText);
+      setAdvisorLoading(false);
+      return;
+    }
 
     const isOnlineNow = typeof navigator === 'undefined' ? true : navigator.onLine;
     if (isOnlineNow) {
@@ -694,10 +750,10 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            query: advisorQuery.trim(),
+            query: trimmedQuery,
             contextSummary: {
-              basicSalary: profile.basicSalary,
-              grossSalary: profile.grossSalary,
+              basicSalary: canonicalSalary.basicSalary,
+              grossSalary: canonicalSalary.grossSalary,
               otDivisor: profile.otDivisor,
               otMultiplier: profile.otMultiplier,
             },
@@ -712,18 +768,11 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
           }
         }
       } catch {
-        // Fallback to built-in labor law calculation explanation
+        // Fallback to built-in deterministic labor law calculation explanation
       }
     }
 
-    const safeDivisor = profile.otDivisor > 0 ? profile.otDivisor : 208;
-    const safeMultiplier = profile.otMultiplier > 0 ? profile.otMultiplier : 2;
-    const hourlyOt = ((profile.basicSalary / safeDivisor) * safeMultiplier).toFixed(2);
-    setAdvisorAnswer(
-      lang === 'bn'
-        ? `বাংলাদেশ শ্রম আইন ২০০৬ (ধারা ১০৮) অনুযায়ী:\n• আপনার মূল বেতন (Basic): ৳ ${profile.basicSalary}\n• প্রতি ঘণ্টার ওভারটাইম হার = (মূল বেতন ÷ ${safeDivisor}) × ${safeMultiplier} = ৳ ${hourlyOt}\n• বাৎসরিক ছুটি: নৈমিত্তিক ছুটি ১০ দিন (পূর্ণ বেতনে), অসুস্থতাজনিত ছুটি ১৪ দিন (পূর্ণ বেতনে), এবং প্রতি ১৮ দিন কাজের জন্য ১ দিন অর্জিত ছুটি।\n(বিঃদ্রঃ এটি ব্যক্তিগত হিসাবের সহায়িকা, কারখানার চূড়ান্ত পে-স্লিপের সাথে মিলিয়ে নিন।)`
-        : `Under Bangladesh Labor Act 2006 (Sec 108):\n• Your Basic Salary: ৳ ${profile.basicSalary}\n• Hourly Overtime Rate = (Basic ÷ ${safeDivisor}) × ${safeMultiplier} = ৳ ${hourlyOt}\n• Annual Leave Entitlements: 10 days Casual Leave, 14 days Sick Leave, and 1 day Earned Leave per 18 working days.`
-    );
+    setAdvisorAnswer(localAnswerText);
     setAdvisorLoading(false);
   };
 
@@ -800,6 +849,12 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       icon: <Bell className="w-3.5 h-3.5 shrink-0" />,
     },
     {
+      id: 'announcements',
+      labelBn: 'অ্যাডমিন নোটিশ',
+      labelEn: 'Announcements',
+      icon: <Megaphone className="w-3.5 h-3.5 shrink-0" />,
+    },
+    {
       id: 'support',
       labelBn: 'সহায়তা ও নীতিমালা',
       labelEn: 'Support & Privacy',
@@ -842,9 +897,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
         </button>
 
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[11px] text-slate-400 shrink-0">
-            {lang === 'bn' ? 'শাখা:' : 'Section:'}
-          </span>
+          <PWAInstallButton lang={lang} variant="compact" />
           <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 truncate">
             {lang === 'bn' ? currentTabInfo?.labelBn : currentTabInfo?.labelEn}
           </span>
@@ -945,8 +998,25 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
             ))}
           </nav>
 
-          {/* Sticky Bottom Logout Button */}
-          <div className="pt-3 mt-3 border-t border-slate-100 dark:border-slate-800">
+          {/* Sticky Bottom Share, Install & Logout Controls */}
+          <div className="pt-3 mt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
+            <button
+              type="button"
+              data-testid="more-desktop-share-app-btn"
+              onClick={() => setIsShareModalOpen(true)}
+              className="w-full min-h-[40px] px-2.5 py-2 rounded-xl bg-teal-50/90 hover:bg-teal-100/90 dark:bg-teal-950/50 dark:hover:bg-teal-900/60 border border-teal-200/80 dark:border-teal-800/70 text-teal-800 dark:text-teal-200 text-xs font-bold flex items-center justify-between gap-2 transition-colors cursor-pointer"
+            >
+              <span className="flex items-center gap-2.5 min-w-0">
+                <span className="w-6 h-6 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0">
+                  <Share2 className="w-3.5 h-3.5" />
+                </span>
+                <span className="truncate whitespace-nowrap">
+                  {lang === 'bn' ? 'অ্যাপ শেয়ার করুন' : 'Share App'}
+                </span>
+              </span>
+              <ChevronRight className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0" />
+            </button>
+            <PWAInstallButton lang={lang} variant="menu-item" />
             <button
               type="button"
               onClick={logout}
@@ -1048,6 +1118,34 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                   </button>
                 );
               })}
+            </div>
+
+            {/* Clean In-Menu Share & Install Actions (No Subtitles) */}
+            <div className="px-2 pb-2 space-y-1.5">
+              <button
+                type="button"
+                data-testid="drawer-share-app-btn"
+                onClick={() => {
+                  setIsDrawerOpen(false);
+                  setIsShareModalOpen(true);
+                }}
+                className="w-full min-h-[40px] px-2.5 py-2 rounded-xl bg-teal-50/90 hover:bg-teal-100/90 dark:bg-teal-950/50 dark:hover:bg-teal-900/60 border border-teal-200/80 dark:border-teal-800/70 text-teal-800 dark:text-teal-200 text-xs font-bold flex items-center justify-between gap-2 transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <span className="w-6 h-6 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0">
+                    <Share2 className="w-3.5 h-3.5" />
+                  </span>
+                  <span className="truncate whitespace-nowrap">
+                    {lang === 'bn' ? 'অ্যাপ শেয়ার করুন' : 'Share App'}
+                  </span>
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0" />
+              </button>
+              <PWAInstallButton
+                lang={lang}
+                variant="menu-item"
+                onActionComplete={() => setIsDrawerOpen(false)}
+              />
             </div>
 
             {/* Bottom Profile & Logout Bar */}
@@ -1399,12 +1497,13 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
               {showChangePasswordForm && (
                 <form
                   onSubmit={handlePasswordChangeSubmit}
+                  noValidate
                   className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-3.5"
                 >
                   <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 leading-relaxed bg-white/70 dark:bg-slate-800/50 p-2.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60">
                     {lang === 'bn'
-                      ? 'নিরাপত্তার স্বার্থে প্রথমে আপনার আগের কারেন্ট পাসওয়ার্ড দিন। সঠিক কারেন্ট পাসওয়ার্ড ছাড়া নতুন পাসওয়ার্ড পরিবর্তন করা যাবে না।'
-                      : 'For your security, enter your current password first. You cannot set a new password without verifying your existing password.'}
+                      ? 'নিরাপত্তার স্বার্থে প্রথমে আপনার আগের কারেন্ট পাসওয়ার্ড দিন। নতুন পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে।'
+                      : 'For your security, enter your current password first. New password must be at least 8 characters.'}
                   </p>
 
                   {changePassError && (
@@ -1468,7 +1567,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                           required
                           value={newPassword}
                           onChange={(e) => setNewPassword(e.target.value)}
-                          placeholder={lang === 'bn' ? 'কমপক্ষে ৪ অক্ষর লিখুন' : 'At least 4 chars'}
+                          placeholder={lang === 'bn' ? 'কমপক্ষে ৮ অক্ষর লিখুন' : 'At least 8 chars'}
                           className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 pl-3.5 pr-11 text-xs sm:text-sm font-medium text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-600 dark:focus:ring-emerald-500 transition-all"
                         />
                         <button
@@ -1748,6 +1847,13 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                     <p className="text-sm font-bold text-slate-900 dark:text-white mt-0.5 tabular-nums">
                       {joiningDate ? formatDateSlashDMY(joiningDate, lang) : '—'}
                     </p>
+                    {joiningDate && (
+                      <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5">
+                        {lang === 'bn'
+                          ? profileTenure.formattedTenureBn
+                          : profileTenure.formattedTenureEn}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
@@ -1990,17 +2096,25 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                     <Smartphone className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                      <span>{lang === 'bn' ? 'অ্যান্ড্রয়েড অ্যাপ ও ক্লাউড সংযোগ' : 'Android & Live Cloud Sync'}</span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900/80 text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                        <span>{lang === 'bn' ? 'অটো-সিঙ্ক সক্রিয়' : 'Auto Sync Active'}</span>
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
+                      <span>{lang === 'bn' ? 'মোবাইল অ্যাপ (PWA) ও ক্লাউড সংযোগ' : 'Mobile App (PWA) & Cloud Sync'}</span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 ${
+                          headerSyncMeta.mode === 'synced'
+                            ? 'bg-emerald-100 dark:bg-emerald-900/80 text-emerald-800 dark:text-emerald-300'
+                            : headerSyncMeta.mode === 'offline'
+                            ? 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                            : 'bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3 h-3 shrink-0" />
+                        <span>{headerSyncMeta.label}</span>
                       </span>
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400">
                       {lang === 'bn'
-                        ? 'কোনো বাটন না টিপেই যেকোরো এন্ট্রি স্বয়ংক্রিয়ভাবে অ্যান্ড্রয়েড ও ওয়েবে সাথে সাথে সিঙ্ক হয়ে যায়'
-                        : 'Real-time automatic background sync between Android & Web without clicking buttons'}
+                        ? 'অনলাইনে থাকলে যেকোনো এন্ট্রি স্বয়ংক্রিয়ভাবে ক্লাউডে সিঙ্ক হয়; অফলাইনে থাকলে ডিভাইসে সংরক্ষিত থাকে'
+                        : 'Automatically syncs to cloud when online and safely queues offline entries on your device'}
                     </p>
                   </div>
                 </div>
@@ -2039,7 +2153,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                       setTimeout(() => setCopiedLink(false), 2500);
                       setNotice(
                         lang === 'bn'
-                          ? 'অ্যান্ড্রয়েড অ্যাপের লাইভ লিংক কপি করা হয়েছে!'
+                          ? 'অ্যাপের লাইভ লিংক কপি করা হয়েছে!'
                           : 'Live app link copied to clipboard!'
                       );
                     }}
@@ -2059,7 +2173,7 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
                   </span>
                   <p className="font-bold text-emerald-700 dark:text-emerald-400 mt-0.5 flex items-center gap-1 truncate">
                     <Cloud className="w-3.5 h-3.5 shrink-0" />
-                    <span>Google Firebase লাইভ</span>
+                    <span>{headerSyncMeta.mode === 'offline' ? (lang === 'bn' ? 'অফলাইন লোকাল মোড' : 'Offline Local Mode') : 'Google Firebase লাইভ'}</span>
                   </p>
                 </div>
 
@@ -2074,35 +2188,45 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
 
                 <div className="p-2.5 rounded-lg bg-white/80 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
                   <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400">
-                    {lang === 'bn' ? 'পেন্ডিং সিঙ্ক কিউ' : 'Pending Offline Writes'}
+                    {lang === 'bn' ? 'সিঙ্ক অবস্থা' : 'Sync Status'}
                   </span>
                   <p className="font-bold text-slate-800 dark:text-slate-200 mt-0.5 flex items-center gap-1">
                     {offlinePendingCount > 0 ? (
-                      <span className="text-amber-600 dark:text-amber-400">{offlinePendingCount} টি ডাটা অপেক্ষারত</span>
+                      <span className="text-amber-600 dark:text-amber-400">
+                        {lang === 'bn'
+                          ? `${offlinePendingCount} টি ডাটা অপেক্ষারত`
+                          : `${offlinePendingCount} pending writes`}
+                      </span>
                     ) : (
-                      <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <span
+                        className={`flex items-center gap-1 ${
+                          headerSyncMeta.mode === 'synced'
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-amber-600 dark:text-amber-400'
+                        }`}
+                      >
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>১০০% সিঙ্ক সম্পন্ন</span>
+                        <span>{headerSyncMeta.label}</span>
                       </span>
                     )}
                   </p>
                 </div>
               </div>
 
-              {/* Step-by-step Guide on how Android gets the updates */}
+              {/* Step-by-step Guide on how Android gets the app/updates */}
               <div className="p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 space-y-1.5 leading-relaxed">
                 <p className="font-bold text-emerald-800 dark:text-emerald-300">
-                  {lang === 'bn' ? '📌 ফোনে এই নতুন আপডেট যেভাবে পাবেন:' : '📌 How to get this update on your Android phone:'}
+                  {lang === 'bn' ? '📌 অ্যান্ড্রয়েড ফোনে অ্যাপ ইনস্টল ও আপডেট করার নিয়ম:' : '📌 How to install & update on Android:'}
                 </p>
                 <ul className="list-disc pl-4 space-y-1 text-slate-600 dark:text-slate-300">
                   <li>
                     {lang === 'bn'
-                      ? 'অ্যান্ড্রয়েড ফোনের ব্রাউজারে অ্যাপটি ওপেন করে উপর থেকে নিচে সোয়াইপ (Pull-to-refresh) করুন, যাতে নতুন ডিজাইন ও ফিচার লোড হয়।'
-                      : 'Open the app on your Android phone and pull down to refresh to load the latest design and features.'}
+                      ? 'Chrome ব্রাউজারে উপরে ডানপাশের মেনু (⋮) থেকে "Add to Home screen" বা "অ্যাপ ইনস্টল করুন" চাপলে ফোনের হোম স্ক্রিনে অ্যাপ আইকন যুক্ত হবে।'
+                      : 'Open Chrome menu (⋮) and tap "Add to Home screen" or "Install App" to install the mobile PWA.'}
                   </li>
                   <li>
                     {lang === 'bn'
-                      ? 'আপনার ফোন ও এই ডিভাইসে একই জিমেইল/ইমেইল আইডি দিয়ে লগইন করুন। তাহলে সকল হাজিরা, ওভারটাইম ও জমার হিসাব সরাসরি মিলে যাবে।'
+                      ? 'আপনার ফোন ও অন্য ডিভাইসে একই ইমেইল/জিমেইল দিয়ে লগইন করলে সকল হাজিরা, ওভারটাইম ও বেতনের হিসাব স্বয়ংক্রিয়ভাবে সিঙ্ক হবে।'
                       : 'Sign in with the exact same Gmail/email on both devices for real-time cloud data sync.'}
                   </li>
                 </ul>
@@ -2671,6 +2795,97 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
         </div>
       )}
 
+      {/* 4B. DEDICATED ADMIN ANNOUNCEMENTS SUBVIEW */}
+      {activeSubView === 'announcements' && (
+        <div
+          data-testid="dedicated-announcements-view"
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-4"
+        >
+          <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+              <Megaphone className="w-5 h-5" />
+            </div>
+            <h2 className="text-base font-extrabold text-slate-900 dark:text-white">
+              {lang === 'bn' ? 'অ্যাডমিন নোটিশ' : 'Admin Notices'}
+            </h2>
+          </div>
+
+          {publishedAnnouncements.length === 0 ? (
+            <div className="py-10 text-center space-y-2">
+              <Megaphone className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-700" />
+              <p className="text-sm font-bold text-slate-600 dark:text-slate-300">
+                {lang === 'bn' ? 'কোনো নোটিশ নেই' : 'No announcements'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {publishedAnnouncements.map((ann) => (
+                <button
+                  key={ann.id}
+                  type="button"
+                  onClick={() => setSelectedAnnouncementId(ann.id)}
+                  className="w-full text-left p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 hover:border-emerald-300 dark:hover:border-emerald-700 transition-colors space-y-1 cursor-pointer"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                      {lang === 'bn'
+                        ? ann.titleBn || ann.titleEn
+                        : ann.titleEn || ann.titleBn}
+                    </h3>
+                    <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums shrink-0">
+                      {formatDateReadable((ann.createdAt || todayISO).slice(0, 10), lang)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
+                    {lang === 'bn'
+                      ? ann.messageBn || ann.messageEn
+                      : ann.messageEn || ann.messageBn}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectedAnnouncement && (
+            <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-5 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                    {lang === 'bn'
+                      ? selectedAnnouncement.titleBn || selectedAnnouncement.titleEn
+                      : selectedAnnouncement.titleEn || selectedAnnouncement.titleBn}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAnnouncementId(null)}
+                    className="w-9 h-9 rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center shrink-0 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                  {formatDateReadable((selectedAnnouncement.createdAt || todayISO).slice(0, 10), lang)}
+                </p>
+                <p className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-line leading-relaxed">
+                  {lang === 'bn'
+                    ? selectedAnnouncement.messageBn || selectedAnnouncement.messageEn
+                    : selectedAnnouncement.messageEn || selectedAnnouncement.messageBn}
+                </p>
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAnnouncementId(null)}
+                    className="h-10 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold cursor-pointer"
+                  >
+                    {lang === 'bn' ? 'বন্ধ করুন' : 'Close'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 5. SUPPORT, PRIVACY POLICY & ACCOUNT DELETION */}
       {activeSubView === 'support' && (
         <Suspense fallback={<div className="py-12 text-center text-xs font-semibold text-slate-500">লোড হচ্ছে...</div>}>
@@ -2728,6 +2943,12 @@ export const MoreHubView: React.FC<MoreHubViewProps> = ({
       )}
         </div>
       </div>
+
+      <ShareAppModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        lang={lang}
+      />
     </div>
   );
 };

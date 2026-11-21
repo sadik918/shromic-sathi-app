@@ -22,10 +22,12 @@ import {
   getEffectiveHourlyOtRate,
   isFutureDate,
   isFutureMonth,
+  isWeeklyOrPublicHoliday,
   resolveWorkerShiftForDate,
   roundCurrency,
   summarizeOvertimeRecords,
   toBengaliDigits,
+  validateNotBeforeJoiningDate,
 } from '../utils/calculations';
 import { formatDateReadable, formatDateSlashDMY, formatMonthLabel } from '../utils/i18n';
 import { buildOvertimePieAnalytics } from '../utils/homeAnalytics';
@@ -151,15 +153,32 @@ export const OvertimeView: React.FC = () => {
     }
   }, [profile, date, editingId]);
 
+  const holidayCheck = useMemo(
+    () => isWeeklyOrPublicHoliday(date, profile.weeklyHolidayDay || 'friday'),
+    [date, profile.weeklyHolidayDay]
+  );
+  const [applyHolidayDoubleRate, setApplyHolidayDoubleRate] = useState(false);
+
+  useEffect(() => {
+    setApplyHolidayDoubleRate(false);
+  }, [date]);
+
   const wageBaseAmount =
     profile.otWageBase === 'gross' ? profile.grossSalary : profile.basicSalary;
+
+  const effectiveRateForPreview =
+    entryHourlyRate > 0
+      ? roundCurrency(applyHolidayDoubleRate && holidayCheck.isHoliday ? entryHourlyRate * 2 : entryHourlyRate)
+      : undefined;
 
   const computedEstimate = calculateOvertimeEstimate(
     wageBaseAmount,
     profile.otDivisor,
-    profile.otMultiplier,
+    applyHolidayDoubleRate && holidayCheck.isHoliday
+      ? (profile.otMultiplier || 2) * 2
+      : profile.otMultiplier,
     approvedHours,
-    entryHourlyRate > 0 ? entryHourlyRate : undefined
+    effectiveRateForPreview
   );
 
   const finalEstimatedEarnings = computedEstimate.estimatedEarnings;
@@ -328,6 +347,12 @@ export const OvertimeView: React.FC = () => {
       return;
     }
 
+    const preJoinOt = validateNotBeforeJoiningDate(date, profile.joiningDate, lang);
+    if (!preJoinOt.valid) {
+      setFormError(preJoinOt.error || '');
+      return;
+    }
+
     if (isDateMarkedAbsent) {
       setFormError(
         lang === 'bn'
@@ -365,7 +390,9 @@ export const OvertimeView: React.FC = () => {
     }
 
     const effectiveRate =
-      entryHourlyRate > 0 ? roundCurrency(entryHourlyRate) : computedEstimate.hourlyRate;
+      effectiveRateForPreview && effectiveRateForPreview > 0
+        ? effectiveRateForPreview
+        : computedEstimate.hourlyRate;
 
     await saveOvertime(
       {
@@ -378,10 +405,16 @@ export const OvertimeView: React.FC = () => {
         approvedHours,
         basicSalarySnapshot: wageBaseAmount,
         divisorSnapshot: profile.otDivisor || 208,
-        multiplierSnapshot: profile.otMultiplier || 2,
+        multiplierSnapshot:
+          applyHolidayDoubleRate && holidayCheck.isHoliday
+            ? (profile.otMultiplier || 2) * 2
+            : profile.otMultiplier || 2,
         hourlyRateSnapshot: effectiveRate,
         estimatedEarnings: finalEstimatedEarnings,
-        notes: notes.trim(),
+        notes:
+          holidayCheck.isHoliday && applyHolidayDoubleRate
+            ? `${lang === 'bn' ? '[ছুটির দিন ২× হার]' : '[Holiday 2x Rate]'} ${notes.trim()}`.trim()
+            : notes.trim(),
       },
       editingId || undefined
     );
@@ -957,6 +990,49 @@ export const OvertimeView: React.FC = () => {
             >
               <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{formSuccess}</span>
+            </div>
+          )}
+
+          {holidayCheck.isHoliday && (
+            <div
+              data-testid="overtime-holiday-warning"
+              className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 space-y-2"
+            >
+              <div className="flex items-start gap-2 text-xs font-bold text-amber-900 dark:text-amber-200">
+                <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <p>
+                    {lang === 'bn'
+                      ? `ছুটির দিনের কাজে দ্বিগুণ হার প্রযোজ্য (${holidayCheck.holidayTitleBn || 'সাপ্তাহিক ছুটি'})`
+                      : `Double rate applies for holiday work (${holidayCheck.holidayTitleEn || 'Weekly Holiday'})`}
+                  </p>
+                  <p className="text-[11px] font-medium text-amber-800/90 dark:text-amber-300/90 mt-0.5">
+                    {lang === 'bn'
+                      ? 'শ্রম আইন অনুযায়ী সাপ্তাহিক বা সরকারি ছুটির দিনে কাজ করলে সাধারণ হারের দ্বিগুণ মজুরি বা বিকল্প ছুটি প্রাপ্য।'
+                      : 'Under Bangladesh Labour Law, work on a weekly/public holiday qualifies for double wage or compensatory leave.'}
+                  </p>
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 text-xs font-bold text-amber-950 dark:text-amber-100 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  data-testid="overtime-holiday-double-toggle"
+                  checked={applyHolidayDoubleRate}
+                  onChange={(e) => setApplyHolidayDoubleRate(e.target.checked)}
+                  className="h-4 w-4 rounded accent-amber-600 cursor-pointer"
+                />
+                <span>
+                  {lang === 'bn'
+                    ? `ছুটির দিনের ২× হার প্রয়োগ করুন (${formatBDT(
+                        roundCurrency(entryHourlyRate * 2),
+                        'bn'
+                      )}/ঘণ্টা)`
+                    : `Apply 2x holiday rate (${formatBDT(
+                        roundCurrency(entryHourlyRate * 2),
+                        'en'
+                      )}/hr)`}
+                </span>
+              </label>
             </div>
           )}
 

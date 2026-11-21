@@ -42,6 +42,8 @@ import {
   getRecentMonthsList,
   computeDailyEarnedSalary,
   calculateAttendanceBonusEligibility,
+  evaluateMonthlyBonusLockForDate,
+  willDraftCrossLateBonusLimit,
 } from './calculations';
 import { formatDateSlashDMY } from './i18n';
 import type {
@@ -1574,5 +1576,161 @@ test('Android System Clock SET_ALARM intent URL and VALARM .ics generator produc
   assert.equal(ics.includes('BEGIN:VALARM'), true);
   assert.equal(ics.includes('RRULE:FREQ=WEEKLY;BYDAY=SA,SU,MO,TU,WE,TH'), true);
 });
+
+test('evaluateMonthlyBonusLockForDate locks other days in same month after manual untick, isolates months, and unlocks on editing the missed date', () => {
+  const profile: Partial<WorkerProfile> = {
+    hasAttendanceBonus: true,
+    attendanceBonus: 1000,
+    attendanceBonusAmount: 1000,
+    latePenaltyEnabled: true,
+    maxLateDaysForBonus: 3,
+    maxConsecutiveAbsences: 0,
+  };
+
+  const novRecords: AttendanceRecord[] = [
+    {
+      id: 'att_nov_18',
+      userId: 'u1',
+      date: '2026-11-18',
+      month: '2026-11',
+      status: 'present',
+      leaveCategory: 'none',
+      checkIn: '08:00',
+      checkOut: '17:00',
+      notes: '',
+      hasAttendanceBonus: false,
+    },
+  ];
+
+  // Nov 19 should hide checkbox and display notice referencing 18/11
+  const nov19Lock = evaluateMonthlyBonusLockForDate({
+    targetDate: '2026-11-19',
+    recordsForMonth: novRecords,
+    profile,
+  });
+  assert.equal(nov19Lock.isAlreadyMissedInMonth, true);
+  assert.equal(nov19Lock.missKind, 'manual_untick');
+  assert.equal(nov19Lock.missedDate, '2026-11-18');
+  assert.ok(nov19Lock.noticeBn.includes('১৮/১১'));
+
+  // Editing Nov 18 itself must NOT be locked so user can re-tick and restore the month
+  const nov18EditLock = evaluateMonthlyBonusLockForDate({
+    targetDate: '2026-11-18',
+    recordsForMonth: novRecords,
+    profile,
+  });
+  assert.equal(nov18EditLock.isAlreadyMissedInMonth, false);
+
+  // Next month (December) must remain completely independent & unlocked
+  const dec01Lock = evaluateMonthlyBonusLockForDate({
+    targetDate: '2026-12-01',
+    recordsForMonth: novRecords,
+    profile,
+  });
+  assert.equal(dec01Lock.isAlreadyMissedInMonth, false);
+});
+
+test('evaluateMonthlyBonusLockForDate and calculateAttendanceBonusEligibility enforce configurable late-day limit (1, 2, 3, 5) and restore on edit', () => {
+  const profile3Days: Partial<WorkerProfile> = {
+    hasAttendanceBonus: true,
+    attendanceBonus: 1000,
+    attendanceBonusAmount: 1000,
+    latePenaltyEnabled: true,
+    maxLateDaysForBonus: 3,
+    maxConsecutiveAbsences: 0,
+  };
+
+  const twoLateDays: AttendanceRecord[] = [
+    {
+      id: 'l1',
+      userId: 'u1',
+      date: '2026-11-05',
+      month: '2026-11',
+      status: 'late',
+      leaveCategory: 'none',
+      checkIn: '08:15',
+      checkOut: '17:00',
+      notes: '',
+      hasAttendanceBonus: true,
+    },
+    {
+      id: 'l2',
+      userId: 'u1',
+      date: '2026-11-12',
+      month: '2026-11',
+      status: 'late',
+      leaveCategory: 'none',
+      checkIn: '08:20',
+      checkOut: '17:00',
+      notes: '',
+      hasAttendanceBonus: true,
+    },
+  ];
+
+  // After 2 late days with 3-day limit, bonus is STILL eligible and Nov 17 is NOT locked yet
+  const eval2 = calculateAttendanceBonusEligibility({
+    recordsForMonth: twoLateDays,
+    profile: profile3Days,
+  });
+  assert.equal(eval2.isEligible, true);
+
+  const lockBefore3rd = evaluateMonthlyBonusLockForDate({
+    targetDate: '2026-11-17',
+    recordsForMonth: twoLateDays,
+    profile: profile3Days,
+  });
+  assert.equal(lockBefore3rd.isAlreadyMissedInMonth, false);
+  assert.equal(lockBefore3rd.otherLateDaysCount, 2);
+
+  // Drafting 'late' on Nov 17 crosses the 3-day threshold
+  assert.equal(
+    willDraftCrossLateBonusLimit({
+      lock: lockBefore3rd,
+      draftStatus: 'late',
+      targetDate: '2026-11-17',
+      profile: profile3Days,
+    }),
+    true
+  );
+
+  // Saving 3rd late day forfeits bonus and locks Nov 18 automatically
+  const threeLateDays: AttendanceRecord[] = [
+    ...twoLateDays,
+    {
+      id: 'l3',
+      userId: 'u1',
+      date: '2026-11-17',
+      month: '2026-11',
+      status: 'late',
+      leaveCategory: 'none',
+      checkIn: '08:25',
+      checkOut: '17:00',
+      notes: '',
+      hasAttendanceBonus: true,
+    },
+  ];
+
+  const eval3 = calculateAttendanceBonusEligibility({
+    recordsForMonth: threeLateDays,
+    profile: profile3Days,
+  });
+  assert.equal(eval3.isEligible, false);
+
+  const nov18Lock = evaluateMonthlyBonusLockForDate({
+    targetDate: '2026-11-18',
+    recordsForMonth: threeLateDays,
+    profile: profile3Days,
+  });
+  assert.equal(nov18Lock.isAlreadyMissedInMonth, true);
+  assert.equal(nov18Lock.missKind, 'late_limit');
+
+  // Changing profile maxLateDaysForBonus to 5 immediately restores eligibility
+  const eval5Limit = calculateAttendanceBonusEligibility({
+    recordsForMonth: threeLateDays,
+    profile: { ...profile3Days, maxLateDaysForBonus: 5 },
+  });
+  assert.equal(eval5Limit.isEligible, true);
+});
+
 
 

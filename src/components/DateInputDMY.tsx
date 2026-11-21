@@ -49,8 +49,9 @@ export const DateInputDMY: React.FC<DateInputDMYProps> = ({
     ? 'দিন/মাস/সাল'
     : 'DD/MM/YYYY';
 
-  const handleContainerClick = () => {
+  const handleContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (disabled) return;
+    if (e.target === inputRef.current) return;
     if (inputRef.current) {
       try {
         if (typeof inputRef.current.showPicker === 'function') {
@@ -61,6 +62,13 @@ export const DateInputDMY: React.FC<DateInputDMYProps> = ({
       } catch {
         inputRef.current.focus();
       }
+    }
+  };
+
+  const handleValueUpdate = (e: React.FormEvent<HTMLInputElement>) => {
+    const nextVal = (e.currentTarget as HTMLInputElement).value;
+    if (nextVal !== value) {
+      onChange(nextVal);
     }
   };
 
@@ -89,7 +97,8 @@ export const DateInputDMY: React.FC<DateInputDMYProps> = ({
         max={max}
         disabled={disabled}
         required={required}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={handleValueUpdate}
+        onInput={handleValueUpdate}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
       />
     </div>

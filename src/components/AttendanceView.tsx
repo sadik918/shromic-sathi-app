@@ -16,16 +16,27 @@ import {
   Moon,
   Sparkles,
   Sun,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useData } from '../context/DataContext';
-import type { AttendanceRecord, AttendanceStatus, LeaveCategory, WorkShiftPattern } from '../types';
+import type {
+  AttendanceRecord,
+  AttendanceStatus,
+  LeaveApplication,
+  LeaveApplicationStatus,
+  LeaveApplicationType,
+  LeaveCategory,
+  WorkShiftPattern,
+} from '../types';
+import { computeYearlyLeaveSummary, normalizeLeaveStatus } from '../utils/featureHelpers';
 import {
   BANGLADESH_PUBLIC_HOLIDAYS,
   addHoursToTime,
   calculateAttendanceBonusEligibility,
   calculateOvertimeEstimate,
   evaluateCheckInPunctuality,
+  evaluateMonthlyBonusLockForDate,
   formatBDT,
   formatNumber,
   getDefaultDateForMonth,
@@ -37,6 +48,9 @@ import {
   resolveWorkerShiftForDate,
   roundCurrency,
   summarizeAttendanceForMonth,
+  toBengaliDigits,
+  validateNotBeforeJoiningDate,
+  willDraftCrossLateBonusLimit,
 } from '../utils/calculations';
 import { formatDateReadable, formatDateSlashDMY, formatMonthLabel, T } from '../utils/i18n';
 import {
@@ -157,16 +171,62 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     profile,
     overtime,
     attendance,
+    leaveApplications,
     reminders,
     isProfileSetupIncomplete,
     reopenOnboarding,
     saveAttendance,
+    saveLeaveApplication,
+    updateLeaveApplicationStatus,
+    deleteLeaveApplication,
     saveOvertime,
     deleteOvertime,
     updateProfile,
     saveReminder,
   } = useData();
   const dict = T[lang];
+
+  // Sub-tab: Attendance Calendar vs Leave Records (ছুটির হিসাব)
+  const [attendanceTab, setAttendanceTab] = useState<'calendar' | 'leave_apps'>('calendar');
+  const [leaveStartDate, setLeaveStartDate] = useState(todayISO);
+  const [leaveEndDate, setLeaveEndDate] = useState(todayISO);
+  const [leaveAppType, setLeaveAppType] = useState<LeaveApplicationType>('casual');
+  const [leaveAppStatus, setLeaveAppStatus] = useState<'taken' | 'planned'>('taken');
+  const [leaveAppReason, setLeaveAppReason] = useState('');
+  const [leaveAppError, setLeaveAppError] = useState('');
+  const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
+  const [leaveSummaryYear, setLeaveSummaryYear] = useState<number>(
+    () => Number(selectedMonth.slice(0, 4)) || Number(todayISO.slice(0, 4)) || 2026
+  );
+  const [confirmDeleteLeaveId, setConfirmDeleteLeaveId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const y = Number(selectedMonth.slice(0, 4));
+    if (Number.isFinite(y) && y > 2000) setLeaveSummaryYear(y);
+  }, [selectedMonth]);
+
+  const yearlyLeaveBalances = useMemo(
+    () =>
+      computeYearlyLeaveSummary({
+        year: leaveSummaryYear,
+        leaveApplications,
+        attendance,
+        joiningDate: profile.joiningDate,
+      }),
+    [leaveSummaryYear, leaveApplications, attendance, profile.joiningDate]
+  );
+
+  const groupedLeaveApps = useMemo(() => {
+    const map = new Map<string, LeaveApplication[]>();
+    const sorted = [...leaveApplications].sort((a, b) => b.startDate.localeCompare(a.startDate));
+    for (const app of sorted) {
+      const mKey = (app.startDate || '').slice(0, 7) || selectedMonth;
+      const list = map.get(mKey) || [];
+      list.push(app);
+      map.set(mKey, list);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [leaveApplications, selectedMonth]);
 
   const attAnalytics = useMemo(
     () =>
@@ -268,6 +328,29 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     recordsForMonth: monthAttendance,
     profile,
   });
+
+  // Evaluate whether THIS month's attendance bonus is already forfeited by OTHER dates in this month
+  const selectedDateBonusLock = useMemo(
+    () =>
+      evaluateMonthlyBonusLockForDate({
+        targetDate: selectedDate,
+        recordsForMonth: monthAttendance,
+        profile,
+      }),
+    [selectedDate, monthAttendance, profile]
+  );
+
+  const entryCrossesLateLimit = useMemo(
+    () =>
+      willDraftCrossLateBonusLimit({
+        lock: selectedDateBonusLock,
+        draftStatus: status,
+        draftCheckIn: checkIn,
+        targetDate: selectedDate,
+        profile,
+      }),
+    [selectedDateBonusLock, status, checkIn, selectedDate, profile]
+  );
 
   const activeShiftCutoffTime =
     scheduledShiftForSelectedDate.activeShift === 'night'
@@ -415,6 +498,11 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       );
       return;
     }
+    const preJoinOt = validateNotBeforeJoiningDate(selectedDate, profile.joiningDate, lang);
+    if (!preJoinOt.valid) {
+      showToast(preJoinOt.error || '');
+      return;
+    }
     const wageBase = profile.otWageBase === 'gross' ? profile.grossSalary : profile.basicSalary;
     const customRate = profile.otCalculationMode === 'manual' ? profile.otCustomHourlyRate : undefined;
     const { hourlyRate, estimatedEarnings } = calculateOvertimeEstimate(
@@ -484,7 +572,19 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       );
       return;
     }
+    const preJoinAtt = validateNotBeforeJoiningDate(selectedDate, profile.joiningDate, lang);
+    if (!preJoinAtt.valid) {
+      showToast(preJoinAtt.error || '');
+      return;
+    }
     const existing = monthAttendance.find((a) => a.date === selectedDate);
+    const effectiveBonusToSave =
+      status === 'present' || status === 'late'
+        ? selectedDateBonusLock.isAlreadyMissedInMonth || entryCrossesLateLimit
+          ? true
+          : entryHasBonus
+        : undefined;
+
     await saveAttendance(
       {
         date: selectedDate,
@@ -494,7 +594,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
         checkIn: status === 'present' || status === 'late' ? checkIn : '',
         checkOut: status === 'present' || status === 'late' ? checkOut : '',
         notes: notes.trim(),
-        hasAttendanceBonus: status === 'present' || status === 'late' ? entryHasBonus : undefined,
+        hasAttendanceBonus: effectiveBonusToSave,
       },
       existing?.id
     );
@@ -851,14 +951,554 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     };
   });
 
+  const handleEditLeaveApplication = (app: LeaveApplication) => {
+    setEditingLeaveId(app.id);
+    setLeaveStartDate(app.startDate);
+    setLeaveEndDate(app.endDate || app.startDate);
+    setLeaveAppType(app.leaveType);
+    setLeaveAppStatus(normalizeLeaveStatus(app.status));
+    setLeaveAppReason(app.reason || '');
+    setLeaveAppError('');
+  };
+
+  const resetLeaveForm = () => {
+    setEditingLeaveId(null);
+    setLeaveStartDate(todayISO);
+    setLeaveEndDate(todayISO);
+    setLeaveAppType('casual');
+    setLeaveAppStatus('taken');
+    setLeaveAppReason('');
+    setLeaveAppError('');
+  };
+
+  const handleSubmitLeaveApplication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLeaveAppError('');
+    if (!leaveStartDate) {
+      setLeaveAppError(lang === 'bn' ? 'শুরুর তারিখ নির্বাচন করুন।' : 'Please select start date.');
+      return;
+    }
+    if (leaveEndDate && leaveEndDate < leaveStartDate) {
+      setLeaveAppError(
+        lang === 'bn'
+          ? 'শেষ তারিখ শুরুর তারিখের আগে হতে পারবে না।'
+          : 'End date cannot be earlier than start date.'
+      );
+      return;
+    }
+    const resolvedEnd = leaveEndDate || leaveStartDate;
+    const preJoinCheck = validateNotBeforeJoiningDate(leaveStartDate, profile.joiningDate, lang);
+    if (!preJoinCheck.valid) {
+      setLeaveAppError(preJoinCheck.error || '');
+      return;
+    }
+    const startDt = new Date(`${leaveStartDate}T00:00:00Z`);
+    const endDt = new Date(`${resolvedEnd}T00:00:00Z`);
+    const totalDays =
+      !Number.isNaN(startDt.getTime()) && !Number.isNaN(endDt.getTime()) && endDt >= startDt
+        ? Math.floor((endDt.getTime() - startDt.getTime()) / (24 * 60 * 60 * 1000)) + 1
+        : 1;
+
+    const statusToSave: LeaveApplicationStatus = leaveAppStatus;
+    await saveLeaveApplication(
+      {
+        startDate: leaveStartDate,
+        endDate: resolvedEnd,
+        totalDays,
+        leaveType: leaveAppType,
+        reason: leaveAppReason.trim(),
+        status: statusToSave,
+      },
+      editingLeaveId || undefined
+    );
+    const wasEditing = Boolean(editingLeaveId);
+    resetLeaveForm();
+    showToast(
+      lang === 'bn'
+        ? wasEditing
+          ? 'ছুটির রেকর্ড আপডেট হয়েছে।'
+          : 'ছুটির রেকর্ড সংরক্ষিত হয়েছে এবং ক্যালেন্ডারে যুক্ত হয়েছে।'
+        : wasEditing
+        ? 'Leave record updated.'
+        : 'Leave record saved and synced to calendar.'
+    );
+  };
+
+  const selectedBalanceRow = yearlyLeaveBalances.find((row) => row.type === leaveAppType);
+  const draftDaysPreview = useMemo(() => {
+    if (!leaveStartDate) return 0;
+    const resolvedEnd = leaveEndDate && leaveEndDate >= leaveStartDate ? leaveEndDate : leaveStartDate;
+    const s = new Date(`${leaveStartDate}T00:00:00Z`).getTime();
+    const en = new Date(`${resolvedEnd}T00:00:00Z`).getTime();
+    if (Number.isNaN(s) || Number.isNaN(en) || en < s) return 1;
+    return Math.floor((en - s) / (24 * 60 * 60 * 1000)) + 1;
+  }, [leaveStartDate, leaveEndDate]);
+
+  const willExceedLeaveQuota =
+    leaveAppStatus === 'taken' &&
+    selectedBalanceRow !== undefined &&
+    selectedBalanceRow.remaining - draftDaysPreview < 0;
+
   return (
     <div className="space-y-4">
+      {/* Top Sub-Tab Switcher: Attendance Calendar | Leave Records */}
+      <div
+        role="tablist"
+        aria-label={lang === 'bn' ? 'হাজিরা ও ছুটির হিসাব' : 'Attendance & Leave Records'}
+        className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={attendanceTab === 'calendar'}
+          data-testid="attendance-tab-calendar"
+          onClick={() => setAttendanceTab('calendar')}
+          className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+            attendanceTab === 'calendar'
+              ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-2xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          {lang === 'bn' ? 'হাজিরা ক্যালেন্ডার' : 'Attendance Calendar'}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={attendanceTab === 'leave_apps'}
+          data-testid="attendance-tab-leave-apps"
+          onClick={() => setAttendanceTab('leave_apps')}
+          className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+            attendanceTab === 'leave_apps'
+              ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-2xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <span>{lang === 'bn' ? 'ছুটির হিসাব' : 'Leave Records'}</span>
+          {leaveApplications.length > 0 && (
+            <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-[10px] font-extrabold tabular-nums">
+              {lang === 'bn' ? toBengaliDigits(leaveApplications.length) : leaveApplications.length}
+            </span>
+          )}
+        </button>
+      </div>
+
       {feedback && (
         <div className="bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 px-3.5 py-2.5 rounded-xl flex items-center gap-2 text-xs font-bold shadow-xs">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>{feedback}</span>
         </div>
       )}
+
+      {attendanceTab === 'leave_apps' && (
+        <section
+          data-testid="leave-applications-section"
+          className="space-y-4"
+        >
+          {/* Yearly Leave Balance Summary Card (Clean, No Subtitles) */}
+          <div
+            data-testid="yearly-leave-summary-card"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs"
+          >
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+              <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
+                {lang === 'bn' ? 'বার্ষিক ছুটির হিসাব' : 'Annual Leave Balance'}
+              </h2>
+              <div className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setLeaveSummaryYear((y) => y - 1)}
+                  aria-label={lang === 'bn' ? 'আগের বছর' : 'Previous year'}
+                  className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="px-2 text-xs font-extrabold text-slate-900 dark:text-white tabular-nums">
+                  {lang === 'bn' ? toBengaliDigits(leaveSummaryYear) : leaveSummaryYear}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setLeaveSummaryYear((y) => y + 1)}
+                  aria-label={lang === 'bn' ? 'পরের বছর' : 'Next year'}
+                  className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {yearlyLeaveBalances.map((row) => (
+                <div
+                  key={row.type}
+                  data-testid={`leave-balance-${row.type}`}
+                  className={`p-3 rounded-xl border space-y-1.5 ${
+                    row.isExceeded
+                      ? 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800'
+                      : 'bg-slate-50/80 dark:bg-slate-800/50 border-slate-200/80 dark:border-slate-700/80'
+                  }`}
+                >
+                  <span className="text-xs font-extrabold text-slate-900 dark:text-white block">
+                    {lang === 'bn' ? row.labelBn : row.labelEn}
+                  </span>
+                  <div className="flex items-baseline justify-between gap-1 text-[11px] tabular-nums">
+                    <span className="text-slate-500 dark:text-slate-400">
+                      {lang === 'bn' ? 'বাকি' : 'Left'}
+                    </span>
+                    <span
+                      className={`text-sm font-black ${
+                        row.isExceeded
+                          ? 'text-amber-700 dark:text-amber-400'
+                          : 'text-emerald-700 dark:text-emerald-400'
+                      }`}
+                    >
+                      {formatNumber(row.remaining, lang)} {lang === 'bn' ? 'দিন' : 'd'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 tabular-nums pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
+                    <span>
+                      {lang === 'bn' ? 'প্রাপ্য' : 'Allow'} {formatNumber(row.allowed, lang)}
+                    </span>
+                    <span>
+                      {lang === 'bn' ? 'গৃহীত' : 'Taken'} {formatNumber(row.taken, lang)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Add / Edit Leave Record Form (No Subtitle) */}
+          <form
+            noValidate
+            onSubmit={handleSubmitLeaveApplication}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xs"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
+                {editingLeaveId
+                  ? lang === 'bn'
+                    ? 'ছুটির রেকর্ড এডিট করুন'
+                    : 'Edit Leave Record'
+                  : lang === 'bn'
+                  ? 'ছুটি যোগ করুন'
+                  : 'Add Leave Record'}
+              </h2>
+              {editingLeaveId && (
+                <button
+                  type="button"
+                  onClick={resetLeaveForm}
+                  className="text-xs font-bold text-slate-500 hover:text-slate-800 dark:text-slate-400 cursor-pointer"
+                >
+                  {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                </button>
+              )}
+            </div>
+
+            {leaveAppError && (
+              <div
+                role="alert"
+                className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-bold text-rose-700 dark:text-rose-300"
+              >
+                {leaveAppError}
+              </div>
+            )}
+
+            {willExceedLeaveQuota && (
+              <div
+                data-testid="leave-quota-soft-warning"
+                className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-2"
+              >
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  {lang === 'bn'
+                    ? 'এই ছুটির বার্ষিক কোটা শেষ হয়েছে, তবুও রেকর্ড সেভ করতে পারবেন।'
+                    : 'Annual quota for this leave type is exceeded, but you can still save.'}
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  {lang === 'bn' ? 'শুরুর তারিখ' : 'Start Date'}
+                  <span className="text-rose-600 ml-0.5">*</span>
+                </label>
+                <DateInputDMY
+                  value={leaveStartDate}
+                  lang={lang}
+                  dataTestId="leave-app-start-date"
+                  onChange={(d) => {
+                    setLeaveStartDate(d);
+                    if (leaveEndDate < d) setLeaveEndDate(d);
+                  }}
+                  className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 text-xs sm:text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  {lang === 'bn' ? 'শেষ তারিখ' : 'End Date'}
+                  <span className="text-rose-600 ml-0.5">*</span>
+                </label>
+                <DateInputDMY
+                  value={leaveEndDate}
+                  lang={lang}
+                  dataTestId="leave-app-end-date"
+                  onChange={setLeaveEndDate}
+                  className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 text-xs sm:text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  {lang === 'bn' ? 'ছুটির ধরন' : 'Leave Type'}
+                </label>
+                <select
+                  data-testid="leave-app-type-select"
+                  value={leaveAppType}
+                  onChange={(e) => setLeaveAppType(e.target.value as LeaveApplicationType)}
+                  className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 text-xs sm:text-sm font-semibold text-slate-900 dark:text-white"
+                >
+                  <option value="casual">{lang === 'bn' ? 'নৈমিত্তিক (১০ দিন)' : 'Casual (10d)'}</option>
+                  <option value="sick">{lang === 'bn' ? 'অসুস্থতা (১৪ দিন)' : 'Sick (14d)'}</option>
+                  <option value="festival">{lang === 'bn' ? 'উৎসব (১১ দিন)' : 'Festival (11d)'}</option>
+                  <option value="earned">{lang === 'bn' ? 'অর্জিত ছুটি' : 'Earned Leave'}</option>
+                  <option value="maternity">{lang === 'bn' ? 'মাতৃত্বকালীন (১১২ দিন)' : 'Maternity (112d)'}</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  {lang === 'bn' ? 'অবস্থা' : 'Status'}
+                </label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    data-testid="leave-status-taken-btn"
+                    onClick={() => setLeaveAppStatus('taken')}
+                    className={`min-h-[42px] rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                      leaveAppStatus === 'taken'
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700'
+                    }`}
+                  >
+                    {lang === 'bn' ? 'গৃহীত' : 'Taken'}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="leave-status-planned-btn"
+                    onClick={() => setLeaveAppStatus('planned')}
+                    className={`min-h-[42px] rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                      leaveAppStatus === 'planned'
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700'
+                    }`}
+                  >
+                    {lang === 'bn' ? 'পরিকল্পিত' : 'Planned'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                {lang === 'bn' ? 'নোট / কারণ (ঐচ্ছিক)' : 'Note / Reason (Optional)'}
+              </label>
+              <input
+                type="text"
+                data-testid="leave-app-reason-input"
+                value={leaveAppReason}
+                onChange={(e) => setLeaveAppReason(e.target.value)}
+                placeholder={
+                  lang === 'bn'
+                    ? 'যেমন: পারিবারিক কাজ বা জ্বর'
+                    : 'e.g., Family matter or fever'
+                }
+                className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 text-xs sm:text-sm text-slate-900 dark:text-white"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-1">
+              <span className="text-xs font-bold text-slate-600 dark:text-slate-400 tabular-nums">
+                {lang === 'bn'
+                  ? `মোট: ${formatNumber(draftDaysPreview, 'bn')} দিন`
+                  : `Total: ${draftDaysPreview} day${draftDaysPreview === 1 ? '' : 's'}`}
+              </span>
+              <button
+                type="submit"
+                data-testid="leave-app-submit-btn"
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-bold cursor-pointer shadow-2xs"
+              >
+                {editingLeaveId
+                  ? lang === 'bn'
+                    ? 'আপডেট করুন'
+                    : 'Update Record'
+                  : lang === 'bn'
+                  ? 'সংরক্ষণ করুন'
+                  : 'Save Leave'}
+              </button>
+            </div>
+          </form>
+
+          {/* Leave Records Grouped by Month */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
+            <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+              {lang === 'bn' ? 'সংরক্ষিত ছুটির তালিকা' : 'Saved Leave Records'}
+            </h3>
+            {groupedLeaveApps.length === 0 ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400 py-5 text-center">
+                {lang === 'bn' ? 'এখনো কোনো ছুটি যোগ করা হয়নি।' : 'No leave records added yet.'}
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {groupedLeaveApps.map(([monthKey, monthItems]) => (
+                  <div key={monthKey} className="space-y-2">
+                    <div className="flex items-center justify-between text-xs font-extrabold text-slate-500 dark:text-slate-400 px-1">
+                      <span>{formatMonthLabel(monthKey, lang)}</span>
+                      <span className="tabular-nums">
+                        {formatNumber(
+                          monthItems.reduce((s, item) => s + (Number(item.totalDays) || 0), 0),
+                          lang
+                        )}{' '}
+                        {lang === 'bn' ? 'দিন' : 'days'}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {monthItems.map((app) => {
+                        const typeLabel =
+                          app.leaveType === 'sick'
+                            ? lang === 'bn'
+                              ? 'অসুস্থতা ছুটি'
+                              : 'Sick Leave'
+                            : app.leaveType === 'festival'
+                            ? lang === 'bn'
+                              ? 'উৎসব ছুটি'
+                              : 'Festival Leave'
+                            : app.leaveType === 'earned'
+                            ? lang === 'bn'
+                              ? 'অর্জিত ছুটি'
+                              : 'Earned Leave'
+                            : app.leaveType === 'maternity'
+                            ? lang === 'bn'
+                              ? 'মাতৃত্বকালীন ছুটি'
+                              : 'Maternity Leave'
+                            : lang === 'bn'
+                            ? 'নৈমিত্তিক ছুটি'
+                            : 'Casual Leave';
+                        const normStatus = normalizeLeaveStatus(app.status);
+                        const isPlanned = normStatus === 'planned';
+                        return (
+                          <div
+                            key={app.id}
+                            data-testid="leave-application-item"
+                            className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                          >
+                            <div className="space-y-0.5 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                                  {typeLabel}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                    isPlanned
+                                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                      : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                  }`}
+                                >
+                                  {isPlanned
+                                    ? lang === 'bn'
+                                      ? 'পরিকল্পিত'
+                                      : 'Planned'
+                                    : lang === 'bn'
+                                    ? 'গৃহীত'
+                                    : 'Taken'}
+                                </span>
+                                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 tabular-nums">
+                                  {formatNumber(app.totalDays, lang)} {lang === 'bn' ? 'দিন' : 'd'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600 dark:text-slate-300 tabular-nums">
+                                {formatDateReadable(app.startDate, lang)}
+                                {app.endDate !== app.startDate
+                                  ? ` — ${formatDateReadable(app.endDate, lang)}`
+                                  : ''}
+                              </p>
+                              {app.reason && (
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  {app.reason}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void updateLeaveApplicationStatus(
+                                    app.id,
+                                    isPlanned ? 'taken' : 'planned'
+                                  )
+                                }
+                                className="px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 text-[11px] font-bold cursor-pointer"
+                              >
+                                {isPlanned
+                                  ? lang === 'bn'
+                                    ? 'গৃহীত করুন'
+                                    : 'Mark Taken'
+                                  : lang === 'bn'
+                                  ? 'পরিকল্পিত'
+                                  : 'Set Planned'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleEditLeaveApplication(app)}
+                                aria-label={lang === 'bn' ? 'এডিট করুন' : 'Edit'}
+                                className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              {confirmDeleteLeaveId === app.id ? (
+                                <div className="inline-flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void deleteLeaveApplication(app.id);
+                                      setConfirmDeleteLeaveId(null);
+                                    }}
+                                    className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-bold cursor-pointer"
+                                  >
+                                    {lang === 'bn' ? 'নিশ্চিত' : 'Confirm'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteLeaveId(null)}
+                                    className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                                  >
+                                    {lang === 'bn' ? 'না' : 'No'}
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteLeaveId(app.id)}
+                                  aria-label={lang === 'bn' ? 'মুছুন' : 'Delete'}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {attendanceTab === 'calendar' && (
+        <>
 
       {isUpcomingMonth && (
         <div
@@ -1091,14 +1731,13 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
             <div className="flex items-center gap-1.5 min-w-0 text-rose-800 dark:text-rose-200 font-semibold">
               <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
               <span className="truncate">
-                {lang === 'bn'
-                  ? bonusEvaluation.reasonBn ||
-                    `মিসিং/অনুপস্থিত তারিখ: ${formatNumber(
-                      recentAttendanceTable.missedSummary.bonusAffectedTotalCount,
-                      'bn'
-                    )} দিন`
-                  : bonusEvaluation.reasonEn ||
-                    `${recentAttendanceTable.missedSummary.bonusAffectedTotalCount} missed/affected date(s)`}
+                {recentAttendanceTable.missedSummary.bonusAffectedTotalCount > 0
+                  ? lang === 'bn'
+                    ? 'আপনার হাজিরা বোনাস মিস হওয়ার তারিখ'
+                    : 'Attendance bonus missed dates'
+                  : lang === 'bn'
+                  ? bonusEvaluation.reasonBn || 'আপনার হাজিরা বোনাস মিস হওয়ার তারিখ'
+                  : bonusEvaluation.reasonEn || 'Attendance bonus missed dates'}
               </span>
             </div>
             {recentAttendanceTable.missedSummary.bonusAffectedTotalCount > 0 && (
@@ -1191,6 +1830,42 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold text-slate-900 dark:text-white"
                 />
               </div>
+            </div>
+
+            {/* Late Days Limit Settings (1, 2, 3, 5 or any custom number of days) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-100 dark:border-slate-800 items-end">
+              <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                <label className="text-xs font-bold text-slate-800 dark:text-slate-200 cursor-pointer">
+                  {lang === 'bn' ? 'লেট করলে হাজিরা বোনাস বাতিল' : 'Forfeit Bonus on Late Days'}
+                </label>
+                <input
+                  type="checkbox"
+                  data-testid="attendance-late-penalty-toggle"
+                  checked={Boolean(profile.latePenaltyEnabled)}
+                  onChange={(e) => updateProfile({ latePenaltyEnabled: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                />
+              </div>
+
+              {profile.latePenaltyEnabled && (
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                    {lang === 'bn' ? 'সর্বোচ্চ লেট সীমা (দিন)' : 'Max Late Days Limit'}
+                  </label>
+                  <input
+                    type="number"
+                    data-testid="attendance-max-late-days-input"
+                    min={1}
+                    max={31}
+                    value={profile.maxLateDaysForBonus || 3}
+                    onChange={(e) => {
+                      const val = Math.max(1, Math.min(31, Number(e.target.value) || 1));
+                      updateProfile({ maxLateDaysForBonus: val });
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold text-slate-900 dark:text-white"
+                  />
+                </div>
+              )}
             </div>
 
             {/* Day & Night Shift Cutoff Times for Punching Card */}
@@ -1761,9 +2436,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                             if (opt.id === 'absent') {
                               setEntryOtHours(0);
                               setEntryHasBonus(false);
-                            } else if (opt.id === 'late') {
-                              setEntryHasBonus(false);
-                            } else if (opt.id === 'present') {
+                            } else if (opt.id === 'present' || opt.id === 'late') {
                               setEntryHasBonus(true);
                             }
                           }}
@@ -1849,27 +2522,40 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Manual Attendance Bonus Checkbox */}
-                    <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        data-testid="attendance-bonus-toggle-checkbox"
-                        checked={entryHasBonus}
-                        disabled={isEntryLocked}
-                        onChange={(e) => setEntryHasBonus(e.target.checked)}
-                        className="w-4 h-4 mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
-                      />
-                      <div className="text-xs">
-                        <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                    {/* Manual Attendance Bonus Checkbox or Clean Monthly Missed Notice */}
+                    {selectedDateBonusLock.isAlreadyMissedInMonth ? (
+                      <div
+                        data-testid="attendance-bonus-locked-notice"
+                        className="p-2.5 rounded-xl bg-rose-50/80 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-xs font-semibold text-rose-700 dark:text-rose-300"
+                      >
+                        {lang === 'bn'
+                          ? selectedDateBonusLock.noticeBn
+                          : selectedDateBonusLock.noticeEn}
+                      </div>
+                    ) : entryCrossesLateLimit ? (
+                      <div
+                        data-testid="attendance-bonus-late-limit-notice"
+                        className="p-2.5 rounded-xl bg-rose-50/80 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-xs font-semibold text-rose-700 dark:text-rose-300"
+                      >
+                        {lang === 'bn'
+                          ? `${toBengaliDigits(selectedDateBonusLock.maxLateDaysLimit)} দিন দেরি হওয়ায় এই মাসের হাজিরা বোনাস মিস হয়েছে`
+                          : `Attendance bonus missed (${selectedDateBonusLock.maxLateDaysLimit} late days reached this month)`}
+                      </div>
+                    ) : (
+                      <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid="attendance-bonus-toggle-checkbox"
+                          checked={entryHasBonus}
+                          disabled={isEntryLocked}
+                          onChange={(e) => setEntryHasBonus(e.target.checked)}
+                          className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
+                        />
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
                           {lang === 'bn' ? 'হাজিরা বোনাস বহাল আছে (টিক দিন)' : 'Attendance Bonus Active'}
                         </span>
-                        <span className="text-[10px] text-slate-500 dark:text-slate-400">
-                          {lang === 'bn'
-                            ? 'কারখানায় কোনো কারণে আজকের বোনাস কাটা গেলে টিক তুলে দিন'
-                            : 'Uncheck if attendance bonus was forfeited today'}
-                        </span>
-                      </div>
-                    </label>
+                      </label>
+                    )}
 
                     {/* Mandatory Overtime Selection when Present */}
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 space-y-2">
@@ -2448,6 +3134,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 };

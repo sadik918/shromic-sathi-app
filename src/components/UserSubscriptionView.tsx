@@ -582,7 +582,18 @@ export const UserSubscriptionView: React.FC<UserSubscriptionViewProps> = ({
                   </span>
                 );
               }
+              const subFeatureKeys = (feat.subFeatures || []).map((s) => s.key);
+              const hasLockedSubFeatures =
+                subFeatureKeys.length > 0 &&
+                subFeatureKeys.some((k) => rule.subFeatures && rule.subFeatures[k] === false);
               if (rule.maxRecords === -1) {
+                if (hasLockedSubFeatures) {
+                  return (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                      {tierName}: মূল ফিচার ✓
+                    </span>
+                  );
+                }
                 return (
                   <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
                     {tierName}: সীমাহীন ✓

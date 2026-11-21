@@ -4,6 +4,7 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   updateProfile as updateFirebaseAuthProfile,
   updatePassword,
   EmailAuthProvider,
@@ -30,15 +31,20 @@ import {
 import { auth, db, googleProvider, OperationType, type FirestoreErrorInfo } from '../firebase';
 import type {
   AlarmItem,
+  AnonymousGradeAreaBenchmark,
   AttendanceRecord,
   EditHistoryEntry,
   ExpenseRecord,
   FeedbackCategory,
   GarmentWorkplace,
   Language,
+  LeaveApplication,
+  LeaveApplicationStatus,
   LoanRepayment,
   LoanStatus,
   OvertimeRecord,
+  PasswordResetResult,
+  PayslipCheckRecord,
   PersonalLoan,
   RecoverableEntityType,
   ReminderItem,
@@ -50,6 +56,8 @@ import type {
   WorkerContact,
   WorkerProfile,
 } from '../types';
+import { useOnlineStatus, type SyncState } from '../hooks/useOnlineStatus';
+import { buildBenchmarkBucketKey } from '../utils/featureHelpers';
 import {
   DEMO_WRITE_BLOCKED_NOTICE_BN,
   createEmptyUserStore,
@@ -72,6 +80,7 @@ import {
 import {
   buildJobTransitionArchive,
   getCurrentMonthISO,
+  getSalaryStructure,
   getTodayISO,
   isFutureDate,
   isFutureMonth,
@@ -170,6 +179,8 @@ interface DataContextValue {
   resetDemoData: () => void;
   pendingWritesCount: number;
   offlinePendingCount: number;
+  isOnline: boolean;
+  syncState: SyncState;
   syncOfflineDataToCloud: (forceRetry?: boolean) => Promise<void>;
   todayISO: string;
   currentMonthISO: string;
@@ -184,6 +195,9 @@ interface DataContextValue {
   salaryRecords: SalaryRecord[];
   payments: SalaryPayment[];
   attendance: AttendanceRecord[];
+  leaveApplications: LeaveApplication[];
+  payslipChecks: PayslipCheckRecord[];
+  anonymousBenchmark: AnonymousGradeAreaBenchmark | null;
   expenses: ExpenseRecord[];
   savings: SavingsGoal[];
   documents: VaultDocument[];
@@ -199,6 +213,7 @@ interface DataContextValue {
   loginWithGoogle: (mode?: 'signin' | 'signup') => Promise<void>;
   loginWithCredentials: (identifier: string, password: string) => Promise<void>;
   signUpWithCredentials: (fullName: string, identifier: string, password: string) => Promise<void>;
+  sendPasswordReset: (identifier: string) => Promise<PasswordResetResult>;
   changeUserPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   needsOnboarding: boolean;
   isManualSetupMode: boolean;
@@ -216,6 +231,11 @@ interface DataContextValue {
   deletePayment: (id: string) => Promise<void>;
   saveAttendance: (rec: Omit<AttendanceRecord, 'id' | 'userId'>, existingId?: string) => Promise<void>;
   deleteAttendance: (id: string) => Promise<void>;
+  saveLeaveApplication: (rec: Omit<LeaveApplication, 'id' | 'userId' | 'createdAt' | 'updatedAt'>, existingId?: string) => Promise<void>;
+  updateLeaveApplicationStatus: (id: string, status: LeaveApplicationStatus) => Promise<void>;
+  deleteLeaveApplication: (id: string) => Promise<void>;
+  savePayslipCheck: (rec: Omit<PayslipCheckRecord, 'id' | 'userId'>) => Promise<PayslipCheckRecord | null>;
+  deletePayslipCheck: (id: string) => Promise<void>;
   saveExpense: (rec: Omit<ExpenseRecord, 'id' | 'userId'>, existingId?: string) => Promise<void>;
   deleteExpense: (id: string) => Promise<void>;
   saveSavingsGoal: (rec: Omit<SavingsGoal, 'id' | 'userId'>, existingId?: string) => Promise<void>;
@@ -920,6 +940,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [fbAttendance, setFbAttendance] = useState<AttendanceRecord[]>(
     () => initialCachedMirror?.attendance || []
   );
+  const [leaveApplications, setLeaveApplications] = useState<LeaveApplication[]>(() => {
+    if (typeof window === 'undefined') return [];
+    const uidKey = initialCachedUser?.uid || 'local';
+    try {
+      const raw = localStorage.getItem(`shromik_sathi_leave_apps_${uidKey}`);
+      return raw ? (JSON.parse(raw) as LeaveApplication[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [payslipChecks, setPayslipChecks] = useState<PayslipCheckRecord[]>(() => {
+    if (typeof window === 'undefined') return [];
+    const uidKey = initialCachedUser?.uid || 'local';
+    try {
+      const raw = localStorage.getItem(`shromik_sathi_payslip_checks_${uidKey}`);
+      return raw ? (JSON.parse(raw) as PayslipCheckRecord[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [anonymousBenchmark, setAnonymousBenchmark] =
+    useState<AnonymousGradeAreaBenchmark | null>(null);
+  const { isOnline, syncState } = useOnlineStatus(pendingWritesCount + offlinePendingCount);
   const [fbExpenses, setFbExpenses] = useState<ExpenseRecord[]>(
     () => initialCachedMirror?.expenses || []
   );
@@ -3575,6 +3618,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         monthlyBudgetTarget: Number(patch.monthlyBudgetTarget ?? activeProfile.monthlyBudgetTarget ?? 9000),
       };
 
+      // Auto-heal salary breakdown so grossSalary always equals sum of allowances and houseRentAllowance is never stranded at 0
+      if (
+        merged.grossSalary > 0 &&
+        (patch.grossSalary !== undefined ||
+          patch.basicSalary !== undefined ||
+          patch.houseRentAllowance !== undefined ||
+          Number(merged.houseRentAllowance || 0) <= 0)
+      ) {
+        const canonicalSalary = getSalaryStructure(merged);
+        merged.grossSalary = canonicalSalary.grossSalary;
+        merged.basicSalary = canonicalSalary.basicSalary;
+        merged.houseRentAllowance = canonicalSalary.houseRentAllowance;
+        merged.medicalAllowance = canonicalSalary.medicalAllowance;
+        merged.transportAllowance = canonicalSalary.transportAllowance;
+        merged.foodAllowance = canonicalSalary.foodAllowance;
+      }
+
       // Keep active current workplace synced only if factory name is present
       if (
         (patch.factoryName !== undefined ||
@@ -3704,7 +3764,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let cred;
     try {
       cred = await signInWithPopup(auth, googleProvider);
-    } catch (fbErr) {
+    } catch (fbErr: any) {
+      const code = fbErr?.code || '';
+      if (
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/cancelled-popup-request'
+      ) {
+        throw new Error(
+          lang === 'bn'
+            ? 'লগইন বাতিল হয়েছে, আবার চেষ্টা করুন।'
+            : 'Sign-in was cancelled. Please try again.'
+        );
+      }
       throw new Error(mapFirebaseAuthError(fbErr, lang));
     }
     if (!cred.user) return;
@@ -3950,11 +4021,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
     }
 
-    if (!cleanNew || cleanNew.length < 6) {
+    if (!cleanNew || cleanNew.length < 8) {
       throw new Error(
         lang === 'bn'
-          ? 'নতুন পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'
-          : 'New password must be at least 6 characters long.'
+          ? 'নতুন পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে।'
+          : 'New password must be at least 8 characters long.'
       );
     }
 
@@ -4024,11 +4095,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           : 'Demo mode has been removed. Please use your personal email or phone number.'
       );
     }
-    if (password.length < 6) {
+    if (password.length < 8) {
       throw new Error(
         lang === 'bn'
-          ? 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'
-          : 'Password must be at least 6 characters.'
+          ? 'পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে।'
+          : 'Password must be at least 8 characters.'
       );
     }
 
@@ -4095,6 +4166,56 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem('shromik_sathi_needs_onboarding', '1');
       setNeedsOnboarding(true);
     } catch (fbErr) {
+      throw new Error(mapFirebaseAuthError(fbErr, lang));
+    }
+  };
+
+  const sendPasswordReset = async (identifier: string): Promise<PasswordResetResult> => {
+    const cleanId = identifier.trim();
+    if (!cleanId) {
+      throw new Error(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে আপনার ইমেইল, মোবাইল নম্বর বা ইউজারনেম লিখুন।'
+          : 'Please enter your email, mobile number, or username.'
+      );
+    }
+
+    // If not an email address (phone number or username), guide to Support Recovery (no fake OTP)
+    if (!cleanId.includes('@')) {
+      return {
+        status: 'needs_support_recovery',
+        messageBn:
+          'মোবাইল নম্বর বা ইউজারনেম দিয়ে তৈরি অ্যাকাউন্টে ইমেইল রিসেট লিংক পাঠানো যায় না। অ্যাকাউন্ট পুনরুদ্ধারের জন্য সাপোর্টে যোগাযোগ করুন।',
+        messageEn:
+          'Password reset links require an email address. For phone or username accounts, please contact Support for account recovery.',
+      };
+    }
+
+    const email = normalizeIdentifierToEmail(cleanId);
+    const neutralResult: PasswordResetResult = {
+      status: 'email_sent',
+      messageBn:
+        'আপনার ইমেইলে পাসওয়ার্ড রিসেট লিংক পাঠানো হয়েছে। ইনবক্স/স্প্যাম চেক করুন।',
+      messageEn:
+        'A password reset link has been sent to your email. Please check your inbox and spam folder.',
+    };
+
+    try {
+      await sendPasswordResetEmail(auth, email);
+      return neutralResult;
+    } catch (fbErr: any) {
+      const code = fbErr?.code || '';
+      // Never reveal whether an email exists in the system
+      if (code === 'auth/user-not-found') {
+        return neutralResult;
+      }
+      if (code === 'auth/invalid-email') {
+        throw new Error(
+          lang === 'bn'
+            ? 'সঠিক ইমেইল ঠিকানা লিখুন।'
+            : 'Please enter a valid email address.'
+        );
+      }
       throw new Error(mapFirebaseAuthError(fbErr, lang));
     }
   };
@@ -4841,6 +4962,238 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     });
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const uidKey = user?.uid || 'local';
+    try {
+      const raw = localStorage.getItem(`shromik_sathi_leave_apps_${uidKey}`);
+      setLeaveApplications(raw ? (JSON.parse(raw) as LeaveApplication[]) : []);
+    } catch {
+      setLeaveApplications([]);
+    }
+  }, [user?.uid]);
+
+  const persistLeaveApps = useCallback(
+    (nextApps: LeaveApplication[]) => {
+      setLeaveApplications(nextApps);
+      if (typeof window !== 'undefined') {
+        const uidKey = user?.uid || 'local';
+        try {
+          localStorage.setItem(`shromik_sathi_leave_apps_${uidKey}`, JSON.stringify(nextApps));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+    },
+    [user?.uid]
+  );
+
+  const syncLeaveDatesToAttendance = async (app: LeaveApplication) => {
+    if (!app.startDate || !app.endDate) return;
+    const start = new Date(`${app.startDate}T00:00:00`);
+    const end = new Date(`${app.endDate}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return;
+    const leaveCatMap: Record<LeaveApplication['leaveType'], AttendanceRecord['leaveCategory']> = {
+      casual: 'casual',
+      sick: 'sick',
+      festival: 'festival',
+      earned: 'earned',
+      maternity: 'maternity',
+    };
+    const cursor = new Date(start);
+    let safety = 0;
+    while (cursor <= end && safety < 120) {
+      const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(
+        cursor.getDate()
+      ).padStart(2, '0')}`;
+      const month = iso.slice(0, 7);
+      // Only create attendance entries up to today (respects future date guard in saveAttendance)
+      if (iso <= todayISO) {
+        await saveAttendance({
+          date: iso,
+          month,
+          status: 'approved_leave',
+          leaveCategory: leaveCatMap[app.leaveType],
+          checkIn: '',
+          checkOut: '',
+          notes: app.reason || (lang === 'bn' ? 'ছুটির রেকর্ড' : 'Leave record'),
+        });
+      }
+      cursor.setDate(cursor.getDate() + 1);
+      safety += 1;
+    }
+  };
+
+  const saveLeaveApplication = async (
+    rec: Omit<LeaveApplication, 'id' | 'userId' | 'createdAt' | 'updatedAt'>,
+    existingId?: string
+  ) => {
+    if (isReadOnlyDemo) {
+      triggerReadOnlyBlock();
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const id = existingId || makeStableId('leave_app');
+    const safeStart = rec.startDate.slice(0, 15);
+    const safeEnd = (rec.endDate || rec.startDate).slice(0, 15);
+    const startDt = new Date(`${safeStart}T00:00:00Z`);
+    const endDt = new Date(`${safeEnd}T00:00:00Z`);
+    const computedDays =
+      !Number.isNaN(startDt.getTime()) && !Number.isNaN(endDt.getTime()) && endDt >= startDt
+        ? Math.floor((endDt.getTime() - startDt.getTime()) / (24 * 60 * 60 * 1000)) + 1
+        : 1;
+    const item: LeaveApplication = {
+      id,
+      userId: user?.uid || activeProfile.userId || 'local',
+      startDate: safeStart,
+      endDate: safeEnd,
+      totalDays: rec.totalDays && rec.totalDays > 0 ? rec.totalDays : computedDays,
+      leaveType: rec.leaveType,
+      reason: (rec.reason || '').slice(0, 300),
+      status: rec.status || 'taken',
+      createdAt: existingId
+        ? leaveApplications.find((a) => a.id === existingId)?.createdAt || nowIso
+        : nowIso,
+      updatedAt: nowIso,
+    };
+    const exists = leaveApplications.some((a) => a.id === id);
+    const next = exists
+      ? leaveApplications.map((a) => (a.id === id ? item : a))
+      : [item, ...leaveApplications];
+    persistLeaveApps(next);
+    if (item.status === 'taken' || item.status === 'approved') {
+      await syncLeaveDatesToAttendance(item);
+    }
+  };
+
+  const updateLeaveApplicationStatus = async (id: string, status: LeaveApplicationStatus) => {
+    if (isReadOnlyDemo) {
+      triggerReadOnlyBlock();
+      return;
+    }
+    const target = leaveApplications.find((a) => a.id === id);
+    if (!target) return;
+    const updated: LeaveApplication = {
+      ...target,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+    const next = leaveApplications.map((a) => (a.id === id ? updated : a));
+    persistLeaveApps(next);
+    if (status === 'taken' || status === 'approved') {
+      await syncLeaveDatesToAttendance(updated);
+    }
+  };
+
+  const deleteLeaveApplication = async (id: string) => {
+    if (isReadOnlyDemo) {
+      triggerReadOnlyBlock();
+      return;
+    }
+    const next = leaveApplications.filter((a) => a.id !== id);
+    persistLeaveApps(next);
+  };
+
+  const persistPayslipChecks = useCallback(
+    (nextChecks: PayslipCheckRecord[]) => {
+      setPayslipChecks(nextChecks);
+      if (typeof window !== 'undefined') {
+        const uidKey = user?.uid || 'local';
+        try {
+          localStorage.setItem(`shromik_sathi_payslip_checks_${uidKey}`, JSON.stringify(nextChecks));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+    },
+    [user?.uid]
+  );
+
+  const savePayslipCheck = async (
+    rec: Omit<PayslipCheckRecord, 'id' | 'userId'>
+  ): Promise<PayslipCheckRecord | null> => {
+    if (isReadOnlyDemo) {
+      triggerReadOnlyBlock();
+      return null;
+    }
+    const item: PayslipCheckRecord = {
+      ...rec,
+      id: makeStableId('payslip_chk'),
+      userId: user?.uid || activeProfile.userId || 'local',
+    };
+    const next = [item, ...payslipChecks.filter((c) => c.id !== item.id)].slice(0, 60);
+    persistPayslipChecks(next);
+    return item;
+  };
+
+  const deletePayslipCheck = async (id: string) => {
+    if (isReadOnlyDemo) {
+      triggerReadOnlyBlock();
+      return;
+    }
+    persistPayslipChecks(payslipChecks.filter((c) => c.id !== id));
+  };
+
+  // Reload per-user local leaveApplications & payslipChecks when active UID changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const uidKey = user?.uid || 'local';
+    try {
+      const rawLeave = localStorage.getItem(`shromik_sathi_leave_apps_${uidKey}`);
+      setLeaveApplications(rawLeave ? (JSON.parse(rawLeave) as LeaveApplication[]) : []);
+    } catch {
+      setLeaveApplications([]);
+    }
+    try {
+      const rawChecks = localStorage.getItem(`shromik_sathi_payslip_checks_${uidKey}`);
+      setPayslipChecks(rawChecks ? (JSON.parse(rawChecks) as PayslipCheckRecord[]) : []);
+    } catch {
+      setPayslipChecks([]);
+    }
+  }, [user?.uid]);
+
+  // Fetch real anonymized grade+area median benchmark from Firestore (strictly shown only if sampleCount >= 20)
+  useEffect(() => {
+    let cancelled = false;
+    const bucketKey = buildBenchmarkBucketKey(
+      activeProfile.salaryGrade,
+      activeProfile.factoryBranch
+    );
+    if (!bucketKey || !user || isDemoMode || !isOnline) {
+      setAnonymousBenchmark(null);
+      return;
+    }
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'anonymousSalaryBenchmarks', bucketKey));
+        if (cancelled) return;
+        if (snap.exists()) {
+          const data = snap.data() as Partial<AnonymousGradeAreaBenchmark>;
+          if (typeof data.sampleCount === 'number' && data.sampleCount >= 20) {
+            setAnonymousBenchmark({
+              bucketKey,
+              salaryGrade: data.salaryGrade || activeProfile.salaryGrade,
+              area: data.area || activeProfile.factoryBranch || '',
+              sampleCount: data.sampleCount,
+              medianGrossSalary: Number(data.medianGrossSalary) || 0,
+              medianMonthlyOtHours: Number(data.medianMonthlyOtHours) || 0,
+              medianAttendanceBonus: Number(data.medianAttendanceBonus) || 0,
+              updatedAtISO: data.updatedAtISO,
+            });
+            return;
+          }
+        }
+        setAnonymousBenchmark(null);
+      } catch {
+        // Silently hide comparison if collection doesn't exist or rules/network deny — never invent numbers
+        if (!cancelled) setAnonymousBenchmark(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, isDemoMode, isOnline, activeProfile.salaryGrade, activeProfile.factoryBranch]);
 
   const saveExpense = async (
     rec: Omit<ExpenseRecord, 'id' | 'userId'>,
@@ -6778,6 +7131,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     resetDemoData,
     pendingWritesCount,
     offlinePendingCount,
+    isOnline,
+    syncState,
     syncOfflineDataToCloud,
     todayISO,
     currentMonthISO,
@@ -6792,6 +7147,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     salaryRecords: isDemoMode || !user ? demoState.salaryRecords : fbSalaryRecords,
     payments: isDemoMode || !user ? demoState.payments : fbPayments,
     attendance: isDemoMode || !user ? demoState.attendance : fbAttendance,
+    leaveApplications,
+    payslipChecks,
+    anonymousBenchmark,
     expenses: isDemoMode || !user ? demoState.expenses : fbExpenses,
     savings: isDemoMode || !user ? demoState.savings : fbSavings,
     documents: isDemoMode || !user ? demoState.documents : fbDocuments,
@@ -6807,6 +7165,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loginWithGoogle,
     loginWithCredentials,
     signUpWithCredentials,
+    sendPasswordReset,
     changeUserPassword,
     needsOnboarding: !isReadOnlyDemo && needsOnboarding,
     isManualSetupMode,
@@ -6824,6 +7183,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     deletePayment,
     saveAttendance,
     deleteAttendance,
+    saveLeaveApplication,
+    updateLeaveApplicationStatus,
+    deleteLeaveApplication,
+    savePayslipCheck,
+    deletePayslipCheck,
     saveExpense,
     deleteExpense,
     saveSavingsGoal,

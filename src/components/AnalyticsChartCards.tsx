@@ -32,6 +32,7 @@ import type {
   OvertimePieAnalytics,
   RecentActivityPieAnalytics,
 } from '../utils/homeAnalytics';
+import type { AnonymousComparisonViewData } from '../utils/featureHelpers';
 
 const TOOLTIP_STYLE = {
   backgroundColor: '#0f172a',
@@ -382,8 +383,8 @@ export const EarnedSalarySummaryPieCard: React.FC<EarnedSalarySummaryPieCardProp
       key: 'earned_base',
       nameBn: `চলতি অর্জিত বেতন (${formatNumber(attendedDaysCount, 'bn')} দিন)`,
       nameEn: `Earned Base Pay (${attendedDaysCount}d)`,
-      subLabelBn: `দৈনিক ${formatBDT(dailyWageRate, 'bn')} হিসেবে হাজিরা আয়`,
-      subLabelEn: `${formatBDT(dailyWageRate, 'en')}/day attendance pay`,
+      subLabelBn: `দৈনিক ${formatBDT(dailyWageRate, 'bn')} (মোট বেতন ÷ ৩০ দিন)`,
+      subLabelEn: `${formatBDT(dailyWageRate, 'en')}/day (Gross ÷ 30 days)`,
       value: Math.max(0, Math.round(earnedBasePay)),
       color: '#059669',
     },
@@ -395,24 +396,6 @@ export const EarnedSalarySummaryPieCard: React.FC<EarnedSalarySummaryPieCardProp
       subLabelEn: `Total ${otHours} hrs overtime pay`,
       value: Math.max(0, Math.round(otEarnings)),
       color: '#D97706',
-    },
-    {
-      key: 'payable_due',
-      nameBn: 'হাতে প্রাপ্য বেতন (বকেয়া)',
-      nameEn: 'Payable Salary (Due)',
-      subLabelBn: 'চলতি অর্জিত বেতন হতে হাতে প্রাপ্য',
-      subLabelEn: 'Net payable from earned salary',
-      value: Math.max(0, Math.round(outstandingBalance)),
-      color: '#2563EB',
-    },
-    {
-      key: 'received_pay',
-      nameBn: 'হাতে প্রাপ্ত বেতন',
-      nameEn: 'Received Salary',
-      subLabelBn: 'ইতিমধ্যে হাতে প্রাপ্ত টাকা',
-      subLabelEn: 'Salary already received',
-      value: Math.max(0, Math.round(receivedSalary)),
-      color: '#0D9488',
     },
     {
       key: 'bonus_allowance',
@@ -891,12 +874,14 @@ export const ExpenseRentTrendChartCard: React.FC<ExpenseRentTrendChartCardProps>
 interface FactoryComparisonChartsCardProps {
   lang: Language;
   analytics: FactoryComparisonAnalytics;
+  anonymousComparison?: AnonymousComparisonViewData | null;
   dataTestId?: string;
 }
 
 export const FactoryComparisonChartsCard: React.FC<FactoryComparisonChartsCardProps> = ({
   lang,
   analytics,
+  anonymousComparison = null,
   dataTestId = 'factory-comparison-charts-card',
 }) => {
   const [pieTab, setPieTab] = useState<'salary' | 'attendance'>('salary');
@@ -905,6 +890,11 @@ export const FactoryComparisonChartsCard: React.FC<FactoryComparisonChartsCardPr
       ? analytics.salaryCompositionSlices
       : analytics.attendanceBalanceSlices;
   const activeTotal = activeSlices.reduce((s, item) => s + item.value, 0);
+
+  const showPastFactoryComparison = analytics.hasPastFactory;
+  const showAnonymousComparison =
+    !showPastFactoryComparison && Boolean(anonymousComparison && anonymousComparison.sampleCount >= 20);
+  const hasRightComparisonCard = showPastFactoryComparison || showAnonymousComparison;
 
   const barData = analytics.comparisonBars.map((b) => ({
     label: lang === 'bn' ? b.labelBn : b.labelEn,
@@ -920,7 +910,7 @@ export const FactoryComparisonChartsCard: React.FC<FactoryComparisonChartsCardPr
   return (
     <div
       data-testid={dataTestId}
-      className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 sm:gap-4"
+      className={`grid grid-cols-1 ${hasRightComparisonCard ? 'lg:grid-cols-2' : ''} gap-3.5 sm:gap-4`}
     >
       {/* Left: Current Factory Pie Chart */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between space-y-3.5 sm:space-y-4">
@@ -1046,96 +1036,172 @@ export const FactoryComparisonChartsCard: React.FC<FactoryComparisonChartsCardPr
         </div>
       </div>
 
-      {/* Right: Previous vs Current Factory Comparison Graph */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between space-y-3.5">
-        <div className="flex flex-wrap items-start justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
-          <div className="flex items-start gap-2 min-w-0 flex-1">
-            <TrendingUp className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />
-            <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white leading-snug break-words">
+      {/* Right: Real Previous vs Current Factory Comparison (ONLY when past factory exists) */}
+      {showPastFactoryComparison && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between space-y-3.5">
+          <div className="flex flex-wrap items-start justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-start gap-2 min-w-0 flex-1">
+              <TrendingUp className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />
+              <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white leading-snug break-words">
+                {lang === 'bn'
+                  ? 'আগের কারখানা বনাম বর্তমান কারখানা'
+                  : 'Previous vs Current Factory'}
+              </h3>
+            </div>
+
+            <span
+              className={`px-2 py-0.5 rounded-lg text-[11px] font-extrabold tabular-nums whitespace-nowrap shrink-0 ${
+                analytics.grossDeltaAmount >= 0
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+              }`}
+            >
+              {analytics.grossDeltaAmount >= 0 ? '+' : '-'}
+              {formatBDT(Math.abs(analytics.grossDeltaAmount), lang)} (
+              {analytics.grossGrowthPct >= 0 ? '+' : ''}
+              {formatNumber(analytics.grossGrowthPct, lang)}%)
+            </span>
+          </div>
+
+          <div className="h-[172px] sm:h-[185px] w-full min-w-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={barData} margin={{ top: 8, right: 6, left: -8, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" strokeOpacity={0.22} vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  interval={0}
+                  tick={{ fontSize: 10, fill: '#64748b', fontWeight: 600 }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  width={44}
+                  tickFormatter={formatAxisTick}
+                  tick={{ fontSize: 10, fill: '#64748b', fontWeight: 600 }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <Tooltip
+                  formatter={(value, name) => [
+                    formatBDT(Number(value) || 0, lang),
+                    String(name || ''),
+                  ]}
+                  contentStyle={TOOLTIP_STYLE}
+                  itemStyle={{ color: '#f8fafc' }}
+                />
+                <Bar
+                  dataKey="previousVal"
+                  name={analytics.previousFactoryName}
+                  fill="#94A3B8"
+                  radius={[6, 6, 0, 0]}
+                  maxBarSize={26}
+                  isAnimationActive={false}
+                />
+                <Bar
+                  dataKey="currentVal"
+                  name={analytics.currentFactoryName}
+                  fill="#059669"
+                  radius={[6, 6, 0, 0]}
+                  maxBarSize={26}
+                  isAnimationActive={false}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+            <div className="flex flex-wrap items-center gap-3 min-w-0">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-xs bg-slate-400 shrink-0" />
+                <span className="leading-tight break-words">{analytics.previousFactoryName}</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-xs bg-emerald-600 shrink-0" />
+                <span className="leading-tight break-words">{analytics.currentFactoryName}</span>
+              </span>
+            </div>
+            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 tabular-nums">
               {lang === 'bn'
-                ? 'আগের কারখানা বনাম বর্তমান কারখানা'
-                : 'Previous vs Current Factory'}
-            </h3>
-          </div>
-
-          <span
-            className={`px-2 py-0.5 rounded-lg text-[11px] font-extrabold tabular-nums whitespace-nowrap shrink-0 ${
-              analytics.grossDeltaAmount >= 0
-                ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
-                : 'bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
-            }`}
-          >
-            {analytics.grossDeltaAmount >= 0 ? '+' : '-'}
-            {formatBDT(Math.abs(analytics.grossDeltaAmount), lang)} (
-            {analytics.grossGrowthPct >= 0 ? '+' : ''}
-            {formatNumber(analytics.grossGrowthPct, lang)}%)
-          </span>
-        </div>
-
-        <div className="h-[172px] sm:h-[185px] w-full min-w-0">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={barData} margin={{ top: 8, right: 6, left: -8, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" strokeOpacity={0.22} vertical={false} />
-              <XAxis
-                dataKey="label"
-                interval={0}
-                tick={{ fontSize: 10, fill: '#64748b', fontWeight: 600 }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                width={44}
-                tickFormatter={formatAxisTick}
-                tick={{ fontSize: 10, fill: '#64748b', fontWeight: 600 }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <Tooltip
-                formatter={(value, name) => [
-                  formatBDT(Number(value) || 0, lang),
-                  String(name || ''),
-                ]}
-                contentStyle={TOOLTIP_STYLE}
-                itemStyle={{ color: '#f8fafc' }}
-              />
-              <Bar
-                dataKey="previousVal"
-                name={analytics.previousFactoryName}
-                fill="#94A3B8"
-                radius={[6, 6, 0, 0]}
-                maxBarSize={26}
-                isAnimationActive={false}
-              />
-              <Bar
-                dataKey="currentVal"
-                name={analytics.currentFactoryName}
-                fill="#059669"
-                radius={[6, 6, 0, 0]}
-                maxBarSize={26}
-                isAnimationActive={false}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-          <div className="flex flex-wrap items-center gap-3 min-w-0">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-xs bg-slate-400 shrink-0" />
-              <span className="leading-tight break-words">{analytics.previousFactoryName}</span>
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-xs bg-emerald-600 shrink-0" />
-              <span className="leading-tight break-words">{analytics.currentFactoryName}</span>
+                ? `হাজিরা: ${formatNumber(analytics.attendanceRateCurrentPct, 'bn')}% বনাম ${formatNumber(analytics.attendanceRatePreviousPct, 'bn')}%`
+                : `Att: ${analytics.attendanceRateCurrentPct}% vs ${analytics.attendanceRatePreviousPct}%`}
             </span>
           </div>
-          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 tabular-nums">
+        </div>
+      )}
+
+      {/* Right: Real Anonymized Grade & Area Comparison (STRICTLY >= 20 workers) */}
+      {showAnonymousComparison && anonymousComparison && (
+        <div
+          data-testid="anonymous-grade-comparison-card"
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between space-y-3.5"
+        >
+          <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-2 min-w-0">
+              <TrendingUp className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+              <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                {lang === 'bn' ? 'একই গ্রেডের সাথে তুলনা' : 'Same Grade Comparison'}
+              </h3>
+            </div>
+            <span className="px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-[10px] font-extrabold tabular-nums shrink-0">
+              {anonymousComparison.gradeLabel}
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {anonymousComparison.metrics.map((m) => {
+              const maxVal = Math.max(m.userValue, m.medianValue, 1);
+              const userPct = Math.round((m.userValue / maxVal) * 100);
+              const medPct = Math.round((m.medianValue / maxVal) * 100);
+              const fmt = (v: number) =>
+                m.unit === 'bdt'
+                  ? formatBDT(v, lang)
+                  : `${formatNumber(v, lang, 1)} ${lang === 'bn' ? 'ঘণ্টা' : 'h'}`;
+              return (
+                <div key={m.key} className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      {lang === 'bn' ? m.labelBn : m.labelEn}
+                    </span>
+                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 tabular-nums">
+                      {fmt(m.userValue)} / {fmt(m.medianValue)}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-20 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 shrink-0">
+                        {lang === 'bn' ? 'আপনি' : 'You'}
+                      </span>
+                      <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-emerald-600"
+                          style={{ width: `${Math.max(4, userPct)}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-20 text-[10px] font-semibold text-slate-500 dark:text-slate-400 shrink-0 truncate">
+                        {lang === 'bn' ? 'মাঝামাঝি' : 'Median'}
+                      </span>
+                      <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-slate-400 dark:bg-slate-500"
+                          style={{ width: `${Math.max(4, medPct)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <p className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[10px] font-medium text-slate-500 dark:text-slate-400">
             {lang === 'bn'
-              ? `হাজিরা: ${formatNumber(analytics.attendanceRateCurrentPct, 'bn')}% বনাম ${formatNumber(analytics.attendanceRatePreviousPct, 'bn')}%`
-              : `Att: ${analytics.attendanceRateCurrentPct}% vs ${analytics.attendanceRatePreviousPct}%`}
-          </span>
+              ? 'একই গ্রেড ও এলাকার শ্রমিকদের মাঝামাঝি হিসাবের সাথে তুলনা (কমপক্ষে ২০ জনের ডাটা)'
+              : 'Compared with anonymized median of workers in the same grade & area (minimum 20 workers)'}
+          </p>
         </div>
-      </div>
+      )}
     </div>
   );
 };

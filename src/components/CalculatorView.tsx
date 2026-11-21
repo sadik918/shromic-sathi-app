@@ -47,6 +47,9 @@ import {
   type CalculatorCategoryGroup,
   type SavedBenefitCalculationRecord,
 } from '../utils/garmentBenefitsEngine';
+import { printElementSafely } from '../utils/printHelper';
+import { calculateRMGIncrement } from '../utils/featureHelpers';
+import { FinalSettlementWizardModal } from './FinalSettlementWizardModal';
 
 type TopModuleTab = 'guided_benefits' | 'saved_history' | 'standard_keypad';
 type CategoryFilter = 'all' | 'primary_six' | CalculatorCategoryGroup;
@@ -103,7 +106,7 @@ function getCalculatorIcon(id: BenefitCalculatorId) {
 }
 
 export const CalculatorView: React.FC = () => {
-  const { user, profile, todayISO, lang } = useData();
+  const { user, profile, attendance, todayISO, lang } = useData();
   const effectiveUserId = user?.uid || profile.userId || 'demo_worker';
 
   const [adminCalcConfig, setAdminCalcConfig] = useState(() => loadAdminCalculatorConfig());
@@ -128,17 +131,18 @@ export const CalculatorView: React.FC = () => {
 
   const [activeCalculatorId, setActiveCalculatorId] = useState<BenefitCalculatorId | null>(null);
   const [showHelpDetails, setShowHelpDetails] = useState(false);
+  const [showSettlementWizard, setShowSettlementWizard] = useState(false);
 
   const [inputs, setInputs] = useState<Record<string, string | number | boolean>>(() =>
-    buildWorkerPrefillInputs(profile, todayISO)
+    buildWorkerPrefillInputs(profile, todayISO, attendance)
   );
   const [isUsingProfilePrefill, setIsUsingProfilePrefill] = useState(true);
 
   useEffect(() => {
     if (isUsingProfilePrefill) {
-      setInputs(buildWorkerPrefillInputs(profile, todayISO));
+      setInputs(buildWorkerPrefillInputs(profile, todayISO, attendance));
     }
-  }, [profile, todayISO, isUsingProfilePrefill]);
+  }, [profile, todayISO, attendance, isUsingProfilePrefill]);
 
   const [savedHistory, setSavedHistory] = useState<SavedBenefitCalculationRecord[]>(() =>
     loadUserCalculationHistory(effectiveUserId)
@@ -171,7 +175,7 @@ export const CalculatorView: React.FC = () => {
   };
 
   const handleResetToProfilePrefill = () => {
-    setInputs(buildWorkerPrefillInputs(profile, todayISO));
+    setInputs(buildWorkerPrefillInputs(profile, todayISO, attendance));
     setIsUsingProfilePrefill(true);
     showToast('প্রোফাইলের তথ্য পুনরায় লোড হয়েছে।');
   };
@@ -304,7 +308,10 @@ export const CalculatorView: React.FC = () => {
   };
 
   const handlePrintResult = () => {
-    window.print();
+    printElementSafely({
+      elementId: 'printable-calculator-result',
+      title: calculationOutput?.calculatorTitleBn || 'শ্রমিক সাথী ক্যালকুলেটর',
+    });
   };
 
   // Standard Keypad handlers
@@ -537,10 +544,7 @@ export const CalculatorView: React.FC = () => {
               <button
                 type="button"
                 data-testid="featured-final-settlement-card"
-                onClick={() => {
-                  setActiveCalculatorId('final_settlement');
-                  setShowHelpDetails(false);
-                }}
+                onClick={() => setShowSettlementWizard(true)}
                 className="w-full text-left bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 hover:border-emerald-500 rounded-2xl p-3.5 sm:p-4 flex items-center justify-between gap-3 cursor-pointer transition-colors"
               >
                 <div className="flex items-center gap-3 min-w-0">
@@ -548,11 +552,11 @@ export const CalculatorView: React.FC = () => {
                     <FileCheck2 className="w-5 h-5" />
                   </div>
                   <span className="text-sm sm:text-base font-extrabold text-emerald-950 dark:text-emerald-100 truncate">
-                    চাকরি শেষে মোট পাওনা হিসাব
+                    {lang === 'bn' ? 'চাকরি শেষের হিসাব' : 'Final Settlement Wizard'}
                   </span>
                 </div>
                 <span className="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1 whitespace-nowrap shrink-0">
-                  <span>হিসাব করুন</span>
+                  <span>{lang === 'bn' ? 'শুরু করুন' : 'Start'}</span>
                   <ChevronRight className="w-3.5 h-3.5" />
                 </span>
               </button>
@@ -895,6 +899,213 @@ export const CalculatorView: React.FC = () => {
                 ৩. অতিরিক্ত তথ্য
               </h3>
 
+              {activeCalculatorId === 'increment_calc' && (() => {
+                const incBasic = Number(inputs.basicSalary) || 0;
+                const incMed = Number(inputs.medicalAllowance ?? 750);
+                const incTrans = Number(inputs.transportAllowance ?? 450);
+                const incFood = Number(inputs.foodAllowance ?? 1250);
+                const incHouse = Number(inputs.houseRentAllowance ?? Math.round(incBasic * 0.5));
+                const incGross = incBasic + incHouse + incMed + incTrans + incFood;
+                const incMode = String(inputs.incrementMode || 'percent') === 'amount' ? 'amount' : 'percent';
+                const incPreview = calculateRMGIncrement({
+                  currentBasic: incBasic,
+                  currentGross: incGross,
+                  medicalAllowance: incMed,
+                  transportAllowance: incTrans,
+                  foodAllowance: incFood,
+                  mode: incMode,
+                  incrementPercent: Number(inputs.incrementPercent) || 0,
+                  incrementAmountBDT: Number(inputs.incrementAmountBDT) || 0,
+                });
+
+                return (
+                  <div data-testid="increment-calc-inputs" className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                      <div>
+                        <label className={labelClass}>
+                          {lang === 'bn' ? 'ইনক্রিমেন্ট হার (%)' : 'Increment (%)'}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.5"
+                          data-testid="increment-percent-input"
+                          value={
+                            incMode === 'percent'
+                              ? String(inputs.incrementPercent ?? 5)
+                              : String(incPreview.effectivePercent)
+                          }
+                          onChange={(e) => {
+                            const pct = Math.max(0, Number(e.target.value) || 0);
+                            const nextCalc = calculateRMGIncrement({
+                              currentBasic: incBasic,
+                              currentGross: incGross,
+                              medicalAllowance: incMed,
+                              transportAllowance: incTrans,
+                              foodAllowance: incFood,
+                              mode: 'percent',
+                              incrementPercent: pct,
+                              incrementAmountBDT: 0,
+                            });
+                            setIsUsingProfilePrefill(false);
+                            setInputs((prev) => ({
+                              ...prev,
+                              incrementMode: 'percent',
+                              incrementPercent: pct,
+                              incrementAmountBDT: nextCalc.monthlyGrossIncrease,
+                            }));
+                          }}
+                          className={`${inputClass} font-mono font-bold tabular-nums`}
+                        />
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>
+                          {lang === 'bn' ? 'নির্দিষ্ট বৃদ্ধি (৳)' : 'Fixed Increase (৳)'}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="50"
+                          data-testid="increment-amount-input"
+                          value={
+                            incMode === 'amount'
+                              ? String(inputs.incrementAmountBDT ?? 0)
+                              : String(incPreview.monthlyGrossIncrease)
+                          }
+                          onChange={(e) => {
+                            const amt = Math.max(0, Number(e.target.value) || 0);
+                            const nextCalc = calculateRMGIncrement({
+                              currentBasic: incBasic,
+                              currentGross: incGross,
+                              medicalAllowance: incMed,
+                              transportAllowance: incTrans,
+                              foodAllowance: incFood,
+                              mode: 'amount',
+                              incrementPercent: 0,
+                              incrementAmountBDT: amt,
+                            });
+                            setIsUsingProfilePrefill(false);
+                            setInputs((prev) => ({
+                              ...prev,
+                              incrementMode: 'amount',
+                              incrementAmountBDT: amt,
+                              incrementPercent: nextCalc.effectivePercent,
+                            }));
+                          }}
+                          className={`${inputClass} font-mono font-bold tabular-nums`}
+                        />
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>
+                          {lang === 'bn' ? 'কার্যকর তারিখ' : 'Effective Date'}
+                        </label>
+                        <input
+                          type="date"
+                          value={String(inputs.incrementEffectiveDate || todayISO)}
+                          onChange={(e) => updateInput('incrementEffectiveDate', e.target.value)}
+                          className={`${inputClass} font-mono font-semibold text-xs sm:text-sm`}
+                        />
+                      </div>
+                    </div>
+
+                    {incBasic <= 0 && (
+                      <p className="text-xs font-bold text-rose-600 dark:text-rose-400">
+                        {lang === 'bn'
+                          ? 'ইনক্রিমেন্ট হিসাব করতে বর্তমান মূল বেতন দিন।'
+                          : 'Enter your current basic salary to calculate increment.'}
+                      </p>
+                    )}
+
+                    {/* Clean Before / After Comparison Table */}
+                    {incBasic > 0 && (
+                      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
+                              <th className="text-left py-2 px-3 font-bold">
+                                {lang === 'bn' ? 'বিবরণ' : 'Component'}
+                              </th>
+                              <th className="text-right py-2 px-3 font-bold">
+                                {lang === 'bn' ? 'আগে' : 'Before'}
+                              </th>
+                              <th className="text-right py-2 px-3 font-bold">
+                                {lang === 'bn' ? 'পরে' : 'After'}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            <tr>
+                              <td className="py-2 px-3 font-semibold text-slate-700 dark:text-slate-300">
+                                {lang === 'bn' ? 'মূল বেতন' : 'Basic'}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums text-slate-600 dark:text-slate-400">
+                                {formatBDT(incPreview.oldBasic, lang)}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums font-bold text-slate-900 dark:text-white">
+                                {formatBDT(incPreview.newBasic, lang)}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-3 font-semibold text-slate-700 dark:text-slate-300">
+                                {lang === 'bn' ? 'বাড়ি ভাড়া (৫০%)' : 'House Rent (50%)'}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums text-slate-600 dark:text-slate-400">
+                                {formatBDT(incPreview.oldHouseRent, lang)}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums font-bold text-slate-900 dark:text-white">
+                                {formatBDT(incPreview.newHouseRent, lang)}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-3 font-semibold text-slate-700 dark:text-slate-300">
+                                {lang === 'bn' ? 'চিকিৎসা + যাতায়াত + খাদ্য' : 'Fixed Allowances'}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums text-slate-600 dark:text-slate-400">
+                                {formatBDT(incPreview.oldMedical + incPreview.oldTransport + incPreview.oldFood, lang)}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums font-bold text-slate-900 dark:text-white">
+                                {formatBDT(incPreview.newMedical + incPreview.newTransport + incPreview.newFood, lang)}
+                              </td>
+                            </tr>
+                            <tr className="bg-emerald-50/70 dark:bg-emerald-950/30 font-extrabold">
+                              <td className="py-2.5 px-3 text-emerald-900 dark:text-emerald-200">
+                                {lang === 'bn' ? 'মোট বেতন (Gross)' : 'Gross Salary'}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-slate-700 dark:text-slate-300">
+                                {formatBDT(incPreview.oldGross, lang)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-emerald-800 dark:text-emerald-300">
+                                {formatBDT(incPreview.newGross, lang)}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-3 font-semibold text-slate-700 dark:text-slate-300">
+                                {lang === 'bn' ? 'ওটি রেট / ঘণ্টা' : 'OT Rate / hr'}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums text-slate-600 dark:text-slate-400">
+                                {formatBDT(incPreview.oldOtRate, lang, true)}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums font-bold text-emerald-700 dark:text-emerald-400">
+                                {formatBDT(incPreview.newOtRate, lang, true)}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                      {lang === 'bn'
+                        ? `বার্ষিক ইনক্রিমেন্ট মূল বেতনের উপর হিসাব হয় · কার্যকর: ${String(inputs.incrementEffectiveDate || todayISO)}`
+                        : `Annual increment is calculated on basic salary · Effective: ${String(inputs.incrementEffectiveDate || todayISO)}`}
+                    </p>
+                  </div>
+                );
+              })()}
+
               {activeCalculatorId === 'annual_leave' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
                   <div>
@@ -902,7 +1113,7 @@ export const CalculatorView: React.FC = () => {
                     <input
                       type="number"
                       min="0"
-                      value={String(inputs.totalDaysWorkedInPeriod ?? 288)}
+                      value={String(inputs.totalDaysWorkedInPeriod ?? 0)}
                       onChange={(e) => updateInput('totalDaysWorkedInPeriod', Number(e.target.value))}
                       className={`${inputClass} font-mono font-bold`}
                     />
@@ -1468,6 +1679,7 @@ export const CalculatorView: React.FC = () => {
 
           {calculationOutput && calculationOutput.isComplete && (
             <div
+              id="printable-calculator-result"
               data-testid="calculation-results-card"
               className="bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/80 rounded-2xl overflow-hidden shadow-2xs space-y-4 p-4 sm:p-5"
             >
@@ -1919,6 +2131,12 @@ export const CalculatorView: React.FC = () => {
           )}
         </div>
       )}
+
+      <FinalSettlementWizardModal
+        isOpen={showSettlementWizard}
+        onClose={() => setShowSettlementWizard(false)}
+        onSavedCalculation={() => setSavedHistory(loadUserCalculationHistory(effectiveUserId))}
+      />
     </div>
   );
 };

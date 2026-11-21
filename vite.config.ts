@@ -12,11 +12,7 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         injectRegister: 'auto',
-        includeAssets: [
-          'icon.svg',
-          'alarm-sw-helper.js',
-          'assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
-        ],
+        includeAssets: [],
         manifest: {
           id: '/',
           name: 'শ্রমিক সাথী (Shromik Sathi)',
@@ -25,23 +21,25 @@ export default defineConfig(() => {
           theme_color: '#047857',
           background_color: '#f8fafc',
           display: 'standalone',
+          lang: 'bn',
           start_url: '/',
           scope: '/',
+          prefer_related_applications: false,
           icons: [
             {
-              src: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+              src: '/pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+              src: '/pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+              src: '/pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
@@ -54,10 +52,18 @@ export default defineConfig(() => {
           cleanupOutdatedCaches: true,
           importScripts: ['/alarm-sw-helper.js'],
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//, /^\/__\//],
+          navigateFallbackDenylist: [/^\/api\//, /^\/__\//, /^\/robots\.txt$/, /^\/sitemap\.xml$/],
+          ignoreURLParametersMatching: [/.*/],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
-          globIgnores: ['**/Screenshot_*', '**/Glossy_Green_*', '**/WhatsApp_*'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,webmanifest}'],
+          globIgnores: [
+            '**/assets/aistudio/**',
+            '**/Screenshot_*',
+            '**/Glossy_Green_*',
+            '**/WhatsApp_*',
+            '**/Hopeful_Worker_Finance_Emblem_*',
+            '**/*.md',
+          ],
           runtimeCaching: [
             {
               urlPattern: ({ request }) =>
@@ -138,7 +144,7 @@ export default defineConfig(() => {
     },
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {

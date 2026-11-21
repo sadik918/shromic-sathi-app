@@ -17,6 +17,7 @@ import type {
   SalaryRecord,
   SavingsGoal,
   VaultDocument,
+  WeeklyHolidayDay,
   WorkerContact,
   WorkerContactCategory,
   WorkerProfile,
@@ -380,6 +381,248 @@ export function deriveBangladeshRMGBreakdownFromGross(grossSalary: number): {
     medicalAllowance: 750,
     transportAllowance: 450,
     foodAllowance: 1250,
+  };
+}
+
+export interface CanonicalSalaryStructure {
+  grossSalary: number;
+  basicSalary: number;
+  houseRentAllowance: number;
+  medicalAllowance: number;
+  transportAllowance: number;
+  foodAllowance: number;
+  dailyRate: number;
+  dailyBasicRate: number;
+  hourlyOtRate: number;
+  dailyFormulaNoteBn: string;
+  dailyFormulaNoteEn: string;
+}
+
+/**
+ * SINGLE SOURCE OF TRUTH for a worker's fixed monthly salary breakdown and daily rate.
+ * Guarantees that Basic + House Rent + Medical + Transport + Food ALWAYS sums cleanly to Gross
+ * (zero ৳1 rounding drift) and auto-heals legacy profiles where houseRentAllowance was saved as 0.
+ * Daily rate convention across the entire app: Gross Salary ÷ 30 days.
+ */
+export function getSalaryStructure(
+  profile?: Partial<WorkerProfile> | null,
+  overrideRecord?: Partial<
+    Pick<
+      SalaryRecord,
+      | 'basicSalary'
+      | 'houseRentAllowance'
+      | 'medicalAllowance'
+      | 'transportAllowance'
+      | 'foodAllowance'
+    >
+  > | null
+): CanonicalSalaryStructure {
+  const rawGross = Math.max(0, roundCurrency(Number(profile?.grossSalary) || 0));
+  const rawBasic = Math.max(
+    0,
+    roundCurrency(Number(overrideRecord?.basicSalary ?? profile?.basicSalary) || 0)
+  );
+  const rawHouseRent = Math.max(
+    0,
+    roundCurrency(Number(overrideRecord?.houseRentAllowance ?? profile?.houseRentAllowance) || 0)
+  );
+  const rawMedical = Math.max(
+    0,
+    roundCurrency(
+      overrideRecord?.medicalAllowance !== undefined
+        ? Number(overrideRecord.medicalAllowance) || 0
+        : profile?.medicalAllowance !== undefined
+        ? Number(profile.medicalAllowance) || 0
+        : 750
+    )
+  );
+  const rawTransport = Math.max(
+    0,
+    roundCurrency(
+      overrideRecord?.transportAllowance !== undefined
+        ? Number(overrideRecord.transportAllowance) || 0
+        : profile?.transportAllowance !== undefined
+        ? Number(profile.transportAllowance) || 0
+        : 450
+    )
+  );
+  const rawFood = Math.max(
+    0,
+    roundCurrency(
+      overrideRecord?.foodAllowance !== undefined
+        ? Number(overrideRecord.foodAllowance) || 0
+        : profile?.foodAllowance !== undefined
+        ? Number(profile.foodAllowance) || 0
+        : 1250
+    )
+  );
+
+  let basicSalary = rawBasic;
+  let houseRentAllowance = rawHouseRent;
+  let medicalAllowance = rawMedical;
+  let transportAllowance = rawTransport;
+  let foodAllowance = rawFood;
+  let grossSalary = rawGross;
+
+  if (grossSalary > 0) {
+    if (basicSalary <= 0) {
+      const split = deriveBangladeshRMGBreakdownFromGross(grossSalary);
+      basicSalary = split.basicSalary;
+      houseRentAllowance = split.houseRentAllowance;
+      medicalAllowance = split.medicalAllowance;
+      transportAllowance = split.transportAllowance;
+      foodAllowance = split.foodAllowance;
+    } else {
+      // Auto-heal missing houseRentAllowance (e.g. legacy ৳0 bug) when grossSalary > sum of other parts
+      if (houseRentAllowance <= 0) {
+        const impliedRent = roundCurrency(
+          grossSalary - (basicSalary + medicalAllowance + transportAllowance + foodAllowance)
+        );
+        if (impliedRent > 0) {
+          houseRentAllowance = impliedRent;
+        }
+      }
+      const componentSum = roundCurrency(
+        basicSalary + houseRentAllowance + medicalAllowance + transportAllowance + foodAllowance
+      );
+      const diff = roundCurrency(grossSalary - componentSum);
+      if (Math.abs(diff) > 0 && Math.abs(diff) <= 5) {
+        // Reconcile tiny ±1..5 rounding difference on the final allowance (foodAllowance) so components === gross
+        if (foodAllowance + diff >= 0) {
+          foodAllowance = roundCurrency(foodAllowance + diff);
+        } else if (houseRentAllowance + diff >= 0) {
+          houseRentAllowance = roundCurrency(houseRentAllowance + diff);
+        }
+      } else if (componentSum > 0 && overrideRecord) {
+        // If user explicitly edited statement components far from profile gross, respect edited sum
+        grossSalary = componentSum;
+      }
+    }
+  } else if (basicSalary > 0) {
+    if (houseRentAllowance <= 0) {
+      houseRentAllowance = Math.round(basicSalary * 0.5);
+    }
+    grossSalary = roundCurrency(
+      basicSalary + houseRentAllowance + medicalAllowance + transportAllowance + foodAllowance
+    );
+  } else {
+    const split = deriveBangladeshRMGBreakdownFromGross(12500);
+    grossSalary = 12500;
+    basicSalary = split.basicSalary;
+    houseRentAllowance = split.houseRentAllowance;
+    medicalAllowance = split.medicalAllowance;
+    transportAllowance = split.transportAllowance;
+    foodAllowance = split.foodAllowance;
+  }
+
+  const dailyRate = grossSalary > 0 ? roundCurrency(grossSalary / 30) : 0;
+  const dailyBasicRate = basicSalary > 0 ? roundCurrency(basicSalary / 30) : 0;
+  const divisor = Number(profile?.otDivisor) > 0 ? Number(profile?.otDivisor) : 208;
+  const multiplier = Number(profile?.otMultiplier) > 0 ? Number(profile?.otMultiplier) : 2;
+  const hourlyOtRate =
+    profile?.otCalculationMode === 'manual' && Number(profile?.otCustomHourlyRate) > 0
+      ? roundCurrency(Number(profile.otCustomHourlyRate))
+      : basicSalary > 0
+      ? roundCurrency((basicSalary / divisor) * multiplier)
+      : DEFAULT_RMG_HOURLY_OT_RATE;
+
+  return {
+    grossSalary: roundCurrency(grossSalary),
+    basicSalary: roundCurrency(basicSalary),
+    houseRentAllowance: roundCurrency(houseRentAllowance),
+    medicalAllowance: roundCurrency(medicalAllowance),
+    transportAllowance: roundCurrency(transportAllowance),
+    foodAllowance: roundCurrency(foodAllowance),
+    dailyRate,
+    dailyBasicRate,
+    hourlyOtRate,
+    dailyFormulaNoteBn: `দৈনিক হার = মোট বেতন (${formatBDT(grossSalary, 'bn')}) ÷ ৩০ দিন = ${formatBDT(dailyRate, 'bn', true)}`,
+    dailyFormulaNoteEn: `Daily Rate = Gross Salary (${formatBDT(grossSalary, 'en')}) ÷ 30 days = ${formatBDT(dailyRate, 'en', true)}`,
+  };
+}
+
+export function getDailyRate(
+  profile?: Partial<WorkerProfile> | null,
+  overrideRecord?: Partial<
+    Pick<
+      SalaryRecord,
+      | 'basicSalary'
+      | 'houseRentAllowance'
+      | 'medicalAllowance'
+      | 'transportAllowance'
+      | 'foodAllowance'
+    >
+  > | null
+): number {
+  return getSalaryStructure(profile, overrideRecord).dailyRate;
+}
+
+/**
+ * Validates that an entry date is not before the worker's joiningDate.
+ */
+export function validateNotBeforeJoiningDate(
+  dateISO: string,
+  joiningDate?: string,
+  lang: Language = 'bn'
+): { valid: boolean; error?: string } {
+  const cleanDate = (dateISO || '').trim();
+  const cleanJoin = (joiningDate || '').trim();
+  if (!cleanDate || !cleanJoin || !/^\d{4}-\d{2}-\d{2}$/.test(cleanDate) || !/^\d{4}-\d{2}-\d{2}$/.test(cleanJoin)) {
+    return { valid: true };
+  }
+  if (cleanDate < cleanJoin) {
+    const [jy, jm, jd] = cleanJoin.split('-');
+    const dmy = `${jd}/${jm}/${jy}`;
+    return {
+      valid: false,
+      error:
+        lang === 'bn'
+          ? `যোগদানের আগের তারিখে এন্ট্রি করা যাবে না (যোগদানের তারিখ: ${toBengaliDigits(dmy)})।`
+          : `Cannot add entry before joining date (${dmy}).`,
+    };
+  }
+  return { valid: true };
+}
+
+const WEEKDAY_INDEX_BY_KEY: Record<WeeklyHolidayDay, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+/**
+ * Checks whether a date (YYYY-MM-DD) is the worker's weekly holiday (default Friday)
+ * or an official Bangladesh public holiday.
+ */
+export function isWeeklyOrPublicHoliday(
+  dateISO: string,
+  weeklyHolidayDay: WeeklyHolidayDay = 'friday'
+): {
+  isHoliday: boolean;
+  isWeeklyHoliday: boolean;
+  isPublicHoliday: boolean;
+  holidayTitleBn?: string;
+  holidayTitleEn?: string;
+} {
+  if (!dateISO || !/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) {
+    return { isHoliday: false, isWeeklyHoliday: false, isPublicHoliday: false };
+  }
+  const [y, m, d] = dateISO.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const targetDayIdx = WEEKDAY_INDEX_BY_KEY[weeklyHolidayDay] ?? 5;
+  const isWeeklyHoliday = dt.getUTCDay() === targetDayIdx;
+  const pubHoliday = getPublicHolidayForDate(dateISO);
+  const isPublicHoliday = Boolean(pubHoliday);
+  return {
+    isHoliday: isWeeklyHoliday || isPublicHoliday,
+    isWeeklyHoliday,
+    isPublicHoliday,
+    holidayTitleBn: pubHoliday?.titleBn || (isWeeklyHoliday ? 'সাপ্তাহিক ছুটি' : undefined),
+    holidayTitleEn: pubHoliday?.titleEn || (isWeeklyHoliday ? 'Weekly Holiday' : undefined),
   };
 }
 
@@ -1430,20 +1673,22 @@ export function calculateSmartSalaryComparison(params: {
     }
   }
 
-  if (attendanceBonusSafe) {
-    insightsBn.push(
-      `পূর্ণ হাজিরা বোনাস (${formatBDT(params.attendanceBonusAmount, 'bn')}) পাওয়ার যোগ্য!`
-    );
-    insightsEn.push(
-      `Eligible for full Attendance Bonus (${formatBDT(params.attendanceBonusAmount, 'en')})!`
-    );
-  } else {
-    insightsBn.push(
-      `অনুপস্থিতি (${toBengaliDigits(params.absentDays)} দিন) বা দেরি (${toBengaliDigits(params.lateDays)} দিন) থাকায় হাজিরা বোনাস ঝুঁকিতে রয়েছে।`
-    );
-    insightsEn.push(
-      `Attendance bonus at risk due to ${params.absentDays} absent / ${params.lateDays} late day(s).`
-    );
+  if (params.attendanceBonusAmount > 0) {
+    if (attendanceBonusSafe) {
+      insightsBn.push(
+        `পূর্ণ হাজিরা বোনাস (${formatBDT(params.attendanceBonusAmount, 'bn')}) পাওয়ার যোগ্য!`
+      );
+      insightsEn.push(
+        `Eligible for full Attendance Bonus (${formatBDT(params.attendanceBonusAmount, 'en')})!`
+      );
+    } else {
+      insightsBn.push(
+        `অনুপস্থিতি (${toBengaliDigits(params.absentDays)} দিন) বা দেরি (${toBengaliDigits(params.lateDays)} দিন) থাকায় হাজিরা বোনাস ঝুঁকিতে রয়েছে।`
+      );
+      insightsEn.push(
+        `Attendance bonus at risk due to ${params.absentDays} absent / ${params.lateDays} late day(s).`
+      );
+    }
   }
 
   return {
@@ -2087,6 +2332,9 @@ export interface WorkplaceTenureAnalytics {
   joiningDate: string;
   leavingDate: string;
   monthsWorked: number;
+  daysWorked: number;
+  formattedTenureBn: string;
+  formattedTenureEn: string;
   grossSalary: number;
   basicSalary: number;
   totalReceivedSalary: number;
@@ -2132,12 +2380,27 @@ export function computeWorkplaceTenureAnalytics(params: {
   const startMonth = joiningDate.slice(0, 7);
   const endMonth = leavingDate.slice(0, 7);
 
-  // Calculate approximate months worked between joiningDate and leavingDate
-  const [jy, jm] = startMonth.split('-').map(Number);
-  const [ly, lm] = endMonth.split('-').map(Number);
-  const computedMonths =
-    jy && jm && ly && lm ? Math.max(1, (ly - jy) * 12 + (lm - jm) + 1) : 1;
-  const monthsWorked = workplace.monthsWorked || computedMonths;
+  // Calculate exact calendar days and completed months between joiningDate and leavingDate
+  const startDt = new Date(`${joiningDate}T00:00:00Z`);
+  const endDt = new Date(`${leavingDate}T00:00:00Z`);
+  const rawDiffDays =
+    !Number.isNaN(startDt.getTime()) && !Number.isNaN(endDt.getTime())
+      ? Math.max(0, Math.floor((endDt.getTime() - startDt.getTime()) / (24 * 60 * 60 * 1000)))
+      : 0;
+  const daysWorked = rawDiffDays + 1; // Day 1 on joining day
+  const computedMonths = Math.floor(rawDiffDays / 30);
+  const monthsWorked =
+    workplace.monthsWorked !== undefined && workplace.monthsWorked > 0
+      ? workplace.monthsWorked
+      : computedMonths;
+  const formattedTenureBn =
+    monthsWorked >= 1
+      ? `${formatNumber(monthsWorked, 'bn')} মাস কর্মরত`
+      : `${formatNumber(daysWorked, 'bn')} দিন কর্মরত`;
+  const formattedTenureEn =
+    monthsWorked >= 1
+      ? `${monthsWorked} mo tenure`
+      : `${daysWorked} day${daysWorked === 1 ? '' : 's'} tenure`;
 
   const grossSalary =
     workplace.grossSalary ||
@@ -2228,6 +2491,9 @@ export function computeWorkplaceTenureAnalytics(params: {
     joiningDate,
     leavingDate,
     monthsWorked,
+    daysWorked,
+    formattedTenureBn,
+    formattedTenureEn,
     grossSalary,
     basicSalary,
     totalReceivedSalary,
@@ -2423,6 +2689,169 @@ export interface AttendanceBonusEvaluationResult {
 }
 
 /**
+ * Returns true if a single attendance record counts as a late entry toward the monthly attendance bonus late-day limit.
+ * Recognizes both explicit 'late' status and (when bonusCutoffTimeEnabled is true) a 'present' check-in past cutoff time.
+ */
+export function isRecordLateForAttendanceBonus(
+  record: Pick<AttendanceRecord, 'date' | 'status' | 'checkIn'>,
+  profile: Partial<WorkerProfile>
+): boolean {
+  if (record.status === 'late') return true;
+  if (!profile.bonusCutoffTimeEnabled) return false;
+  if (record.status !== 'present' || !record.checkIn) return false;
+
+  const shiftInfo = resolveWorkerShiftForDate(profile, record.date, 0);
+  const cutoffTime =
+    shiftInfo.activeShift === 'night'
+      ? profile.nightBonusCutoffTime || profile.attendanceWindowEndNight || '20:05'
+      : profile.dayBonusCutoffTime || profile.attendanceWindowEndDay || '08:05';
+
+  const [ch, cm] = record.checkIn.split(':').map(Number);
+  const [sh, sm] = cutoffTime.split(':').map(Number);
+  if (Number.isNaN(ch) || Number.isNaN(cm) || Number.isNaN(sh) || Number.isNaN(sm)) {
+    return false;
+  }
+  return ch * 60 + cm > sh * 60 + sm;
+}
+
+function formatShortDayMonth(dateISO: string, lang: 'bn' | 'en'): string {
+  const parts = dateISO.split('-');
+  if (parts.length !== 3) return lang === 'bn' ? toBengaliDigits(dateISO) : dateISO;
+  const dm = `${parts[2]}/${parts[1]}`;
+  return lang === 'bn' ? toBengaliDigits(dm) : dm;
+}
+
+export interface MonthlyBonusLockForDateResult {
+  isAlreadyMissedInMonth: boolean;
+  isBonusDisabled: boolean;
+  missKind: 'none' | 'manual_untick' | 'late_limit' | 'absent_limit';
+  missedDate?: string;
+  otherLateDaysCount: number;
+  maxLateDaysLimit: number;
+  latePenaltyEnabled: boolean;
+  noticeBn: string;
+  noticeEn: string;
+}
+
+/**
+ * Evaluates whether the monthly attendance bonus for `targetDate`'s month is ALREADY missed
+ * due to OTHER dates in that same month (`r.date !== targetDate`).
+ * Strictly isolated per month (YYYY-MM) and excludes `targetDate` itself so editing the
+ * original missed date in history allows restoring eligibility cleanly.
+ */
+export function evaluateMonthlyBonusLockForDate(params: {
+  targetDate: string;
+  recordsForMonth: readonly AttendanceRecord[];
+  profile: Partial<WorkerProfile>;
+}): MonthlyBonusLockForDateResult {
+  const { targetDate, recordsForMonth, profile } = params;
+  const targetMonth = targetDate.slice(0, 7);
+  const hasConfig = profile.hasAttendanceBonus !== false;
+  const bonusAmt =
+    Number(profile.attendanceBonusAmount) > 0
+      ? Number(profile.attendanceBonusAmount)
+      : Math.max(0, Number(profile.attendanceBonus) || 0);
+  const isBonusDisabled = !hasConfig || bonusAmt <= 0;
+
+  const latePenaltyEnabled = Boolean(profile.latePenaltyEnabled);
+  const maxLateDaysLimit = Math.max(1, Number(profile.maxLateDaysForBonus) || 3);
+  const maxConsecutiveAbsencesAllowed = Math.max(0, Number(profile.maxConsecutiveAbsences) || 0);
+
+  const otherRecords = recordsForMonth
+    .filter((r) => r.date && r.date.startsWith(targetMonth) && r.date !== targetDate)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const otherLateRecords = otherRecords.filter((r) => isRecordLateForAttendanceBonus(r, profile));
+  const otherLateDaysCount = otherLateRecords.length;
+
+  // 1. Check explicit manual untick on another date in the same month
+  const firstUnticked = otherRecords.find((r) => r.hasAttendanceBonus === false);
+  if (firstUnticked) {
+    return {
+      isAlreadyMissedInMonth: true,
+      isBonusDisabled,
+      missKind: 'manual_untick',
+      missedDate: firstUnticked.date,
+      otherLateDaysCount,
+      maxLateDaysLimit,
+      latePenaltyEnabled,
+      noticeBn: `${formatShortDayMonth(firstUnticked.date, 'bn')} তারিখে হাজিরা বোনাস মিস হওয়ায় এই মাসে বোনাস প্রযোজ্য নয়`,
+      noticeEn: `Attendance bonus missed on ${formatShortDayMonth(firstUnticked.date, 'en')} for this month`,
+    };
+  }
+
+  // 2. Check late-days threshold reached on other dates in the same month
+  if (latePenaltyEnabled && otherLateDaysCount >= maxLateDaysLimit) {
+    const triggeringDate = otherLateRecords[maxLateDaysLimit - 1]?.date || otherLateRecords[0]?.date;
+    return {
+      isAlreadyMissedInMonth: true,
+      isBonusDisabled,
+      missKind: 'late_limit',
+      missedDate: triggeringDate,
+      otherLateDaysCount,
+      maxLateDaysLimit,
+      latePenaltyEnabled,
+      noticeBn: `${toBengaliDigits(otherLateDaysCount)} দিন দেরি হওয়ায় এই মাসের হাজিরা বোনাস মিস হয়েছে`,
+      noticeEn: `Attendance bonus missed (${otherLateDaysCount} late days reached this month)`,
+    };
+  }
+
+  // 3. Check absence threshold exceeded on other dates in the same month
+  const otherAbsentRecords = otherRecords.filter((r) => r.status === 'absent');
+  if (otherAbsentRecords.length > maxConsecutiveAbsencesAllowed) {
+    const firstAbsent = otherAbsentRecords[0];
+    return {
+      isAlreadyMissedInMonth: true,
+      isBonusDisabled,
+      missKind: 'absent_limit',
+      missedDate: firstAbsent.date,
+      otherLateDaysCount,
+      maxLateDaysLimit,
+      latePenaltyEnabled,
+      noticeBn:
+        otherAbsentRecords.length === 1
+          ? `${formatShortDayMonth(firstAbsent.date, 'bn')} তারিখে অনুপস্থিত থাকায় এই মাসের হাজিরা বোনাস মিস হয়েছে`
+          : `${toBengaliDigits(otherAbsentRecords.length)} দিন অনুপস্থিত থাকায় এই মাসের হাজিরা বোনাস মিস হয়েছে`,
+      noticeEn:
+        otherAbsentRecords.length === 1
+          ? `Attendance bonus missed due to absence on ${formatShortDayMonth(firstAbsent.date, 'en')}`
+          : `Attendance bonus missed (${otherAbsentRecords.length} absences this month)`,
+    };
+  }
+
+  return {
+    isAlreadyMissedInMonth: false,
+    isBonusDisabled,
+    missKind: 'none',
+    otherLateDaysCount,
+    maxLateDaysLimit,
+    latePenaltyEnabled,
+    noticeBn: '',
+    noticeEn: '',
+  };
+}
+
+/**
+ * Checks whether the currently drafted entry (status / check-in time) on `targetDate`
+ * causes this month's late-day count to hit or exceed `maxLateDaysForBonus`.
+ */
+export function willDraftCrossLateBonusLimit(params: {
+  lock: MonthlyBonusLockForDateResult;
+  draftStatus: AttendanceRecord['status'];
+  draftCheckIn?: string;
+  targetDate: string;
+  profile: Partial<WorkerProfile>;
+}): boolean {
+  const { lock, draftStatus, draftCheckIn, targetDate, profile } = params;
+  if (!lock.latePenaltyEnabled) return false;
+  const isDraftLate = isRecordLateForAttendanceBonus(
+    { date: targetDate, status: draftStatus, checkIn: draftCheckIn || '' },
+    profile
+  );
+  return isDraftLate && lock.otherLateDaysCount + 1 >= lock.maxLateDaysLimit;
+}
+
+/**
  * Calculates monthly Attendance Bonus eligibility based on factory profile settings and month attendance.
  */
 export function calculateAttendanceBonusEligibility(params: {
@@ -2430,7 +2859,10 @@ export function calculateAttendanceBonusEligibility(params: {
   profile: Partial<WorkerProfile>;
 }): AttendanceBonusEvaluationResult {
   const hasConfig = params.profile.hasAttendanceBonus !== false;
-  const bonusAmt = params.profile.attendanceBonusAmount ?? params.profile.attendanceBonus ?? 0;
+  const bonusAmt =
+    Number(params.profile.attendanceBonusAmount) > 0
+      ? Number(params.profile.attendanceBonusAmount)
+      : Math.max(0, Number(params.profile.attendanceBonus) || 0);
   const requiredDays = params.profile.attendanceBonusDays || 30;
   const maxConsecutiveAbsencesAllowed = params.profile.maxConsecutiveAbsences || 0;
   const latePenaltyEnabled = Boolean(params.profile.latePenaltyEnabled);
@@ -2475,7 +2907,7 @@ export function calculateAttendanceBonusEligibility(params: {
       }
     } else {
       currentConsecutive = 0;
-      if (r.status === 'late') {
+      if (isRecordLateForAttendanceBonus(r, params.profile)) {
         lateDaysCount++;
       }
       if (

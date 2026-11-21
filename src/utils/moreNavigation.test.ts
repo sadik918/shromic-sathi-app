@@ -19,8 +19,9 @@ test('buildGroupedMoreNav separates standard items into three distinct groups wi
   const flatIds = grouped.flatMap((g) => g.items.map((item) => item.id));
   assert.equal(flatIds.includes('alarm'), true);
   assert.equal(flatIds.includes('calculator'), true);
+  assert.equal(flatIds.includes('announcements'), true);
   assert.equal(flatIds.includes('admin_panel'), false);
-  assert.equal(flatIds.length, 13);
+  assert.equal(flatIds.length, 14);
 });
 
 test('buildGroupedMoreNav includes admin_panel under rules_account when isAdminUser is true', () => {
@@ -33,7 +34,7 @@ test('buildGroupedMoreNav includes admin_panel under rules_account when isAdminU
     true
   );
   const totalCount = grouped.reduce((sum, section) => sum + section.items.length, 0);
-  assert.equal(totalCount, 14);
+  assert.equal(totalCount, 15);
 });
 
 test('buildGroupedMoreNav keeps personal_tools ordering with profile, alarm, and calculator at top', () => {

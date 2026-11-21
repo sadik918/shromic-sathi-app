@@ -248,6 +248,27 @@ test('mergeUserDirectories strips usr_rmg_ mock seeds when connected and sorts n
     ['real_u3', 'real_u2', 'real_u1']
   );
 
+  // Reactivating a previously suspended user must overwrite stale local suspended state
+  const staleLocalSuspended: AdminUserDirectoryEntry = {
+    ...realOlder,
+    accountStatus: 'suspended',
+    suspensionReason: 'Previous violation',
+    suspendedAt: '2026-11-10',
+    suspendedBy: 'admin@example.com',
+  };
+  const remoteReactivated: AdminUserDirectoryEntry = {
+    ...realOlder,
+    accountStatus: 'active',
+    suspensionReason: undefined,
+  };
+  const reactivatedMerge = mergeUserDirectories([remoteReactivated], [staleLocalSuspended], {
+    firestoreConnected: true,
+  });
+  assert.equal(reactivatedMerge[0].accountStatus, 'active');
+  assert.equal(reactivatedMerge[0].suspensionReason, undefined);
+  assert.equal(reactivatedMerge[0].suspendedAt, undefined);
+  assert.equal(reactivatedMerge[0].suspendedBy, undefined);
+
   const months = extractAvailableRegistrationMonths(mergedConnected, '2026-11');
   assert.deepEqual(months, ['2026-11']);
 });

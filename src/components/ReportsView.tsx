@@ -38,6 +38,7 @@ import {
   type ReportStatusFilter,
 } from '../utils/reportsEngine';
 import { DateInputDMY } from './DateInputDMY';
+import { printElementSafely } from '../utils/printHelper';
 import { AttendancePieChartCard, SalaryMixPieChartCard } from './AnalyticsChartCards';
 import type { AnalyticsPieSlice } from '../utils/homeAnalytics';
 
@@ -452,7 +453,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onExportCSV }) => {
   ];
 
   return (
-    <section data-testid="reports-view" className="space-y-4">
+    <section id="printable-monthly-report" data-testid="reports-view" className="space-y-4">
       {/* Header + Month Stepper + Quick Actions */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -519,7 +520,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onExportCSV }) => {
             <button
               type="button"
               data-testid="reports-print-pdf-btn"
-              onClick={() => window.print()}
+              onClick={() =>
+                printElementSafely({
+                  elementId: 'printable-monthly-report',
+                  title: `${lang === 'bn' ? 'মাসিক রিপোর্ট' : 'Monthly Report'} - ${formatMonthLabel(
+                    selectedMonth,
+                    lang
+                  )}`,
+                })
+              }
               className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300 shrink-0" />

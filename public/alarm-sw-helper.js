@@ -6,6 +6,150 @@
 
 const SW_ALARM_DB_NAME = 'ShromikSathiSWAlarmsDB';
 const SW_ALARM_STORE = 'alarms_state';
+const SW_NAV_SHELL_CACHE = 'shromik-sathi-nav-shell-v2';
+
+// Offline Navigation Safety Net:
+// Always keep the SPA shell (/index.html) cached so reloading on Firebase Hosting
+// while offline or on a weak mobile connection immediately boots the app and user data
+// instead of showing the browser "You are offline" error screen.
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches
+      .open(SW_NAV_SHELL_CACHE)
+      .then((cache) =>
+        Promise.allSettled([
+          cache.add(new Request('/index.html', { cache: 'reload' })),
+          cache.add(new Request('/', { cache: 'reload' })),
+        ])
+      )
+      .catch(() => {})
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((k) => k.startsWith('shromik-sathi-nav-shell-') && k !== SW_NAV_SHELL_CACHE)
+            .map((k) => caches.delete(k))
+        )
+      )
+      .catch(() => {})
+  );
+});
+
+async function matchCachedAppShell() {
+  // 1. Prefer Workbox precache first so index.html always matches precached hashed JS/CSS chunks
+  try {
+    const cacheNames = await caches.keys();
+    for (const name of cacheNames) {
+      if (name.startsWith('workbox-precache')) {
+        const wbCache = await caches.open(name);
+        const wbMatch =
+          (await wbCache.match('/index.html', { ignoreSearch: true })) ||
+          (await wbCache.match('index.html', { ignoreSearch: true }));
+        if (wbMatch) return wbMatch;
+      }
+    }
+  } catch {
+    // ignore workbox cache lookup errors
+  }
+
+  // 2. Fall back to our dedicated navigation shell cache
+  try {
+    const shellCache = await caches.open(SW_NAV_SHELL_CACHE);
+    const fromShell =
+      (await shellCache.match('/index.html', { ignoreSearch: true })) ||
+      (await shellCache.match('/', { ignoreSearch: true }));
+    if (fromShell) return fromShell;
+  } catch {
+    // ignore shell cache lookup errors
+  }
+
+  // 3. Final sweep across all caches
+  try {
+    const fromAny =
+      (await caches.match('/index.html', { ignoreSearch: true })) ||
+      (await caches.match('index.html', { ignoreSearch: true })) ||
+      (await caches.match('/', { ignoreSearch: true }));
+    if (fromAny) return fromAny;
+  } catch {
+    // ignore global cache lookup errors
+  }
+
+  return null;
+}
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (!req || req.method !== 'GET') return;
+
+  const isNavigation =
+    req.mode === 'navigate' ||
+    (req.destination === 'document' &&
+      (req.headers.get('accept') || '').includes('text/html'));
+
+  if (!isNavigation) return;
+
+  let url;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return;
+  }
+
+  if (url.origin !== self.location.origin) return;
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/__/') ||
+    url.pathname === '/robots.txt' ||
+    url.pathname === '/sitemap.xml'
+  ) {
+    return;
+  }
+
+  event.respondWith(
+    (async () => {
+      // Instant 0ms offline reload: boot directly from cached SPA shell so user sees their data immediately
+      if (typeof self.navigator !== 'undefined' && self.navigator.onLine === false) {
+        const instantShell = await matchCachedAppShell();
+        if (instantShell) return instantShell;
+      }
+
+      // Online: try live network with a short timeout, falling back seamlessly to cached SPA shell
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
+      try {
+        const networkResponse = await fetch(req, controller ? { signal: controller.signal } : undefined);
+        if (timeoutId) clearTimeout(timeoutId);
+        if (
+          networkResponse &&
+          networkResponse.ok &&
+          (networkResponse.headers.get('content-type') || '').includes('text/html')
+        ) {
+          const clonedA = networkResponse.clone();
+          const clonedB = networkResponse.clone();
+          caches
+            .open(SW_NAV_SHELL_CACHE)
+            .then((cache) => Promise.allSettled([cache.put('/index.html', clonedA), cache.put('/', clonedB)]))
+            .catch(() => {});
+          return networkResponse;
+        }
+        const cachedFallback = await matchCachedAppShell();
+        if (cachedFallback) return cachedFallback;
+        return networkResponse;
+      } catch {
+        if (timeoutId) clearTimeout(timeoutId);
+        const cachedShell = await matchCachedAppShell();
+        if (cachedShell) return cachedShell;
+        return Response.error();
+      }
+    })()
+  );
+});
 
 function openSwAlarmDB() {
   return new Promise((resolve, reject) => {
@@ -144,8 +288,8 @@ async function scheduleHardwareNotificationTriggers(alarms) {
 
       await self.registration.showNotification(`⏰ ${alarm.label || 'ডিউটি অ্যালার্ম'}`, {
         body: `সময়: ${alarm.time} — শ্রমিক সাথী অ্যালার্ম বাজছে!`,
-        icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
-        badge: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+        icon: '/pwa-192x192.png',
+        badge: '/pwa-192x192.png',
         tag: `shromik-scheduled-alarm-${alarm.id}`,
         renotify: true,
         requireInteraction: true,
@@ -176,8 +320,8 @@ async function fireSwAlarmNotificationAndWakeClients(matching, dateISO) {
 
   await self.registration.showNotification(`⏰ ${matching.label || 'ডিউটি অ্যালার্ম'}`, {
     body: `সময়: ${matching.time} — আপনার নির্ধারিত অ্যালার্ম বাজছে!`,
-    icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
-    badge: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+    icon: '/pwa-192x192.png',
+    badge: '/pwa-192x192.png',
     tag: `shromik-live-alarm-${matching.id}-${dateISO}`,
     renotify: true,
     requireInteraction: true,
@@ -305,8 +449,8 @@ self.addEventListener('message', (event) => {
         await saveLastRingingAlarmInSW(alarm);
         await self.registration.showNotification(`⏰ ${alarm.label || 'ডিউটি অ্যালার্ম'}`, {
           body: `সময়: ${alarm.time} — শ্রমিক সাথী অ্যালার্ম বাজছে!`,
-          icon: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
-          badge: '/assets/aistudio/Hopeful_Worker_Finance_Emblem_2098a483.png',
+          icon: '/pwa-192x192.png',
+          badge: '/pwa-192x192.png',
           tag: `shromik-ringing-${alarm.id}`,
           renotify: true,
           requireInteraction: true,
